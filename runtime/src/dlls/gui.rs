@@ -315,16 +315,23 @@ pub struct Window {
     /// Hauteur de la barre de menus (0 sans menu) : elle est au-dessus de
     /// la zone client, dans le rectangle de la fenêtre.
     pub menu_bar: i32,
+    /// Cadre posé par le gestionnaire de fenêtres autour d'une fenêtre de
+    /// premier niveau (_NET_FRAME_EXTENTS : gauche, droite, haut, bas). Comme
+    /// sous Windows, il est dans le rectangle de la fenêtre et hors de la
+    /// zone client : une palette de Paint.NET calée sur la zone de travail
+    /// y reste, barre de titre comprise (#2984).
+    pub frame: [i32; 4],
 }
 
 impl Window {
     /// Rectangle client : la zone intérieure, sans décorations.
     pub fn client_rect(&self) -> Rect {
+        let [l, r, t, b] = self.frame;
         Rect::from_size(
             0,
             0,
-            self.rect.width(),
-            (self.rect.height() - self.menu_bar).max(0),
+            (self.rect.width() - l - r).max(0),
+            (self.rect.height() - t - b - self.menu_bar).max(0),
         )
     }
 
@@ -3334,6 +3341,11 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// Fenêtre de premier niveau que l'utilisateur ne peut ni
+    /// redimensionner ni agrandir (barre de titre sans WS_THICKFRAME ni
+    /// WS_MAXIMIZEBOX, #3011) : le gestionnaire retire son bouton Agrandir.
+    /// Le programme garde le droit de changer lui-même sa taille.
+    fn set_resizable(&mut self, _hwnd: usize, _resizable: bool) {}
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
@@ -3347,6 +3359,13 @@ pub trait GuiBackend: Send {
     /// Épaisseur du cadre du gestionnaire autour d'une fenêtre de premier
     /// niveau : gauche, droite, haut, bas (_NET_FRAME_EXTENTS, #1752).
     fn frame_extents(&mut self, _hwnd: usize) -> Option<[i32; 4]> {
+        None
+    }
+    /// Cadre que le gestionnaire poserait sur une fenêtre de premier niveau
+    /// du genre `kind` (FRAME_BORDER, FRAME_NORMAL, FRAME_TOOL), en pixels
+    /// logiques : AdjustWindowRectEx en a besoin avant que la fenêtre
+    /// existe (#3016). None : pas de gestionnaire, donc pas de cadre.
+    fn frame_for_kind(&mut self, _kind: u8) -> Option<[i32; 4]> {
         None
     }
     /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
@@ -3894,7 +3913,7 @@ fn hover_loop() {
             (fired, stop)
         };
         for (hwnd, (x, y)) in fired {
-            let (left, top) = screen_rect(hwnd).map(|r| (r.left, r.top)).unwrap_or((0, 0));
+            let (left, top) = content_origin(hwnd).unwrap_or((0, 0));
             let lparam = (((y - top) as u16 as usize) << 16) | ((x - left) as u16 as usize);
             post_to_window(hwnd, Msg::new(hwnd, WM_MOUSEHOVER, 0, lparam as isize));
         }
@@ -3940,7 +3959,7 @@ pub fn pump_backend() {
     let events: Vec<(PendingEvent, u32)> = events
         .into_iter()
         .flat_map(|e| {
-            let origin = screen_rect(e.hwnd).map(|r| (r.left, r.top));
+            let origin = content_origin(e.hwnd);
             match origin.and_then(|o| crate::dlls::pointer::pointer_for_mouse(&e, o)) {
                 Some(p) => {
                     let mark = crate::dlls::pointer::promoted_mark(&p);
@@ -4008,6 +4027,12 @@ pub fn pump_backend() {
                 change_active_top(0);
                 activate_app(false);
             }
+            continue;
+        }
+        if e.message == WM_WINLUX_FRAME {
+            let v = e.lparam as u64;
+            let part = |i: u32| ((v >> (16 * i)) & 0xFFFF) as i32;
+            set_frame_keep_client(e.hwnd, [part(0), part(1), part(2), part(3)]);
             continue;
         }
         if e.message == WM_SIZE {
@@ -4277,6 +4302,16 @@ const SYSTEM_PAINT: u32 = 0x5750;
 /// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
 /// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
 pub const BACKEND_GEOMETRY: u32 = 0x5751;
+/// Message interne du backend : le cadre du gestionnaire autour d'une
+/// fenêtre a changé (lParam : gauche, droite, haut, bas sur 16 bits). Jamais
+/// distribué au programme (#2984).
+pub const WM_WINLUX_FRAME: u32 = 0x5752;
+
+/// Genres de cadre d'une fenêtre de premier niveau (#3016) : bordure fine
+/// seule (WS_POPUP sans titre), cadre complet, palette (fenêtre outil).
+pub const FRAME_BORDER: u8 = 1;
+pub const FRAME_NORMAL: u8 = 2;
+pub const FRAME_TOOL: u8 = 3;
 
 /// Fenêtres en cours de destruction : encore dans la table (IsWindow,
 /// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous
@@ -4676,9 +4711,48 @@ pub fn get_window_style(hwnd: usize) -> u32 {
 /// Origine de la zone client en coordonnées écran.
 pub fn window_origin(hwnd: usize) -> (i32, i32) {
     let bar = menu_bar_height(hwnd);
-    screen_rect(hwnd)
-        .map(|r| (r.left, r.top + bar))
+    content_origin(hwnd)
+        .map(|(x, y)| (x, y + bar))
         .unwrap_or((0, 0))
+}
+
+/// Coin haut gauche, en coordonnées écran, de ce que Winlux dessine (barre
+/// de menus comprise) : le rectangle de la fenêtre sans le cadre du
+/// gestionnaire de fenêtres (#2984).
+pub fn content_origin(hwnd: usize) -> Option<(i32, i32)> {
+    let [l, _, t, _] = frame_of(hwnd);
+    screen_rect(hwnd).map(|r| (r.left + l, r.top + t))
+}
+
+/// Cadre du gestionnaire autour de la fenêtre (gauche, droite, haut, bas).
+pub fn frame_of(hwnd: usize) -> [i32; 4] {
+    lock(windows()).get(&hwnd).map_or([0; 4], |w| w.frame)
+}
+
+/// Cadre du gestionnaire connu avant l'affichage : le rectangle de la
+/// fenêtre (celui que le programme a demandé) est gardé, la zone client
+/// rétrécit d'autant.
+pub fn set_frame_keep_outer(hwnd: usize, frame: [i32; 4]) {
+    if let Some(w) = lock(windows()).get_mut(&hwnd) {
+        w.frame = frame;
+    }
+}
+
+/// Cadre changé par le gestionnaire sur une fenêtre affichée (agrandie,
+/// restaurée, décorations retirées) : la zone client, celle de la fenêtre
+/// X, ne bouge pas ; le rectangle de la fenêtre l'entoure du nouveau cadre.
+pub fn set_frame_keep_client(hwnd: usize, frame: [i32; 4]) {
+    if let Some(w) = lock(windows()).get_mut(&hwnd) {
+        let [ol, or, ot, ob] = w.frame;
+        let [l, r, t, b] = frame;
+        w.rect = Rect {
+            left: w.rect.left + ol - l,
+            top: w.rect.top + ot - t,
+            right: w.rect.right - or + r,
+            bottom: w.rect.bottom - ob + b,
+        };
+        w.frame = frame;
+    }
 }
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
@@ -4703,10 +4777,11 @@ pub fn screen_rect(hwnd: usize) -> Option<Rect> {
         let Some(parent) = map.get(&cur.parent) else {
             break;
         };
-        rect.left += parent.rect.left;
-        rect.right += parent.rect.left;
-        rect.top += parent.rect.top + parent.menu_bar;
-        rect.bottom += parent.rect.top + parent.menu_bar;
+        let [fl, _, ft, _] = parent.frame;
+        rect.left += parent.rect.left + fl;
+        rect.right += parent.rect.left + fl;
+        rect.top += parent.rect.top + ft + parent.menu_bar;
+        rect.bottom += parent.rect.top + ft + parent.menu_bar;
         cur = parent;
         depth += 1;
     }
@@ -4729,11 +4804,12 @@ pub fn set_window_rect(hwnd: usize, rect: Rect) -> Option<Rect> {
 /// barre de menus.
 fn update_window_size(hwnd: usize, width: i32, height: i32) {
     if let Some(window) = lock(windows()).get_mut(&hwnd) {
-        window.rect.right = window.rect.left.saturating_add(width);
+        let [l, r, t, b] = window.frame;
+        window.rect.right = window.rect.left.saturating_add(width + l + r);
         window.rect.bottom = window
             .rect
             .top
-            .saturating_add(height)
+            .saturating_add(height + t + b)
             .saturating_add(window.menu_bar);
     }
 }
@@ -4752,6 +4828,8 @@ pub fn set_menu_bar_height(hwnd: usize, height: i32) -> Option<i32> {
 
 fn update_window_position(hwnd: usize, x: i32, y: i32) {
     if let Some(window) = lock(windows()).get_mut(&hwnd) {
+        // WM_MOVE du backend : origine de la fenêtre X, sous le cadre.
+        let (x, y) = (x - window.frame[0], y - window.frame[2]);
         let width = window.rect.width();
         let height = window.rect.height();
         window.rect.left = x;
@@ -5271,7 +5349,7 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         WM_RBUTTONUP => {
             let x = lparam as u32 as u16 as i16 as i32;
             let y = (lparam as u32 >> 16) as u16 as i16 as i32;
-            let (ox, oy) = screen_rect(hwnd).map_or((0, 0), |r| (r.left, r.top));
+            let (ox, oy) = content_origin(hwnd).unwrap_or((0, 0));
             send_context_menu(hwnd, hwnd, pack_point(x + ox, y + oy));
             0
         }
@@ -5946,6 +6024,7 @@ pub(crate) mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    frame: [0; 4],
                     painting: false,
                 },
             );
@@ -6016,6 +6095,7 @@ pub(crate) mod tests {
             ex_style,
             pending: Vec::new(),
             menu_bar: 0,
+            frame: [0; 4],
             painting: false,
         }
     }
@@ -6064,6 +6144,7 @@ pub(crate) mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -6490,6 +6571,7 @@ pub(crate) mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -6552,6 +6634,7 @@ pub(crate) mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -6943,6 +7026,45 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
     }
 
+    /// #2984 : le cadre du gestionnaire est dans le rectangle de la fenêtre
+    /// et hors de la zone client, comme sous Windows. Appris avant
+    /// l'affichage, il garde le rectangle demandé ; changé ensuite (fenêtre
+    /// agrandie), il garde la zone client. Le backend rapporte la fenêtre X :
+    /// taille et origine de la zone client.
+    #[test]
+    fn cadre_du_gestionnaire_dans_le_rectangle_de_fenetre() {
+        let hwnd = fenetre_de_test();
+        set_window_rect(hwnd, Rect::from_size(-3, 114, 51, 253));
+        set_frame_keep_outer(hwnd, [2, 2, 39, 7]);
+        assert_eq!(window_rect(hwnd), Some(Rect::from_size(-3, 114, 51, 253)));
+        assert_eq!(
+            window_client_rect(hwnd),
+            Some(Rect::from_size(0, 0, 47, 207))
+        );
+        assert_eq!(content_origin(hwnd), Some((-1, 153)));
+        assert_eq!(window_origin(hwnd), (-1, 153));
+        // WM_MOVE et WM_SIZE du backend : la fenêtre X, sous le cadre.
+        update_window_position(hwnd, -1, 153);
+        update_window_size(hwnd, 47, 207);
+        assert_eq!(window_rect(hwnd), Some(Rect::from_size(-3, 114, 51, 253)));
+        // Agrandie : openbox retire les bordures, la zone client reste.
+        set_frame_keep_client(hwnd, [0, 0, 38, 0]);
+        assert_eq!(window_rect(hwnd), Some(Rect::from_size(-1, 115, 47, 245)));
+        assert_eq!(
+            window_client_rect(hwnd),
+            Some(Rect::from_size(0, 0, 47, 207))
+        );
+        assert_eq!(content_origin(hwnd), Some((-1, 153)));
+        // Un enfant se place dans la zone client du parent.
+        let enfant = fenetre_de_test();
+        set_window_parent(enfant, hwnd);
+        set_window_style(enfant, 0x4000_0000);
+        set_window_rect(enfant, Rect::from_size(5, 6, 10, 10));
+        assert_eq!(screen_rect(enfant), Some(Rect::from_size(4, 159, 10, 10)));
+        destroy_window(enfant);
+        destroy_window(hwnd);
+    }
+
     #[test]
     fn pas_de_wm_paint_pour_une_zone_client_vide() {
         let hwnd = fenetre_de_test();
@@ -7131,6 +7253,7 @@ pub(crate) mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    frame: [0; 4],
                     painting: false,
                 },
             );

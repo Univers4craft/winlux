@@ -830,10 +830,11 @@ class Start(Gtk.Application):
         self.scroll_top()
 
     def first_result(self, *_):
-        # Même ordre que la liste : applications, Paramètres, fichiers.
+        # Même ordre que la liste : Meilleur résultat, applications, Paramètres, fichiers.
         query=fold(self.search.get_text().strip())
         found=settings_for(query) if query else []
-        if self.results:self.launch(self.results[0])
+        if page_first(self.results, found, query):self.open_setting(found[0][1])
+        elif self.results:self.launch(self.results[0])
         elif found:self.open_setting(found[0][1])
         elif self.file_results:self.open_file(self.file_results[0])
 
@@ -950,8 +951,21 @@ class Start(Gtk.Application):
                 self.file_results = []
                 if len(query) >= 2:
                     threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
+            # Une page des Paramètres mieux classée que la première application
+            # devient le Meilleur résultat : « écran » donne la page Écran avant
+            # « Copier le texte de l'écran » (#3018).
+            if page_first(self.results, pages, query):
+                heading = Gtk.Label(label=_t("Meilleur résultat"), xalign=0, margin_top=10)
+                heading.get_style_context().add_class("heading")
+                self.content.pack_start(heading, False, False, 0)
+                label, page = pages[0]
+                button = self.result_button(label, "preferences-system", _t("Paramètres · ") + label)
+                on_click(button, lambda target=page: self.open_setting(target))
+                self.content.pack_start(button, False, False, 0)
+                pages = pages[1:]
+                previous = _t("Meilleur résultat")
             for index, app in enumerate(self.results):
-                group = (_t("Meilleur résultat") if index == 0 else _t("Applications")) if query else category(app)
+                group = (_t("Meilleur résultat") if index == 0 and previous is None else _t("Applications")) if query else category(app)
                 if group != previous:
                     heading = Gtk.Label(label=group, xalign=0, margin_top=10)
                     heading.get_style_context().add_class("heading")
@@ -1586,9 +1600,21 @@ def found_in(query, text):
     return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
 
 
+# « Paramètres » dans les quatre langues, repliés : dans une recherche de
+# plusieurs mots (« paramètres son »), ce mot désigne la catégorie et non le
+# titre de la page (#3017).
+SETTINGS_WORDS = ("parametres", "parametre", "settings", "setting", "configuracion", "ajustes", "einstellungen")
+
+
 def settings_for(query):
     """Pages des Paramètres trouvées (titre traduit, titre français et mots-clés
-    des quatre langues), les mieux classées d'abord : titre puis mots-clés."""
+    des quatre langues), les mieux classées d'abord : titre puis mots-clés.
+    Le mot « paramètres » accompagné d'autres mots nomme la catégorie : il est
+    retiré avant de chercher la page."""
+    parts = words(query).split()
+    rest = [part for part in parts
+            if not (len(part) >= 4 and any(name.startswith(part) for name in SETTINGS_WORDS))]
+    if rest and len(rest) < len(parts): query = " ".join(rest)
     found = []
     for (label, page), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
         if found_in(query, label) or found_in(query, french):
@@ -1596,6 +1622,15 @@ def settings_for(query):
         elif found_in(query, keywords):
             found.append((3, label, page))
     return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], fold(item[1])))]
+
+
+def page_first(apps, pages, query):
+    """Vrai si la première page des Paramètres trouvée est mieux classée que
+    la première application (rang de rank() strictement meilleur) : elle
+    devient alors le Meilleur résultat. À rang égal, l'application reste en
+    tête (« paramètres » ouvre l'application Paramètres)."""
+    if not (query and pages and apps): return False
+    return rank(pages[0][0], query) < rank(apps[0].get_display_name(), query)
 
 
 def matches(app, query):

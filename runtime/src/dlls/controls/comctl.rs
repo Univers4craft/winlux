@@ -1840,7 +1840,7 @@ struct LvDispInfo {
 fn lv_context_menu(hwnd: usize, pt: Option<(i32, i32)>) {
     let lp = match pt {
         Some((x, y)) => {
-            let (ox, oy) = gui::screen_rect(hwnd).map_or((0, 0), |r| (r.left, r.top));
+            let (ox, oy) = gui::content_origin(hwnd).unwrap_or((0, 0));
             ((((y + oy) as u16 as u32) << 16) | (x + ox) as u16 as u32) as i32 as isize
         }
         None => -1,
