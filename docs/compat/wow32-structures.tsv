@@ -257,6 +257,7 @@ shell_ordinaux.rs	Obj	interne	test unitaire
 shell_ordinaux.rs	QiTab	x86	QITAB x86 = 8 octets (dwOffset à +4), x64 = 16 (à +8), mesurés ; QISearch lit la disposition de l'appelant et appelle l'AddRef x86 (#2476) ; test table_qitab_x86
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
+storage_settings.rs	KidsIter	a-verifier	parcours WinRT de ApplicationDataContainer.Containers (#2962), servi aux programmes x64
 taskbarlist_com.rs	Obj	a-verifier	
 taskschd.rs	Obj	a-verifier	
 teams_win32.rs	AssocReg	a-verifier	
