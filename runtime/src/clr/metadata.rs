@@ -1103,7 +1103,9 @@ pub enum ElementType {
     ValueType(u32),
     Class(u32),
     Var(u32),
-    Array(Box<ElementType>),
+    /// Tableau à plusieurs dimensions (ou à bornes) : type d'élément et rang
+    /// de l'ArrayShape (ECMA-335 §II.23.2.13).
+    Array(Box<ElementType>, u32),
     GenericInst(Box<ElementType>, Vec<ElementType>),
     TypedByRef,
     IntPtr,
@@ -1173,8 +1175,20 @@ fn decode_type_depth(blob: &[u8], off: &mut usize, depth: u32) -> ElementType {
             ElementType::Var(idx)
         }
         0x14 => {
+            // ARRAY Type ArrayShape : Rank, NumSizes, Size*, NumLoBounds,
+            // LoBound* (§II.23.2.13). La forme se lit en entier, sinon la
+            // suite de la signature est décalée.
             let inner = decode_type(blob, off);
-            ElementType::Array(Box::new(inner))
+            let rank = decode_compressed_u32(blob, off);
+            let sizes = bounded_count(decode_compressed_u32(blob, off), blob, *off);
+            for _ in 0..sizes {
+                decode_compressed_u32(blob, off);
+            }
+            let bornes = bounded_count(decode_compressed_u32(blob, off), blob, *off);
+            for _ in 0..bornes {
+                decode_compressed_u32(blob, off);
+            }
+            ElementType::Array(Box::new(inner), rank)
         }
         0x15 => {
             let inner = decode_type(blob, off);
@@ -1262,4 +1276,36 @@ pub fn decode_locals_sig(blob: &[u8]) -> Vec<ElementType> {
         types.push(decode_type(blob, &mut off));
     }
     types
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `void M(int[,], int)` : la forme du tableau (rang 2, deux bornes
+    /// inférieures 0) est lue en entier, sinon le second paramètre se lit
+    /// dans la forme (#2848, ECMA-335 §II.23.2.13).
+    #[test]
+    fn signature_array_lit_sa_forme() {
+        let blob = [
+            0x00, 0x02, 0x01, 0x14, 0x08, 0x02, 0x00, 0x02, 0x00, 0x00, 0x08,
+        ];
+        let sig = decode_method_sig(&blob);
+        assert_eq!(
+            sig.param_types,
+            vec![
+                ElementType::Array(Box::new(ElementType::I4), 2),
+                ElementType::I4
+            ]
+        );
+        // Tailles et bornes données : string[2..3, 4] (rang 2, une taille,
+        // une borne inférieure 2 codée signée).
+        let blob = [0x14, 0x0E, 0x02, 0x01, 0x02, 0x01, 0x04, 0x08];
+        let mut off = 0;
+        assert_eq!(
+            decode_type(&blob, &mut off),
+            ElementType::Array(Box::new(ElementType::String), 2)
+        );
+        assert_eq!(decode_type(&blob, &mut off), ElementType::I4);
+    }
 }
