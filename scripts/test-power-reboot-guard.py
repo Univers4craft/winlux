@@ -13,6 +13,7 @@ signalait l'init. On vérifie, sans affichage :
 import ast
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -65,19 +66,26 @@ with tempfile.TemporaryDirectory() as temp:
     init.terminate()
     init.wait(5)
 
-# 3. L'installateur : « execute reboot » d'abord, l'écran seulement en cas de refus.
+# 3. L'installateur (#2904) : root sans systemd, rien n'est lancé depuis le
+# média (éjecté après l'installation) ; l'init est signalé directement.
+# Sinon « execute reboot » d'abord, l'écran seulement en cas de refus.
 tree = ast.parse((here / "winlux-installer.py").read_text(encoding="utf-8"))
 method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "on_reboot")
 module = ast.Module(body=[method], type_ignores=[])
 
 
 class Recorder:
+    SubprocessError = subprocess.SubprocessError
+    TimeoutExpired = subprocess.TimeoutExpired
+
     def __init__(self, execute_code):
         self.calls = []
         self.execute_code = execute_code
 
     def run(self, argv, **_kwargs):
         self.calls.append(("run", list(argv)))
+        if isinstance(self.execute_code, type) and issubclass(self.execute_code, BaseException):
+            raise self.execute_code("média éjecté")
         code = self.execute_code if argv[1:] == ["execute", "reboot"] else 0
         return subprocess.CompletedProcess(argv, code)
 
@@ -91,6 +99,24 @@ class Which:
         return "/usr/bin/" + name
 
 
+class FakeOs:
+    def __init__(self, calls, euid, systemd=False):
+        self.calls, self.euid, self.systemd = calls, euid, systemd
+        self.path = self
+
+    def sync(self):
+        self.calls.append(("sync",))
+
+    def geteuid(self):
+        return self.euid
+
+    def isdir(self, path):
+        return self.systemd and path == "/run/systemd/system"
+
+    def kill(self, pid, sig):
+        self.calls.append(("kill", pid, sig))
+
+
 class Installer:
     quit_called = False
 
@@ -98,15 +124,33 @@ class Installer:
         self.quit_called = True
 
 
-for code, expected in ((0, [("run", ["sync"]), ("run", ["/usr/bin/winlux-power", "execute", "reboot"])]),
-                       (1, [("run", ["sync"]), ("run", ["/usr/bin/winlux-power", "execute", "reboot"]),
-                            ("popen", ["/usr/bin/winlux-power", "now", "reboot"])])):
+cases = (
+    # Session live (root, init shell) : aucun exécutable lancé, SIGTERM à l'init.
+    (0, None, [("sync",), ("kill", 1, signal.SIGTERM)]),
+    (0, OSError, [("sync",), ("kill", 1, signal.SIGTERM)]),
+    # Utilisateur ordinaire : winlux-power, l'écran seulement en cas de refus.
+    (1000, 0, [("sync",), ("run", ["/usr/bin/winlux-power", "execute", "reboot"])]),
+    (1000, 1, [("sync",), ("run", ["/usr/bin/winlux-power", "execute", "reboot"]),
+               ("popen", ["/usr/bin/winlux-power", "now", "reboot"])]),
+    (1000, OSError, [("sync",), ("run", ["/usr/bin/winlux-power", "execute", "reboot"]),
+                     ("popen", ["/usr/bin/winlux-power", "now", "reboot"])]),
+)
+for euid, code, expected in cases:
     recorder = Recorder(code)
-    namespace = {"subprocess": recorder, "shutil": Which}
+    namespace = {"subprocess": recorder, "shutil": Which, "signal": signal,
+                 "os": FakeOs(recorder.calls, euid)}
     exec(compile(module, "winlux-installer.py", "exec"), namespace)
     installer = Installer()
     namespace["on_reboot"](installer, None)
-    assert recorder.calls == expected, recorder.calls
+    assert recorder.calls == expected, (euid, code, recorder.calls)
     assert installer.quit_called
+
+# Root sous systemd : pas de signal direct, winlux-power s'en charge.
+recorder = Recorder(0)
+namespace = {"subprocess": recorder, "shutil": Which, "signal": signal,
+             "os": FakeOs(recorder.calls, 0, systemd=True)}
+exec(compile(module, "winlux-installer.py", "exec"), namespace)
+namespace["on_reboot"](Installer(), None)
+assert recorder.calls == [("sync",), ("run", ["/usr/bin/winlux-power", "execute", "reboot"])], recorder.calls
 
 print("test-power-reboot-guard : OK (écran planté, confirmation, installateur)")
