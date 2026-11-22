@@ -280,8 +280,6 @@ fn main() {
             dlls::kernel32::exit_with(code);
         }
     }
-    // Variables d'environnement Windows écrites par les installateurs.
-    msi::extra::apply_registry_environment();
     // Projeté plutôt que lu : rien n'est copié en mémoire (#997).
     let source = match loader::ImageFile::open(&exe) {
         Ok(bytes) => bytes,
@@ -291,11 +289,15 @@ fn main() {
         }
     };
     // Programme x86 : relancé tout de suite si la mémoire haute n'a pas
-    // été réservée avant le premier malloc (#232).
+    // été réservée avant le premier malloc (#232). Avant la lecture du
+    // registre : le processus relancé la refait, et la vue des polices
+    // qu'elle construit était jetée (#2947).
     let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
     if x86 {
         wow32::reexec_if_needed();
     }
+    // Variables d'environnement Windows écrites par les installateurs.
+    msi::extra::apply_registry_environment();
     registry::backup();
     paths::install_windows_env();
     // PROCESSOR_ARCHITECTURE, ProgramFiles… d'un processus 32 ou 64 bits.
