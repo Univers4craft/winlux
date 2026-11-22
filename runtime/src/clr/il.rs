@@ -1702,6 +1702,15 @@ impl Interpreter {
                     .len()
                     .saturating_sub(sig.param_types.len() + sig.has_this() as usize);
                 let mut args = f.eval_stack.split_off(split);
+                // Get, Set et Address d'un tableau à plusieurs dimensions :
+                // le moteur les fournit (ECMA-335 §II.14.2, #2848).
+                if let Some((_, kind, _, name)) = self.md_array_method(token) {
+                    let v = self.md_array_access(kind, &name, &args)?;
+                    if !matches!(sig.ret_type, ElementType::Void) {
+                        push!(v);
+                    }
+                    return Ok(StepResult::Continue);
+                }
                 let mut callee = self.resolve_callee(token);
                 let mut virtual_call = op == O::Callvirt;
                 if let (Some(ct), Some(this)) = (constrained, args.first().copied()) {
@@ -1763,6 +1772,14 @@ impl Interpreter {
                 let token = tok1();
                 frame!().ip = next_ip;
                 let sig = self.get_method_sig(token);
+                if let Some((elem, kind, rank, _)) = self.md_array_method(token) {
+                    let f = frame!();
+                    let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
+                    let args = f.eval_stack.split_off(split);
+                    let arr = self.md_array_new(elem, kind, rank, &args)?;
+                    push!(arr);
+                    return Ok(StepResult::Continue);
+                }
                 let callee = self.resolve_callee(token);
                 let type_id = match &callee.target {
                     Target::Managed(asm, row) => {

@@ -319,7 +319,11 @@ fn type_key(a: &Assembly, et: &ElementType) -> String {
         ElementType::Ptr(i) => format!("{}*", type_key(a, i)),
         ElementType::ByRef(i) => format!("{}&", type_key(a, i)),
         ElementType::SzArray(i) => format!("{}[]", type_key(a, i)),
-        ElementType::Array(i) => format!("{}[,]", type_key(a, i)),
+        ElementType::Array(i, rank) => format!(
+            "{}[{}]",
+            type_key(a, i),
+            ",".repeat(rank.saturating_sub(1) as usize)
+        ),
         ElementType::GenericInst(i, args) => {
             let args: Vec<String> = args.iter().map(|t| type_key(a, t)).collect();
             format!("{}<{}>", type_key(a, i), args.join(","))
