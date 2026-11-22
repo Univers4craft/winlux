@@ -5,6 +5,9 @@ unset WINLUX_DESKTOP_DEMO
 # Demande du choix du navigateur propre au compte (#2243), lue par Paramètres PE.
 WINLUX_BROWSER_CHOOSER="Z:\\run\\winlux\\browser-chooser-$(id -u)"
 export WINLUX_BROWSER_CHOOSER
+# Runtime : celui de WINLUX_RUNTIME quand il est posé (passes « par
+# chemin » avec un binaire frais), comme winlux-open ; sinon l'installé (#2987).
+runtime=${WINLUX_RUNTIME:-/usr/bin/winlux}
 
 # Chemin passé à l'Explorateur. xdg-open et GIO donnent parfois une URI
 # (file:///home/damien/T%C3%A9l%C3%A9chargements) : on la décode (accents,
@@ -55,7 +58,7 @@ case "${1:-explorer}" in
         if test "$1" = settings && test "${WINLUX_LEGACY_SETTINGS:-0}" != 1; then
             exec /usr/bin/python3 /usr/bin/winlux-settings
         fi
-        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+        exec "$runtime" /opt/winlux/tests/gui_demo.exe ;;
     store|fonts|programs|taskschd|firewall|welcome|regedit|taskmgr|eventviewer|msinfo32)
         export WINLUX_SHELL_APP=$1
         # Bureau natif : « Installer ou désinstaller des programmes » est la page
@@ -89,7 +92,7 @@ case "${1:-explorer}" in
                 fi
             done
         fi
-        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+        exec "$runtime" /opt/winlux/tests/gui_demo.exe ;;
     notepad)
         # Bloc-notes du shell PE, seul et dans sa fenêtre (#1027), avec un
         # fichier facultatif. « editor » reste l'éditeur de la session native.
@@ -98,7 +101,7 @@ case "${1:-explorer}" in
             WINLUX_SHELL_PATH=$(shell_path "$2") || exit 2
             export WINLUX_SHELL_PATH
         fi
-        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+        exec "$runtime" /opt/winlux/tests/gui_demo.exe ;;
     editor) shift; exec /usr/bin/mousepad "$@" ;;
     *) echo 'Application Winlux inconnue' >&2; exit 2 ;;
 esac
