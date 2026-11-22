@@ -501,6 +501,9 @@ class Start(Gtk.Application):
         # Services de la session livrés avec une entrée de menu par leur paquet.
         self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
                      if listed(app) and app.get_id() not in SESSION_SERVICES}
+        # Textes repliés préparés une fois le menu dessiné (priorité « au
+        # repos », après l'affichage) : la première frappe ne les calcule plus.
+        GLib.idle_add(warm_index, list(self.apps.values()))
         changed = auto_pin(self.state, self.apps)
         changed |= note_new_apps(self.state, self.apps, time.time())
         if changed: self.save()
@@ -973,7 +976,7 @@ class Start(Gtk.Application):
                     previous = group
                 # Homonymes (Claude pour Windows et Claude de la Boutique,
                 # #1489) : le repère « .exe » les distingue.
-                self.content.pack_start(self.app_button(app, badge=fold(app.get_display_name()) in twins), False, False, 0)
+                self.content.pack_start(self.app_button(app, badge=indexed(app.get_display_name())[0] in twins), False, False, 0)
             if pages:
                 heading = Gtk.Label(label=_t("Meilleur résultat") if not self.results else _t("Paramètres"), xalign=0, margin_top=10)
                 heading.get_style_context().add_class("heading")
@@ -1371,10 +1374,10 @@ class Start(Gtk.Application):
                 listed = []
             for name in listed + files:
                 visited += 1
-                if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
+                if not name.startswith(".") and found_in(query, name, cache=False): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
             if len(matches) >= 300 or visited >= 30000: break
-        matches = sorted(matches, key=lambda path: (rank(path.name, query), -modified(path), fold(path.name)))[:30]
+        matches = sorted(matches, key=lambda path: (rank(path.name, query, cache=False), -modified(path), fold(path.name)))[:30]
         def deliver():
             if generation == self.file_generation:
                 self.file_results = matches
@@ -1541,9 +1544,9 @@ class Start(Gtk.Application):
 RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
 
 
-def rank(text, query):
+def rank(text, query, cache=True):
     """0 : le nom commence par la recherche ; 1 : un de ses mots ; 2 : ailleurs."""
-    text = fold(text)
+    text = indexed(text)[0] if cache else fold(text)
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
@@ -1558,13 +1561,13 @@ def result_order(app, query, state):
     ident = app.get_id() or ""
     when = seen.get(ident)
     when = when if isinstance(when, (int, float)) else 0
-    return (rank(app.get_display_name(), query), fold(app.get_display_name()), -when,
+    return (rank(app.get_display_name(), query), indexed(app.get_display_name())[0], -when,
             ident.startswith(("winlux-pe-", "winlux-link-")), ident)
 
 
 def homonyms(apps):
     """Noms (repliés) portés par plusieurs applications de la liste."""
-    names = [fold(app.get_display_name()) for app in apps]
+    names = [indexed(app.get_display_name())[0] for app in apps]
     return {name for name in names if names.count(name) > 1}
 
 
@@ -1589,15 +1592,59 @@ def words(text):
     return re.sub(r"[^\w]+|_", " ", fold(text)).strip()
 
 
-def found_in(query, text):
+# Textes du menu (noms, mots-clés des applications, pages des Paramètres)
+# déjà repliés : chaque frappe repliait de nouveau tous les noms, ~10 ms par
+# frappe sous Xvfb pour 150 applications et 43 pages (#3040). Borné : vidé
+# au-delà de 20 000 textes. Les noms de fichiers n'y passent pas (cache=False).
+_INDEX = {}
+_QUERY = [(None, [])]
+
+
+def indexed(text):
+    """(texte replié, ses mots, ses suites de trois mots recollées), en cache."""
+    entry = _INDEX.get(text)
+    if entry is None:
+        if len(_INDEX) > 20000: _INDEX.clear()
+        tokens = tuple(words(text).split())
+        entry = _INDEX[text] = (fold(text), tokens,
+                                tuple("".join(tokens[index:index + 3]) for index in range(len(tokens))))
+    return entry
+
+
+def warm_index(apps):
+    """Remplit le cache des textes repliés : noms et mots-clés des applications
+    (tels que matches() les compose), titres et mots-clés des Paramètres."""
+    for app in apps:
+        indexed(app.get_display_name())
+        keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
+        generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
+        indexed(" ".join(list(keywords or []) + [generic or ""]))
+    for (label, _), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
+        indexed(label); indexed(french); indexed(keywords)
+    return False
+
+
+def found_in(query, text, cache=True):
     """Chaque mot de la recherche commence un mot du texte, dans n'importe quel
     ordre ; « wifi » trouve aussi « Wi-Fi » (mots voisins recollés)."""
-    query, tokens = words(query).split(), words(text).split()
+    # La même recherche est comparée à chaque texte : repliée une seule fois.
+    # Lue et remplacée d'un bloc (tuple) : le fil de la recherche de fichiers
+    # appelle aussi found_in.
+    memo = _QUERY[0]
+    if memo[0] != query:
+        memo = (query, words(query).split())
+        _QUERY[0] = memo
+    query = memo[1]
     if not query: return False
+    if cache:
+        _, tokens, glued = indexed(text)
+    else:
+        tokens = words(text).split()
+        glued = ["".join(tokens[index:index + 3]) for index in range(len(tokens))]
     # Début de mot, comme Windows : « son » trouve Son, pas « personnalisation ».
     if all(any(token.startswith(word) for token in tokens) for word in query): return True
     joined = "".join(query)
-    return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
+    return any(part.startswith(joined) for part in glued)
 
 
 # « Paramètres » dans les quatre langues, repliés : dans une recherche de
@@ -1621,7 +1668,7 @@ def settings_for(query):
             found.append((rank(label, query), label, page))
         elif found_in(query, keywords):
             found.append((3, label, page))
-    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], fold(item[1])))]
+    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], indexed(item[1])[0]))]
 
 
 def page_first(apps, pages, query):
