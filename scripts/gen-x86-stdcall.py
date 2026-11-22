@@ -20,7 +20,7 @@ LIBDIR = "/usr/i686-w64-mingw32/lib"
 DLLS = """advapi32 avrt bcrypt comctl32 comdlg32 crypt32 d2d1 d3d11 d3d9 dbghelp
 dhcpcsvc dinput8 dnsapi dsound dwmapi dwrite dxgi dxva2 gdi32 gdiplus hid imm32
 iphlpapi kernel32 mpr msi msimg32 ncrypt netapi32 ntdll ole32 oleacc oleaut32
-opengl32 powrprof propsys psapi rpcrt4 secur32 sensapi setupapi shcore shell32
+opengl32 powrprof propsys psapi rpcrt4 rstrtmgr secur32 sensapi setupapi shcore shell32
 shfolder shlwapi urlmon user32 userenv usp10 uxtheme version windowscodecs
 winhttp wininet winmm winspool wintrust winusb ws2_32 wtsapi32 xinput""".split()
 
