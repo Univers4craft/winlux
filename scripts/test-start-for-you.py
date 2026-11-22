@@ -189,7 +189,8 @@ applications.mkdir(parents=True)
 names = {"explorer": ("Explorateur", "System;"), "mail": ("Courrier", "Network;Email;"), "texte": ("Traitement de texte", "Office;"),
          "tableur": ("Tableur", "Office;"), "jeu": ("Jeu de cartes", "Game;"), "photos": ("Photos", "Graphics;"),
          "calc": ("Calculatrice", "Utility;"), "notes": ("Notes", "Utility;"), "horloge": ("Horloge", "Utility;"),
-         "meteo": ("Météo", "Utility;"), "capture": ("Capture d’écran", "Utility;"), "zoom": ("Zoom avant", "Utility;")}
+         "meteo": ("Météo", "Utility;"), "capture": ("Capture d’écran", "Utility;"), "zoom": ("Zoom avant", "Utility;"),
+         "terminal": ("Terminal Winlux", "System;TerminalEmulator;")}
 for ident, (name, categories) in names.items():
     (applications / f"{ident}.desktop").write_text(f"[Desktop Entry]\nType=Application\nName={name}\nExec=true\nCategories={categories}\n")
 (applications / "winlux-pe-winscp.desktop").write_text("[Desktop Entry]\nType=Application\nName=WinSCP\nExec=true\n")
@@ -267,7 +268,7 @@ def categories():
     cards.sort(key=lambda card: (grid.child_get_property(card, "top-attach"), grid.child_get_property(card, "left-attach")))
     titles = [button.get_tooltip_text() for button in cards]
     assert titles[:3] == ["Bureautique", "Internet", "Programmes Windows"], titles
-    assert "Accessoires" in titles and "Jeux" in titles, titles
+    assert "Outils" in titles and "Jeux" in titles and "Accessoires" not in titles, titles
     app.cards = cards
 
 
@@ -278,9 +279,11 @@ def walk(widget):
 
 
 def unfolded():
-    assert app.open_category == "Accessoires", app.open_category
+    assert app.open_category == "Outils", app.open_category
     shown = texts(app.content)
-    assert "Calculatrice" in shown and "Zoom avant" in shown and "Courrier" not in shown, shown
+    print(f"Outils : {shown}")
+    # Le terminal est rangé dans les Outils (#3048), pas dans Système.
+    assert "Calculatrice" in shown and "Zoom avant" in shown and "Terminal Winlux" in shown and "Courrier" not in shown, shown
 
 
 def as_list():
@@ -354,7 +357,7 @@ steps += [
     step(reopen, one_pane),
     step(turn_back_on, two_panes, 1200),
     step(lambda: (app.state.pop("apps_view", None), app.toggle_list()), categories),
-    step(lambda: app.cards[[card.get_tooltip_text() for card in app.cards].index("Accessoires")].clicked(), unfolded),
+    step(lambda: app.cards[[card.get_tooltip_text() for card in app.cards].index("Outils")].clicked(), unfolded),
     step(reopen, initial),
     step(lambda: (app.toggle_list(), app.set_view("list")), as_list),
     step(letter_jump, jumped),
