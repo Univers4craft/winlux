@@ -127,7 +127,7 @@ natif utilise aussi Xfconf et les fichiers de configuration du profil.
 ## Éditeur du Registre
 
 L'appli « Éditeur du Registre » (menu Démarrer, commande `regedit`, ou
-`winlux --regedit`) reprend l'éditeur de Windows 11 :
+`winlux --regedit`) offre :
 
 - arborescence Ordinateur → HKEY_CLASSES_ROOT, HKEY_CURRENT_USER,
   HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_CONFIG et barre d'adresse ;

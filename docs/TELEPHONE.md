@@ -1,7 +1,6 @@
 # Téléphone connecté (issue #284)
 
-Relier un téléphone Android à Winlux, comme « Lien avec un téléphone » sous
-Windows 11 : notifications du téléphone sur le PC (avec réponse rapide et
+Relier un téléphone Android à Winlux : notifications du téléphone sur le PC (avec réponse rapide et
 « Ignorer »), SMS lus et envoyés depuis le PC avec les noms des contacts,
 appels entrants (couper la sonnerie), batterie, « Faire sonner », fichiers et
 liens échangés dans les deux sens.
