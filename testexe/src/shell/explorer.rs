@@ -1663,6 +1663,19 @@ pub unsafe fn open_at(path: &[u8]) {
     }
     wm::open(wm::APP_EXPLORER);
 }
+/// « Extraire tout… » du clic droit du Bureau (winlux-shell-app explorer
+/// --extraire) : l'Explorateur s'ouvre sur le dossier de l'archive et
+/// l'extrait dans un nouveau dossier à son nom, puis y entre, comme le bouton
+/// « Extraire tout » de sa barre de commandes.
+pub unsafe fn extract_at(path: &[u8]) {
+    let archive = kind_of(last_component(path), false) == Kind::Archive && storage_file(path);
+    let Some(dir) = parent(path).filter(|_| archive) else {
+        open_at(path);
+        return;
+    };
+    open_at(dir);
+    extract_archive(path, false, None);
+}
 /// Boîte Ouvrir / Enregistrer d'un programme .exe (#598) : à lire avant
 /// d'ouvrir le dossier de départ.
 pub unsafe fn init_picker() {

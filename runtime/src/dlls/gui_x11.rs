@@ -3165,7 +3165,9 @@ impl X11Backend {
                     return Some(self.altgr_events(hwnd, true));
                 }
                 let extended = vk_is_extended(vk);
-                let lparam = key_lparam(e.detail, false, extended);
+                let system = system_key(vk, alt, ctrl);
+                let lparam =
+                    with_alt_context(key_lparam(e.detail, false, extended), alt || vk == VK_MENU);
                 gui::update_async_key_state(vk, true);
                 if let Some(side) = gui::sided_modifier(vk, lparam) {
                     gui::update_async_key_state(side, true);
@@ -3197,7 +3199,11 @@ impl X11Backend {
                 gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,
-                    message: gui::WM_KEYDOWN,
+                    message: if system {
+                        gui::WM_SYSKEYDOWN
+                    } else {
+                        gui::WM_KEYDOWN
+                    },
                     wparam: vk,
                     lparam,
                 })
@@ -3228,13 +3234,21 @@ impl X11Backend {
                     })
                     .unwrap_or(e.detail as usize);
                 gui::update_async_key_state(vk, false);
-                let lparam = key_lparam(e.detail, true, vk_is_extended(vk));
+                let alt = e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1);
+                let ctrl = e
+                    .state
+                    .contains(x11rb::protocol::xproto::KeyButMask::CONTROL);
+                let lparam = with_alt_context(key_lparam(e.detail, true, vk_is_extended(vk)), alt);
                 if let Some(side) = gui::sided_modifier(vk, lparam) {
                     gui::update_async_key_state(side, false);
                 }
                 Some(PendingEvent {
                     hwnd,
-                    message: gui::WM_KEYUP,
+                    message: if system_key(vk, alt, ctrl) {
+                        gui::WM_SYSKEYUP
+                    } else {
+                        gui::WM_KEYUP
+                    },
                     wparam: vk,
                     lparam,
                 })
@@ -4217,6 +4231,30 @@ fn keysym_to_char(sym: u32) -> u16 {
 /// sous Windows, et non le keycode X (evdev + 8) ; bit 24 = touche étendue.
 /// ToAscii/ToUnicode lisent ce scancode : PuTTY le leur repasse, et un
 /// keycode X brut y faisait taper « l » pour « a » (#773).
+const VK_MENU: usize = 0x12;
+const VK_F10: usize = 0x79;
+
+/// #3054 : frappe « système », comme le pilote clavier de Windows. Une touche
+/// frappée pendant qu'Alt est tenu, la touche Alt elle-même et F10 arrivent en
+/// WM_SYSKEYDOWN / WM_SYSKEYUP (Learn : WM_SYSKEYDOWN, « About Keyboard
+/// Input », frappes système). Avec Ctrl tenu, c'est une frappe ordinaire
+/// (Ctrl+Alt, AltGr). Avant, tout arrivait en WM_KEYDOWN : DefWindowProc ne
+/// voyait jamais Alt+F4, et Alt+lettre tapait la lettre au lieu d'un
+/// WM_SYSCHAR.
+fn system_key(vk: usize, alt: bool, ctrl: bool) -> bool {
+    !ctrl && (alt || vk == VK_MENU || vk == VK_F10)
+}
+
+/// Bit 29 de lParam (code de contexte) : 1 quand Alt est tenu pendant la
+/// frappe (Learn : WM_SYSKEYDOWN, paramètre lParam).
+fn with_alt_context(lparam: isize, alt: bool) -> isize {
+    if alt {
+        lparam | (1 << 29)
+    } else {
+        lparam
+    }
+}
+
 fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
     let (code, e0) = (keycode as u16)
         .checked_sub(8)
@@ -4260,6 +4298,23 @@ pub(crate) fn winlux_window_icon() -> &'static [u32] {
 
 #[cfg(test)]
 mod tests {
+    /// #3054 : Alt tenu, la touche Alt et F10 sont des frappes système ;
+    /// avec Ctrl (Ctrl+Alt, AltGr) la frappe reste ordinaire.
+    #[test]
+    fn frappes_systeme_comme_le_pilote_clavier_de_windows() {
+        use super::{system_key, with_alt_context};
+        assert!(system_key(0x73, true, false)); // Alt+F4
+        assert!(system_key(0x46, true, false)); // Alt+F
+        assert!(system_key(0x12, false, false)); // Alt seul, à l'appui
+        assert!(system_key(0x79, false, false)); // F10
+        assert!(!system_key(0x73, false, false)); // F4
+        assert!(!system_key(0x46, false, false)); // F
+        assert!(!system_key(0x33, true, true)); // Ctrl+Alt+3
+        assert!(!system_key(0x12, false, true)); // Alt après Ctrl
+        assert_eq!(with_alt_context(1, true), 1 | (1 << 29));
+        assert_eq!(with_alt_context(1, false), 1);
+    }
+
     /// #1577 : un texte Xft sur une fenêtre ou un tampon déjà détruit
     /// (BadDrawable) ne tue plus le processus. Sans affichage X, rien à
     /// vérifier.

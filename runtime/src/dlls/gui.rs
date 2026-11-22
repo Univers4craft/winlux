@@ -53,6 +53,9 @@ pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
+pub const WM_SYSKEYDOWN: u32 = 0x0104;
+pub const WM_SYSKEYUP: u32 = 0x0105;
+pub const WM_SYSCHAR: u32 = 0x0106;
 #[allow(dead_code)]
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
@@ -780,7 +783,7 @@ pub fn observe_key_message(msg: &Msg) {
         }
         return;
     }
-    if msg.message == WM_KEYDOWN {
+    if matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN) {
         key_down_removed(msg.hwnd, msg.wparam, msg.lparam);
     }
     if msg.wparam >= KEY_STATE_COUNT {
@@ -5022,7 +5025,7 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let taken = loop {
         let m = {
             let mut items = lock(&q.items);
-            let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+            let idx = next_index(&items, hwnd, min, max)?;
             items.remove(idx)?
         };
         // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
@@ -5105,10 +5108,37 @@ pub fn prepend_message(q: &Queue, m: Msg) {
 /// Regarde sans retirer.
 pub fn peek_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let items = lock(&q.items);
-    items
+    next_index(&items, hwnd, min, max).map(|i| items[i])
+}
+
+/// Message clavier ou souris venu du matériel (classe « entrée » de GetMessage).
+fn is_input_message(message: u32) -> bool {
+    (0x0100..=0x0109).contains(&message)
+        || (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+}
+
+/// WM_CHAR, WM_DEADCHAR, WM_SYSCHAR, WM_SYSDEADCHAR : postés par TranslateMessage.
+fn is_char_message(message: u32) -> bool {
+    matches!(message, 0x0102 | 0x0103 | 0x0106 | 0x0107)
+}
+
+/// Rang du prochain message à livrer. GetMessage sert les messages postés
+/// avant les entrées clavier et souris (Learn, GetMessage, Remarques) : le
+/// caractère que TranslateMessage vient de poster passe donc devant la touche
+/// suivante déjà en file, sinon Entrée arrivait avant le « . » tapé juste
+/// avant (#3072). Hors ce cas, l'ordre d'arrivée est gardé.
+fn next_index(items: &VecDeque<Msg>, hwnd: usize, min: u32, max: u32) -> Option<usize> {
+    let mut matching = items
         .iter()
-        .find(|m| match_filter(m, hwnd, min, max))
-        .copied()
+        .enumerate()
+        .filter(|(_, m)| match_filter(m, hwnd, min, max));
+    let (first, m) = matching.next()?;
+    if !is_input_message(m.message) {
+        return Some(first);
+    }
+    let char_after = matching.find(|(_, m)| is_char_message(m.message));
+    Some(char_after.map_or(first, |(i, _)| i))
 }
 
 fn match_filter(m: &Msg, hwnd: usize, min: u32, max: u32) -> bool {
@@ -5154,6 +5184,20 @@ pub fn default_nccalcsize_seen() -> bool {
 }
 
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
+/// Fenêtre de premier niveau d'une fenêtre : on remonte les parents tant que
+/// la fenêtre est un enfant (WS_CHILD).
+fn top_level_window(hwnd: usize) -> usize {
+    let mut current = hwnd;
+    for _ in 0..64 {
+        let child = window_style(current).is_some_and(|s| s & 0x4000_0000 != 0);
+        match window_parent(current) {
+            Some(parent) if child && parent != 0 => current = parent,
+            _ => break,
+        }
+    }
+    current
+}
+
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     crate::dlls::pointer::on_default(message);
     match message {
@@ -5348,6 +5392,14 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         }
         WM_KEYDOWN | 0x0104 if wparam == 0x79 && get_key_state(0x10) < 0 => {
             send_context_menu(hwnd, hwnd, -1);
+            0
+        }
+        // Alt+F4 (WM_SYSKEYDOWN, VK_F4, Alt tenu : bit 29) : WM_SYSCOMMAND
+        // SC_CLOSE à la fenêtre de premier niveau, qui finit en WM_CLOSE
+        // (Learn : WM_SYSCOMMAND, SC_CLOSE ; #3054).
+        WM_SYSKEYDOWN if wparam == 0x73 && lparam & (1 << 29) != 0 => {
+            let top = top_level_window(hwnd);
+            unsafe { crate::dlls::user32::send_message_w(top, 0x0112, 0xF060, 0) };
             0
         }
         0x0101 if wparam == 0x5D => {
@@ -6218,6 +6270,85 @@ pub(crate) mod tests {
             assert_eq!(ch.wparam, b'n' as usize);
         }
         assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+        destroy_window(hwnd);
+    }
+
+    extern "win64" fn wnd_proc_par_defaut(
+        hwnd: usize,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        def_window_proc(hwnd, msg, wparam, lparam)
+    }
+
+    /// #3054 : une frappe système (Alt tenu) donne WM_SYSCHAR, jamais
+    /// WM_CHAR, et Alt+F4 reçu par la fenêtre la ferme par SC_CLOSE puis
+    /// WM_CLOSE, comme DefWindowProc de Windows.
+    #[test]
+    fn alt_lettre_donne_wm_syschar_et_alt_f4_ferme_la_fenetre() {
+        let hwnd = fenetre_de_test();
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_par_defaut;
+        set_wnd_proc(hwnd, proc_addr as usize);
+        let q = current_queue();
+        let alt = 1 << 29;
+
+        let alt_f = (33isize << 16) | 1 | alt;
+        set_key_char(hwnd, 0x46, alt_f, Some(b'f' as u16));
+        let key = Msg::new(hwnd, WM_SYSKEYDOWN, 0x46, alt_f);
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&key) }, 1);
+        let ch = take_message(&q, hwnd, WM_SYSCHAR, WM_SYSCHAR).expect("WM_SYSCHAR généré");
+        assert_eq!(ch.wparam, b'f' as usize);
+        assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+
+        // F4 seul ne ferme rien ; Alt+F4 poste WM_CLOSE.
+        def_window_proc(hwnd, WM_SYSKEYDOWN, 0x73, (62isize << 16) | 1);
+        assert!(take_message(&q, hwnd, WM_CLOSE, WM_CLOSE).is_none());
+        def_window_proc(hwnd, WM_SYSKEYDOWN, 0x73, (62isize << 16) | 1 | alt);
+        assert!(
+            take_message(&q, hwnd, WM_CLOSE, WM_CLOSE).is_some(),
+            "Alt+F4 doit poster WM_CLOSE"
+        );
+
+        destroy_window(hwnd);
+    }
+
+    /// #3072 : le WM_CHAR que TranslateMessage poste passe devant la touche
+    /// suivante déjà en file (Entrée), comme les messages postés devant les
+    /// entrées sous Windows. Un autre message posté garde son rang.
+    #[test]
+    fn le_caractere_traduit_passe_devant_la_touche_suivante_deja_en_file() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        let (point, lp_point) = (0xBE, (0x34isize << 16) | 1);
+        let lp_entree = (0x1Cisize << 16) | 1;
+        set_key_char(hwnd, point, lp_point, Some(b'.' as u16));
+        let touche = Msg::new(hwnd, WM_KEYDOWN, point, lp_point);
+        observe_key_message(&touche);
+        // Entrée est arrivée du serveur X avant que l'application traduise « . ».
+        post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, VK_RETURN, lp_entree));
+        assert_eq!(
+            unsafe { crate::dlls::user32::translate_message(&touche) },
+            1
+        );
+        let vu = peek_message(&q, hwnd, 0, 0).expect("message en file");
+        assert_eq!((vu.message, vu.wparam), (WM_CHAR, b'.' as usize));
+        let pris = take_message(&q, hwnd, 0, 0).expect("WM_CHAR");
+        assert_eq!((pris.message, pris.wparam), (WM_CHAR, b'.' as usize));
+        let pris = take_message(&q, hwnd, 0, 0).expect("Entrée");
+        assert_eq!((pris.message, pris.wparam), (WM_KEYDOWN, VK_RETURN));
+        // Un message posté qui n'est pas un caractère reste derrière l'entrée.
+        post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, VK_RETURN, lp_entree));
+        post_to_window(hwnd, Msg::new(hwnd, 0x0400, 7, 0));
+        assert_eq!(
+            take_message(&q, hwnd, 0, 0).map(|m| m.message),
+            Some(WM_KEYDOWN)
+        );
+        assert_eq!(
+            take_message(&q, hwnd, 0, 0).map(|m| m.message),
+            Some(0x0400)
+        );
+        discard_key_chars(hwnd);
         destroy_window(hwnd);
     }
 
