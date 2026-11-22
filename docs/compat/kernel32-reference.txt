@@ -1737,6 +1737,8 @@ uaw_wcsrchr
 GetTempPath2W
 GetFileInformationByName
 FlsGetValue2  # Windows 11 24H2, page non relue (#521)
+QueryInterruptTime  # sdk-api nf-realtimeapiset-queryinterrupttime.md, req.dll Kernel32.dll (#3168)
+QueryInterruptTimePrecise  # sdk-api nf-realtimeapiset-queryinterrupttimeprecise.md, req.dll Kernel32.dll (#3168)
 
 # --- Registre (api-ms-win-core-registry-l1-1-0, douteux : #521) ---
 RegCloseKey
