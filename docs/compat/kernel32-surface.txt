@@ -12,6 +12,7 @@ AddVectoredContinueHandler
 AddVectoredExceptionHandler
 AllocConsole
 AllocateUserPhysicalPages
+AppPolicyGetThreadInitializationType
 AreFileApisANSI
 AssignProcessToJobObject
 AttachConsole
