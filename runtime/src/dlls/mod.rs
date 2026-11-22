@@ -1239,7 +1239,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: icuuc::exports(),
                 handle: 0,
             },
-            // Qualité de service qWAVE (discord_voice.node, #3050).
+            // Qualité de service qWAVE (discord_voice.node, #NNNN).
             Builtin {
                 name: "qwave",
                 exports: qwave::exports(),
