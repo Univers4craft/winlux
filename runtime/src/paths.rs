@@ -829,6 +829,9 @@ pub struct VersWindows {
     home: std::cell::OnceCell<Base>,
     known: std::cell::OnceCell<Vec<(&'static str, Base)>>,
     drive_c: std::cell::OnceCell<Base>,
+    /// Formes canoniques des dossiers déjà vus : les ~300 polices d'un même
+    /// dossier ne refont plus chacune un readlink par composant (#2951).
+    canon_dirs: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<PathBuf>>>,
 }
 
 impl Default for VersWindows {
@@ -844,7 +847,26 @@ impl VersWindows {
             home: std::cell::OnceCell::new(),
             known: std::cell::OnceCell::new(),
             drive_c: std::cell::OnceCell::new(),
+            canon_dirs: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// `std::fs::canonicalize(abs)` pour un chemin absolu lexical : si le
+    /// dernier composant existe et n'est pas un lien, c'est la forme
+    /// canonique de son dossier (gardée) suivie de ce nom.
+    fn canonicalize(&self, abs: &Path) -> Option<PathBuf> {
+        let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+            return std::fs::canonicalize(abs).ok();
+        };
+        match std::fs::symlink_metadata(abs) {
+            Ok(m) if !m.file_type().is_symlink() => {}
+            _ => return std::fs::canonicalize(abs).ok(),
+        }
+        let mut dirs = self.canon_dirs.borrow_mut();
+        let dir = dirs
+            .entry(parent.to_path_buf())
+            .or_insert_with(|| std::fs::canonicalize(parent).ok());
+        dir.as_ref().map(|d| d.join(name))
     }
 
     /// Chemin Linux → chemin Windows, comme [`to_windows`].
@@ -853,7 +875,7 @@ impl VersWindows {
         if let Some(s) = self.try_convert(&abs) {
             return s;
         }
-        if let Ok(canon) = std::fs::canonicalize(&abs) {
+        if let Some(canon) = self.canonicalize(&abs) {
             if let Some(s) = self.try_convert(&canon) {
                 return s;
             }
