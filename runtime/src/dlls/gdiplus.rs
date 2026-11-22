@@ -685,6 +685,9 @@ unsafe extern "win64" fn create_bitmap_from_scan0(
     bmp: *mut usize,
 ) -> i32 {
     if w <= 0 || h <= 0 || bmp.is_null() || (w as i64 * h as i64) > (1 << 28) {
+        // Le programme n'en voit qu'un « Parameter is not valid » : la taille
+        // refusée reste lisible dans le journal (#2866).
+        crate::log_warn!("gdiplus", "bitmap {w}x{h} (format {format:#x}) refusée");
         return INVALID_PARAMETER;
     }
     let mut b = Bitmap::new(w as u32, h as u32, format);

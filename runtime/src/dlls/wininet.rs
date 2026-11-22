@@ -1298,6 +1298,8 @@ pub fn urlmon_exports() -> Exports {
         "FindMimeFromData" => fn find_mime_from_data,
         "CreateURLMoniker" => fn super::url_moniker::create_url_moniker,
         "CreateURLMonikerEx" => fn super::url_moniker::create_url_moniker_ex,
+        "URLOpenStreamW" => fn super::url_stream::url_open_stream_w,
+        "URLOpenStreamA" => fn super::url_stream::url_open_stream_a,
         "CoInternetCreateSecurityManager" => fn super::url_security::co_internet_create_security_manager,
     }
 }
