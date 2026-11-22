@@ -961,19 +961,24 @@ pub unsafe extern "win64" fn translate_message(msg: *const Msg) -> i32 {
     // disposition clavier en produit un. Le backend X11 a mémorisé le caractère
     // effectif (majuscules, ponctuation, accents) ; à défaut on retombe sur la
     // disposition US non modifiée.
-    if m.message == gui::WM_KEYDOWN {
-        if let Some(prefix) = gui::take_key_prefix(m.hwnd, m.wparam, m.lparam) {
-            gui::post_to_window(
-                m.hwnd,
-                gui::Msg::new(m.hwnd, gui::WM_CHAR, prefix as usize, m.lparam),
-            );
-        }
-        if let Some(ch) = gui::take_key_char(m.hwnd, m.wparam, m.lparam) {
-            return gui::post_to_window(
-                m.hwnd,
-                gui::Msg::new(m.hwnd, gui::WM_CHAR, ch as usize, m.lparam),
-            ) as i32;
-        }
+    // Une frappe système (Alt tenu) donne WM_SYSCHAR au lieu de WM_CHAR
+    // (Learn : TranslateMessage ; #3054).
+    let char_message = match m.message {
+        gui::WM_KEYDOWN => gui::WM_CHAR,
+        gui::WM_SYSKEYDOWN => gui::WM_SYSCHAR,
+        _ => return 0,
+    };
+    if let Some(prefix) = gui::take_key_prefix(m.hwnd, m.wparam, m.lparam) {
+        gui::post_to_window(
+            m.hwnd,
+            gui::Msg::new(m.hwnd, char_message, prefix as usize, m.lparam),
+        );
+    }
+    if let Some(ch) = gui::take_key_char(m.hwnd, m.wparam, m.lparam) {
+        return gui::post_to_window(
+            m.hwnd,
+            gui::Msg::new(m.hwnd, char_message, ch as usize, m.lparam),
+        ) as i32;
     }
     0
 }
