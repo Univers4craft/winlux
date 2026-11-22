@@ -150,6 +150,26 @@ try:
     got = wait(lambda: frame(window) if abs(frame(window)[2] - area[2] // 3) <= 4 else None)
     assert got and abs(got[0] - area[2] // 3) <= 4, f"barre des dispositions : tiers du milieu attendu, {frame(window)}"
 
+    # Barre de titre dessinée par l'application (_NET_WM_MOVERESIZE, comme
+    # l'Explorateur) : même ancrage au bord, même décrochage (#2907).
+    script = ("import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk, Gdk;"
+              "w=Gtk.Window(title='ancrage-dessinee'); w.set_default_size(500,300); w.move(300,200);"
+              "w.set_decorated(False); w.add_events(Gdk.EventMask.BUTTON_PRESS_MASK);"
+              "w.connect('button-press-event', lambda w,e: (w.begin_move_drag(e.button,int(e.x_root),int(e.y_root),e.time), True)[1]);"
+              "w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()")
+    start(sys.executable, "-c", script)
+    drawn = wait(lambda: x("xdotool", "search", "--name", "^ancrage-dessinee$").split()[:1])
+    assert drawn, "fenêtre sans décoration absente"
+    drawn = drawn[0]
+    time.sleep(0.5)
+    first = frame(drawn)
+    drag(drawn, (0, 400))
+    got = wait(lambda: frame(drawn) if abs(frame(drawn)[2] - area[2] // 2) <= 4 and frame(drawn)[0] <= 2 else None)
+    assert got, f"barre dessinée, bord gauche : moitié attendue, {frame(drawn)}"
+    drag(drawn, (700, 400))
+    got = wait(lambda: frame(drawn) if abs(frame(drawn)[2] - first[2]) <= 4 else None)
+    assert got and not snap["get_prop"](drawn, "_WINLUX_SNAP"), f"barre dessinée, décrochée : taille d'avant attendue, {frame(drawn)}"
+
     # Survol du bouton Agrandir : la grille s'ouvre sans clic.
     x("wmctrl", "-i", "-r", window, "-e", "0,300,200,500,300")
     time.sleep(0.6)

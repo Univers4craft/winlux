@@ -1357,6 +1357,21 @@ def watch():
         fenêtre cliente sous la souris, sinon None. Vérifié à l'appui, avant tout déplacement."""
         px, py, frame, *_ = x11.pointer()
         if not frame: return None
+        # Barre de titre dessinée par l'application (Explorateur, GTK sans
+        # décoration) : openbox ne met pas de titre, l'application le
+        # déplace par _NET_WM_MOVERESIZE. Le glisser ne compte que si la
+        # fenêtre suit la souris (#2907).
+        drawn = None
+        if not mask & ALT:
+            drawn = client_of(x11, frame)
+            if drawn and frame_extents(drawn)[2] > 4: drawn = None
+        if drawn:
+            kind = _run(["xprop", "-id", drawn, "_NET_WM_WINDOW_TYPE"])
+            if "_NET_WM_WINDOW_TYPE_NORMAL" not in kind and "_NET_WM_WINDOW_TYPE(ATOM)" in kind: return None
+            frame_geometry = window_geometry(drawn)
+            if frame_geometry is None: return None
+            return {"window": drawn, "snapped": bool(get_prop(drawn, "_WINLUX_SNAP")),
+                    "start": frame_geometry[:2], "drawn": True}
         if not mask & ALT:
             _, _, title, *_ = x11.pointer(frame)
             title_attributes = x11.attributes(title) if title else None
@@ -1394,7 +1409,13 @@ def watch():
                 state["press"] = (px, py, pressed_on_title(mask))
             press = state["press"]
             if state["drag"] is None and press[2] and abs(px - press[0]) + abs(py - press[1]) >= DRAG_START:
-                state["drag"] = press[2]
+                moving = press[2]
+                if not moving.get("drawn"):
+                    state["drag"] = moving
+                else:
+                    # Un clic dans le contenu ne déplace pas la fenêtre : pas un glisser.
+                    now_at = window_geometry(moving["window"])
+                    if now_at and now_at[:2] != moving["start"]: state["drag"] = moving
             if state["drag"]:
                 monitor, area, scale = monitor_at(point)
                 shown = state["bar"] is not None
