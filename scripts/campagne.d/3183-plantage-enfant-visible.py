@@ -11,4 +11,4 @@ ok("fn texte_de_la_boite_3183" in misc_3183,
    "Boîte de plantage : programme, code et chemin du journal en fr/en/de/es (#3183)")
 report_3183 = (ROOT / "scripts/winlux-report.py").read_text(encoding="utf-8")
 ok("def auto_sendable(crash)" in report_3183,
-   "Envoi automatique : une exception logicielle non gérée n'est jamais mise en file (#3183)")
+   "Envoi automatique : exception non gérée, exception C++ et __fastfail jamais mises en file (#3183)")

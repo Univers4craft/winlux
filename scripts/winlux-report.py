@@ -2199,12 +2199,17 @@ def urgency(kind):
     return "urgence:1-quotidien" if kind == "system" else "urgence:2-confort"
 
 
+# Échecs logiciels d'un programme Windows lancé par la personne (#3183) :
+# exception non gérée, exception C++ jamais rattrapée, échec immédiat
+# (__fastfail, tâche PPL). Ils ne partent jamais d'eux-mêmes.
+NEVER_AUTO = frozenset({"UNHANDLED_EXCEPTION", "CXX_EXCEPTION", "FAST_FAIL"})
+
+
 def auto_sendable(crash):
-    """Une exception logicielle non gérée d'un programme Windows (#3183) ne
-    part jamais d'elle-même : l'accord donné à l'installation couvre les
-    fautes, pas ce que font les logiciels que la personne lance. Elle reste
-    au journal et dans « Signaler un problème », envoyée seulement sur un clic."""
-    return crash.get("exception") != "UNHANDLED_EXCEPTION"
+    """L'accord donné à l'installation couvre les fautes, pas ce que font
+    les logiciels que la personne lance : ces échecs restent au journal et
+    dans « Signaler un problème », envoyés seulement sur un clic (#3183)."""
+    return crash.get("exception") not in NEVER_AUTO
 
 
 def collect():
@@ -2218,7 +2223,7 @@ def collect():
             if key in known:
                 continue
             if not auto_sendable(crash):
-                auto_log(f"non mis en file : exception logicielle non gérée ({key})")
+                auto_log(f"non mis en file : échec logiciel d'un programme, envoi sur clic seulement ({key})")
                 seen.append(key)
                 known.add(key)
                 continue
