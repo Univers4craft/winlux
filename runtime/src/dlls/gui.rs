@@ -3824,6 +3824,10 @@ fn change_active_top(new_top: usize) {
             crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
             new_top,
         );
+        crate::dlls::user32_more::notify_shell_hook(
+            crate::dlls::user32_more::HSHELL_WINDOWACTIVATED,
+            new_top,
+        );
     }
 }
 
