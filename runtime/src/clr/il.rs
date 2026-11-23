@@ -14,7 +14,7 @@
 //! respectée.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -258,8 +258,9 @@ pub struct Interpreter {
 /// État partagé par les interpréteurs des différents fils.
 #[derive(Default)]
 pub struct Shared {
-    /// Types dont le constructeur statique a été lancé.
-    initialized: Mutex<HashSet<TypeId>>,
+    /// Constructeurs statiques des types chargés (programme et
+    /// assemblies), par `TypeId` : en cours, finis ou en échec (#3249).
+    initialized: super::initialisations::Initialisations,
     /// Champs statiques des types de la bibliothèque intégrée.
     external_statics: Mutex<HashMap<(usize, u32), Box<[u64; 4]>>>,
     /// Champs statiques des types intégrés au moteur (String, Boolean…)
@@ -424,10 +425,28 @@ impl Interpreter {
 
     /// Lance une seule fois le constructeur statique d'un type, avant son
     /// premier usage (ECMA-335 §II.10.5.3.1).
+    /// Lance une seule fois le constructeur statique d'un type chargé. Un
+    /// autre fil attend qu'il soit fini ; s'il lève, chaque accès relève la
+    /// même `TypeInitializationException` (ECMA-335 §II.10.5.3.3, #3249).
     fn ensure_initialized(&mut self, id: TypeId) -> Result<(), ClrException> {
-        if !self.shared.initialized.lock().unwrap().insert(id) {
-            return Ok(());
+        use super::initialisations::Acces;
+        let shared = self.shared.clone();
+        let cle = id.to_string();
+        match shared.initialized.entrer(&cle) {
+            Acces::Pret => return Ok(()),
+            Acces::Echec(e) => return Err(e),
+            Acces::Lancer => {}
         }
+        let r = self.run_cctor(id).map_err(|inner| {
+            let name =
+                types::with_types(|reg| reg.get(id).map(|t| t.full_name())).unwrap_or_default();
+            self.type_initialization_exception(&name, inner)
+        });
+        shared.initialized.terminer(&cle, r);
+        r
+    }
+
+    fn run_cctor(&mut self, id: TypeId) -> Result<(), ClrException> {
         let Some(((asm, row), args)) = types::with_types(|reg| {
             reg.get(id)
                 .and_then(|t| Some((t.def?, t.type_args.clone())))
@@ -1123,6 +1142,7 @@ impl Interpreter {
             roots.extend(data.iter().map(|&w| w as usize));
         }
         roots.extend(self.shared.builtin_initialized.racines());
+        roots.extend(self.shared.initialized.racines());
         types::with_types(|reg| {
             for data in reg.static_data.values() {
                 roots.extend(data.iter().map(|&w| w as usize));
