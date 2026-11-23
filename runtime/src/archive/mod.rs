@@ -972,7 +972,7 @@ mod tests {
 
     /// #3282 : un nom accentué traverse un 7z écrit puis relu par bsdtar,
     /// quelle que soit la locale héritée. Le test tourne aussi sous
-    /// `LC_ALL=C` (scripts/campagne.d/3282-archives-locale-utf8.py).
+    /// `LC_ALL=C` (scripts/test-all.d/3282-archives-locale-c.sh).
     #[test]
     fn sept_z_nom_accentue_locale_heritee_3282() {
         let envs: Vec<_> = tools::archiver(Path::new("outil"))
