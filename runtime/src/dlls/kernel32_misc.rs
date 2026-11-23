@@ -410,7 +410,7 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
 /// chargement différé ; delayimp.h de mingw-w64). Champs : cb, pidd, ppfn,
 /// szDll, dlp { fImportByName, szProcName | dwOrdinal }, hmodCur, pfnCur,
 /// dwLastError — soit 36 octets en x86 et 72 en x64.
-unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<String> {
+pub(crate) unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<String> {
     if !matches!(code, 0xC06D_007E | 0xC06D_007F) || args.is_empty() || args[0] == 0 {
         return None;
     }
@@ -459,7 +459,7 @@ unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<Str
 /// adresses virtuelles (anciens éditeurs de liens). Chaque entrée de l'INT
 /// est un mot de 4 octets (x86) ou 8 (x64) : bit de poids fort = ordinal,
 /// sinon RVA d'un IMAGE_IMPORT_BY_NAME (indice sur 2 octets puis le nom).
-unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<String> {
+pub(crate) unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<String> {
     let info = *args.first()?;
     let pidd_at = if x86 { 4 } else { 8 };
     let pidd = if x86 {
