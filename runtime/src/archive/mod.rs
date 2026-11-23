@@ -28,7 +28,6 @@ pub mod zip;
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use util::*;
 
@@ -162,7 +161,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
     std::fs::create_dir_all(dest)?;
     let pw_arg = |prefix: &str| format!("{prefix}{}", pw.unwrap_or(""));
     if let Some(sz) = tools::sevenzip() {
-        let mut c = Command::new(sz);
+        let mut c = tools::archiver(&sz);
         c.arg("x")
             .arg("-y")
             .arg("-bsp1")
@@ -175,7 +174,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
     }
     if Format::from_name(&archive.to_string_lossy()) == Some(Format::Rar) {
         if let Some(u) = tools::unrar() {
-            let mut c = Command::new(u);
+            let mut c = tools::archiver(&u);
             c.arg("x").arg("-o+").arg("-y");
             c.arg(if pw.is_some() {
                 pw_arg("-p")
@@ -186,7 +185,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
             return tools::run_archiver(c, pw.is_some(), progress);
         }
         if let Some(u) = tools::unar() {
-            let mut c = Command::new(u);
+            let mut c = tools::archiver(&u);
             c.arg("-f").arg("-q").arg("-D").arg("-o").arg(dest);
             if let Some(p) = pw {
                 c.arg("-p").arg(p);
@@ -196,7 +195,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
         }
     }
     if let Some(b) = tools::bsdtar() {
-        let mut c = Command::new(b);
+        let mut c = tools::archiver(&b);
         c.arg("-xf").arg(archive).arg("-C").arg(dest);
         if let Some(p) = pw {
             c.arg("--passphrase").arg(p);
@@ -414,7 +413,7 @@ pub fn create(out: &Path, sources: &[PathBuf], pw: Option<&str>, progress: &Prog
                 return create_7z_bsdtar(out, sources, pw, progress);
             };
             let _ = std::fs::remove_file(out);
-            let mut c = Command::new(sz);
+            let mut c = tools::archiver(&sz);
             c.arg("a").arg("-t7z").arg("-y").arg("-bsp1").arg("-bso0");
             if let Some(p) = pw {
                 c.arg(format!("-p{p}")).arg("-mhe=on");
@@ -445,7 +444,7 @@ fn create_7z_bsdtar(
     }
     let tool = tools::bsdtar().ok_or(ArcError::ReadOnly)?;
     let _ = std::fs::remove_file(out);
-    let mut c = Command::new(tool);
+    let mut c = tools::archiver(&tool);
     c.arg("--format").arg("7zip").arg("-cf").arg(out);
     for s in sources {
         let (Some(dir), Some(name)) = (s.parent(), s.file_name()) else {
@@ -967,6 +966,49 @@ mod tests {
         assert!(
             Format::SevenZ.support().1,
             "7z modifiable dès que bsdtar est là"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #3282 : un nom accentué traverse un 7z écrit puis relu par bsdtar,
+    /// quelle que soit la locale héritée. Le test tourne aussi sous
+    /// `LC_ALL=C` (scripts/campagne.d/3282-archives-locale-utf8.py).
+    #[test]
+    fn sept_z_nom_accentue_locale_heritee_3282() {
+        let envs: Vec<_> = tools::archiver(Path::new("outil"))
+            .get_envs()
+            .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+            .collect();
+        assert_eq!(envs, [("LC_ALL".into(), Some("C.UTF-8".into()))]);
+        if tools::bsdtar().is_none() || tools::sevenzip().is_some() {
+            eprintln!("bsdtar seul requis : test 3282 sauté");
+            return;
+        }
+        let d = tmp("7z-accents");
+        let src = d.join("Photos d'été");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lisez-moi.txt"), "Bonjour").unwrap();
+        let arc = d.join("p.7z");
+        let ecrit = create_7z_bsdtar(&arc, &[src], None, &Progress::default());
+        let out = d.join("out");
+        let lu = ecrit
+            .as_ref()
+            .ok()
+            .map(|_| extract_to(&arc, &out, None, &Progress::default()));
+        let noms = walk(&out).map(|w| w.iter().map(|e| e.rel.clone()).collect::<Vec<_>>());
+        eprintln!(
+            "3282 : LC_ALL={:?} LANG={:?} écriture={:?} lecture={:?} noms={:?}",
+            std::env::var("LC_ALL"),
+            std::env::var("LANG"),
+            ecrit.as_ref().err().map(|e| e.to_string()),
+            lu.as_ref().map(|r| r.as_ref().err().map(|e| e.to_string())),
+            noms
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join("Photos d'été/lisez-moi.txt"))
+                .ok()
+                .as_deref(),
+            Some("Bonjour")
         );
         let _ = std::fs::remove_dir_all(&d);
     }
