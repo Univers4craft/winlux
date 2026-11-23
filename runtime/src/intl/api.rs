@@ -532,6 +532,32 @@ pub unsafe extern "win64" fn is_valid_locale_name(name: *const u16) -> i32 {
 /// Get{User,System,Thread,Process}PreferredUILanguages : langue de
 /// Paramètres, en liste multi-chaîne. MUI_LANGUAGE_ID (4) la donne en
 /// hexadécimal (« 040C »).
+/// Liste des langues d'interface rendue par Get*PreferredUILanguages.
+/// Learn (GetThreadPreferredUILanguages) : MUI_MERGE_SYSTEM_FALLBACK (0x10),
+/// avec MUI_MERGE_USER_FALLBACK, « including fallback and neutral
+/// languages in the list » ; MUI_UI_FALLBACK (0x30) équivaut aux deux. La
+/// langue neutre (« fr » pour fr-FR, LANGID 0x000C) suit donc la langue
+/// régionale. Sans elle, le sélecteur de traductions de l'installeur de
+/// Chromium, qui ne retient que « fr », retombait sur en-US (#3212).
+fn preferred_ui_list(name: &str, lcid: u32, flags: u32) -> Vec<String> {
+    let ids = flags & 4 != 0;
+    let mut items = vec![if ids {
+        format!("{:04X}", lcid & 0xFFFF)
+    } else {
+        name.to_string()
+    }];
+    if flags & 0x10 != 0 {
+        if let Some((neutral, _)) = name.split_once('-') {
+            items.push(if ids {
+                format!("{:04X}", lcid & 0x3FF)
+            } else {
+                neutral.to_string()
+            });
+        }
+    }
+    items
+}
+
 pub unsafe extern "win64" fn get_preferred_ui_languages(
     flags: u32,
     count: *mut u32,
@@ -543,14 +569,14 @@ pub unsafe extern "win64" fn get_preferred_ui_languages(
         return 0;
     }
     let ui = locale::ui_locale();
-    let item = if flags & 4 != 0 {
-        format!("{:04X}", ui.lcid)
-    } else {
-        ui.name.to_string()
-    };
-    let mut wide: Vec<u16> = item.encode_utf16().collect();
-    wide.extend([0, 0]);
-    *count = 1;
+    let items = preferred_ui_list(ui.name, ui.lcid, flags);
+    let mut wide: Vec<u16> = Vec::new();
+    for item in &items {
+        wide.extend(item.encode_utf16());
+        wide.push(0);
+    }
+    wide.push(0);
+    *count = items.len() as u32;
     if buf.is_null() {
         *len = wide.len() as u32;
         return 1;
@@ -1678,6 +1704,42 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+
+    /// #3212 : avec MUI_MERGE_SYSTEM_FALLBACK | MUI_MERGE_USER_FALLBACK, la
+    /// langue neutre suit la langue régionale, en nom comme en identifiant.
+    #[test]
+    fn langue_neutre_dans_la_liste_avec_repli_3212() {
+        assert_eq!(
+            super::preferred_ui_list("fr-FR", 0x040C, 0x38),
+            ["fr-FR", "fr"]
+        );
+        assert_eq!(
+            super::preferred_ui_list("fr-FR", 0x040C, 0x34),
+            ["040C", "000C"]
+        );
+        assert_eq!(super::preferred_ui_list("fr-FR", 0x040C, 0x08), ["fr-FR"]);
+        assert_eq!(super::preferred_ui_list("fr", 0x000C, 0x38), ["fr"]);
+        unsafe {
+            let (mut n, mut len) = (0u32, 0u32);
+            assert_eq!(
+                super::get_preferred_ui_languages(0x38, &mut n, std::ptr::null_mut(), &mut len),
+                1
+            );
+            let mut buf = vec![0u16; len as usize];
+            assert_eq!(
+                super::get_preferred_ui_languages(0x38, &mut n, buf.as_mut_ptr(), &mut len),
+                1
+            );
+            assert_eq!(len as usize, buf.len());
+            assert_eq!(buf[buf.len() - 2..], [0, 0]);
+            let langs: Vec<String> = String::from_utf16_lossy(&buf[..buf.len() - 1])
+                .split('\0')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            assert_eq!(n as usize, langs.len());
+        }
+    }
     #[test]
     fn langue_d_interface_du_thread_et_langues_preferees() {
         // #1125 : wxWidgets exige SetThreadPreferredUILanguages pour lire la
