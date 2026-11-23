@@ -1148,6 +1148,33 @@ unsafe extern "win64" fn SHCreateAssociationRegistration(iid: *const u8, out: *m
     ar_query_interface(&ASSOC_REG as *const AssocReg as usize, iid, out)
 }
 
+/// CLSID ApplicationAssociationRegistration (windows-rs 0.58, MIT,
+/// Win32/UI/Shell) : la même classe par CoCreateInstance (Acrobat, #3295).
+const CLSID_APPLICATION_ASSOCIATION_REGISTRATION: Guid = guid(
+    0x5912_09c7,
+    0x767b,
+    0x42b2,
+    [0x9f, 0xba, 0x44, 0xee, 0x46, 0x15, 0xf2, 0xc7],
+);
+
+/// CoCreateInstance de CLSID_ApplicationAssociationRegistration : le même
+/// objet que SHCreateAssociationRegistration ; `None` pour une autre classe.
+pub unsafe fn create_builtin(
+    clsid: &super::ole32::Guid,
+    iid: &super::ole32::Guid,
+    out: *mut *mut std::ffi::c_void,
+) -> Option<i32> {
+    // Même disposition (16 octets) que le Guid d'ole32.
+    let clsid = &*(clsid as *const _ as *const Guid);
+    if *clsid != CLSID_APPLICATION_ASSOCIATION_REGISTRATION {
+        return None;
+    }
+    Some(SHCreateAssociationRegistration(
+        iid as *const _ as *const u8,
+        out as *mut usize,
+    ))
+}
+
 // ============================================================
 //  Tables d'exports
 // ============================================================
@@ -1597,6 +1624,50 @@ mod tests {
                 E_NOINTERFACE
             );
         }
+    }
+
+    #[test]
+    fn association_par_co_create_instance_3295() {
+        // Valeurs observées dans la passe « PDF mutant » d'Acrobat.
+        let clsid: crate::dlls::ole32::Guid =
+            unsafe { std::mem::transmute(CLSID_APPLICATION_ASSOCIATION_REGISTRATION) };
+        let iid: crate::dlls::ole32::Guid =
+            unsafe { std::mem::transmute(IID_IAPPLICATION_ASSOCIATION_REGISTRATION) };
+        assert_eq!(
+            crate::dlls::comobj::guid_str(&CLSID_APPLICATION_ASSOCIATION_REGISTRATION),
+            "{591209C7-767B-42B2-9FBA-44EE4615F2C7}"
+        );
+        assert_eq!(
+            crate::dlls::comobj::guid_str(&IID_IAPPLICATION_ASSOCIATION_REGISTRATION),
+            "{4E530B0A-E611-4C77-A3AC-9031D022281B}"
+        );
+        unsafe {
+            let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
+            let hr = crate::dlls::ole32::co_create_instance(&clsid, 0, 1, &iid, &mut obj);
+            assert_eq!(hr, S_OK);
+            let mut attendu = 0usize;
+            SHCreateAssociationRegistration(iid_bytes(&iid), &mut attendu);
+            assert_eq!(
+                obj as usize, attendu,
+                "le même objet que SHCreateAssociationRegistration"
+            );
+            let mut def = 1i32;
+            assert_eq!(
+                ar_query_app_is_default_all(obj as usize, 1, std::ptr::null(), &mut def),
+                S_OK
+            );
+            assert_eq!(def, 0);
+            let autre: crate::dlls::ole32::Guid = std::mem::transmute(guid(1, 2, 3, [0; 8]));
+            assert_eq!(
+                crate::dlls::ole32::co_create_instance(&clsid, 0, 1, &autre, &mut obj),
+                E_NOINTERFACE
+            );
+            assert!(obj.is_null());
+        }
+    }
+
+    fn iid_bytes(g: &crate::dlls::ole32::Guid) -> *const u8 {
+        g as *const _ as *const u8
     }
 
     #[test]
