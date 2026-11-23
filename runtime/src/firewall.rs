@@ -1683,6 +1683,7 @@ pub fn daemon() -> ! {
     let mut published = None;
     publish_profile(&cfg, &mut published);
     let mut tick = 0u64;
+    let mut listen_key = None;
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
         tick += 1;
@@ -1691,7 +1692,19 @@ pub fn daemon() -> ! {
             continue;
         }
         let new_stamp = config_stamp();
-        let new_apps = listening_programs();
+        // Les sockets en écoute se lisent dans /proc/net pour presque rien ;
+        // leurs propriétaires demandent un readlink de chaque fd de chaque
+        // processus. Ce parcours ne se refait que si une socket en écoute
+        // est apparue ou a disparu, et au plus tard toutes les minutes
+        // (#3266 : 1,87 % d'un cœur au repos, deux parcours toutes les 2 s).
+        let key = listening_inodes();
+        let rescan = needs_rescan(&key, listen_key.as_ref(), tick);
+        listen_key = Some(key);
+        let new_apps = if rescan {
+            listening_programs()
+        } else {
+            apps.clone()
+        };
         let reload = new_stamp != stamp;
         if reload {
             cfg = Config::load();
@@ -1709,7 +1722,9 @@ pub fn daemon() -> ! {
         }
         publish_profile(&cfg, &mut published);
         assign_cgroups(&cfg);
-        write_ports();
+        if rescan {
+            write_ports();
+        }
         if cfg.notify && cfg.enabled[cfg.profile] && !prompt_file().exists() {
             let known = load_known();
             if let Some(prog) = new_listeners(&cfg, &new_apps, &known).into_iter().next() {
@@ -1719,6 +1734,28 @@ pub fn daemon() -> ! {
         }
         apps = new_apps;
     }
+}
+
+/// Parcours complet des propriétaires de sockets au plus tard toutes les
+/// `RESCAN_TICKS` secondes, même sans socket en écoute nouvelle : un
+/// processus qui fait exec ou cède sa socket à un enfant garde le même
+/// inode (choix nommé : une minute de retard au pire pour ce cas).
+const RESCAN_TICKS: u64 = 60;
+
+/// Inodes de toutes les sockets en écoute (boucle locale comprise, pour la
+/// page « Ports ouverts »), lus dans /proc/net sans parcourir les processus.
+fn listening_inodes() -> BTreeSet<u64> {
+    crate::netports::sockets(true, true, true, true)
+        .iter()
+        .filter(|s| s.listening())
+        .map(|s| s.inode)
+        .collect()
+}
+
+/// Faut-il refaire le parcours des fd : premier tour, ensemble des sockets
+/// en écoute changé, ou repli périodique.
+fn needs_rescan(key: &BTreeSet<u64>, last: Option<&BTreeSet<u64>>, tick: u64) -> bool {
+    last != Some(key) || tick.is_multiple_of(RESCAN_TICKS)
 }
 
 /// Le profil vient de changer (Paramètres, `winlux-control` ou
@@ -1837,6 +1874,31 @@ pub fn cli(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// #3266 : au repos, ensemble des sockets en écoute inchangé, le
+    /// parcours des fd de tous les processus ne se refait qu'une fois par
+    /// minute ; une socket qui apparaît ou disparaît le relance aussitôt.
+    #[test]
+    fn parcours_des_fd_seulement_si_les_sockets_changent_3266() {
+        use std::collections::BTreeSet;
+        let a: BTreeSet<u64> = [11, 12].into_iter().collect();
+        let b: BTreeSet<u64> = [11, 12, 13].into_iter().collect();
+        assert!(super::needs_rescan(&a, None, 2), "premier tour");
+        let au_repos = (4..=600u64)
+            .step_by(2)
+            .filter(|&t| super::needs_rescan(&a, Some(&a), t))
+            .count();
+        println!("parcours en 10 min de repos : {au_repos}");
+        assert_eq!(au_repos, 10, "un parcours par minute au repos");
+        assert!(super::needs_rescan(&b, Some(&a), 4), "socket apparue");
+        assert!(super::needs_rescan(&a, Some(&b), 6), "socket disparue");
+        let vide = BTreeSet::new();
+        assert!(
+            super::needs_rescan(&vide, None, 2),
+            "ports.txt écrit même sans écoute"
+        );
+        assert!(!super::needs_rescan(&vide, Some(&vide), 4));
+    }
+
     /// Datagramme fanotify : deux événements à la suite, version vérifiée.
     #[test]
     fn analyse_des_evenements_fanotify() {
