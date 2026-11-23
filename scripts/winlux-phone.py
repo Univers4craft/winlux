@@ -888,12 +888,16 @@ class Daemon:
                 spawn([sys.executable, os.path.abspath(__file__), "pair-dialog", link.id])
                 self.publish()
         else:
-            if link.id in self.devices:
-                self.unpair(link.id, tell=False)
+            # Demandes en cours oubliées AVANT d'effacer les données : un
+            # « Associer » lancé dès que l'effacement est visible ne doit plus
+            # être annulé après coup (sinon l'acceptation du téléphone était
+            # prise pour une nouvelle demande, sans code).
             pending = self.pending.pop(link.id, None)
+            self.requested.pop(link.id, None)
             if pending:
                 self.desktop.close(pending.get("notification", 0))
-            self.requested.pop(link.id, None)
+            if link.id in self.devices:
+                self.unpair(link.id, tell=False)
             self.publish()
 
     def expire_loop(self):
