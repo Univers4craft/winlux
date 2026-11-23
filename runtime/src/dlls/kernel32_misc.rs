@@ -410,7 +410,7 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
 /// chargement différé ; delayimp.h de mingw-w64). Champs : cb, pidd, ppfn,
 /// szDll, dlp { fImportByName, szProcName | dwOrdinal }, hmodCur, pfnCur,
 /// dwLastError — soit 36 octets en x86 et 72 en x64.
-unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<String> {
+pub(crate) unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<String> {
     if !matches!(code, 0xC06D_007E | 0xC06D_007F) || args.is_empty() || args[0] == 0 {
         return None;
     }
@@ -459,7 +459,7 @@ unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<Str
 /// adresses virtuelles (anciens éditeurs de liens). Chaque entrée de l'INT
 /// est un mot de 4 octets (x86) ou 8 (x64) : bit de poids fort = ordinal,
 /// sinon RVA d'un IMAGE_IMPORT_BY_NAME (indice sur 2 octets puis le nom).
-unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<String> {
+pub(crate) unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<String> {
     let info = *args.first()?;
     let pidd_at = if x86 { 4 } else { 8 };
     let pidd = if x86 {
@@ -477,6 +477,45 @@ unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<String> {
         (m.base, m.size)
     };
     delay_import_names(base, size, pidd, x86).map(|names| names.join(", "))
+}
+/// Parmi les fonctions que le module importe en différé de cette DLL,
+/// celles que la DLL déjà chargée (`hmodCur` de la `DelayLoadInfo`) ne sert
+/// pas : ce que le programme demandera ensuite, connu en une seule passe.
+/// x64 seulement (hmodCur à +48) ; rien si la DLL n'a pas été chargée.
+pub(crate) unsafe fn delay_imports_missing(args: &[usize], x86: bool) -> Option<Vec<String>> {
+    if x86 {
+        return None;
+    }
+    let info = *args.first()?;
+    let hmod = std::ptr::read_unaligned((info + 48) as *const usize);
+    let pidd = std::ptr::read_unaligned((info + 8) as *const usize);
+    if hmod == 0 || pidd == 0 {
+        return None;
+    }
+    let (base, size) = {
+        let modules = crate::loader::MODULES.try_lock().ok()?;
+        let m = modules.iter().find(|m| m.contains(pidd))?;
+        (m.base, m.size)
+    };
+    let names = delay_import_names(base, size, pidd, false)?;
+    let saved = crate::dlls::kernel32::get_last_error();
+    let missing = names
+        .into_iter()
+        .filter(|name| {
+            let found = match name.strip_prefix('#') {
+                Some(ordinal) => ordinal.parse::<usize>().is_ok_and(|o| {
+                    crate::dlls::kernel32::get_proc_address(hmod, o as *const u8) != 0
+                }),
+                None => {
+                    let c = std::ffi::CString::new(name.as_str()).unwrap_or_default();
+                    crate::dlls::kernel32::get_proc_address(hmod, c.as_ptr() as *const u8) != 0
+                }
+            };
+            !found
+        })
+        .collect();
+    crate::process::set_last_error(saved);
+    Some(missing)
 }
 /// Noms (ou « #ordinal ») de l'INT d'un descripteur d'import différé situé
 /// dans l'image [base, base + size). Toute adresse hors de l'image arrête

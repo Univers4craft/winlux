@@ -1467,6 +1467,38 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
             line.push_str(&format!(", adresse {at}"));
         }
     }
+    // Chargement différé raté (0xC06D007E/7F) : Chromium et Electron le
+    // remettent à crashpad, qui tue le processus sans que la ligne de
+    // l'exception non gérée (kernel32_misc) soit jamais écrite. La DLL et
+    // la fonction manquantes n'apparaissaient alors nulle part (Spotify,
+    // #3314).
+    let delay = unsafe {
+        crate::dlls::kernel32_misc::delay_load_failure(
+            rec.code,
+            &rec.info[..n],
+            crate::wow32::active(),
+        )
+    };
+    if let Some(what) = delay {
+        line.push_str(&format!(", chargement différé impossible : {what}"));
+        // Les autres fonctions de cette DLL que le module importe en
+        // différé : une passe les fait connaître toutes (#2627).
+        let names = unsafe {
+            crate::dlls::kernel32_misc::delay_import_list(&rec.info[..n], crate::wow32::active())
+        };
+        if let Some(names) = names {
+            line.push_str(&format!(" ; imports différés de cette DLL : {names}"));
+        }
+        let missing = unsafe {
+            crate::dlls::kernel32_misc::delay_imports_missing(
+                &rec.info[..n],
+                crate::wow32::active(),
+            )
+        };
+        if let Some(missing) = missing {
+            line.push_str(&format!(" ; absentes chez Winlux : {}", missing.join(", ")));
+        }
+    }
     if rip != rec.address {
         line.push_str(&format!(", rip {}", crate::thunks::describe_site(rip)));
     }
@@ -2085,6 +2117,32 @@ mod tests {
         assert!(line.contains("0xc0000005"), "{line}");
         assert!(line.contains("filtre de l'appli"), "{line}");
         assert!(line.contains("[0, 10]"), "{line}");
+    }
+
+    #[test]
+    fn chargement_differe_rate_nomme_dans_la_ligne_du_filtre() {
+        // DelayLoadInfo x64 de 72 octets : cb, pidd, ppfn, szDll,
+        // dlp { fImportByName, szProcName }, hmodCur, pfnCur, dwLastError.
+        let dll = c"exemple.dll";
+        let proc_name = c"FonctionAbsente";
+        let mut info = [0u8; 72];
+        info[0..4].copy_from_slice(&72u32.to_le_bytes());
+        info[24..32].copy_from_slice(&(dll.as_ptr() as usize).to_le_bytes());
+        info[32..36].copy_from_slice(&1u32.to_le_bytes());
+        info[40..48].copy_from_slice(&(proc_name.as_ptr() as usize).to_le_bytes());
+        info[64..68].copy_from_slice(&127u32.to_le_bytes());
+        let mut rec = ExceptionRecord::new(0xC06D_007F, 0, 0x1234);
+        rec.nparams = 1;
+        rec.info[0] = info.as_ptr() as usize;
+        let line = describe_for_app_filter(&rec, &Context::zeroed());
+        assert!(
+            line.contains("chargement différé impossible : « exemple.dll », fonction « FonctionAbsente », erreur 127"),
+            "{line}"
+        );
+        // Une autre exception ne lit pas son premier argument comme une DelayLoadInfo.
+        rec.code = 0xC000_0005;
+        let line = describe_for_app_filter(&rec, &Context::zeroed());
+        assert!(!line.contains("chargement différé"), "{line}");
     }
     use super::*;
 
