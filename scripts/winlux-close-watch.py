@@ -65,8 +65,10 @@ def main(argv):
     pid = pid_of(window)
     if pid <= 1:
         return 0
-    # Un seul guet par fenêtre, même si l'on clique plusieurs fois sur la croix.
-    lock = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / f"winlux-close-watch-{os.getuid()}-{window}"
+    # Un seul guet par fenêtre, même si l'on clique plusieurs fois sur la croix. Le PID
+    # est dans le nom : un identifiant X réattribué à un autre programme a son propre
+    # guet, même si celui de l'ancien programme n'est pas fini (#3259).
+    lock = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / f"winlux-close-watch-{os.getuid()}-{window}-{pid}"
     try:
         if lock.exists() and time.time() - lock.stat().st_mtime > 60:
             lock.unlink()
