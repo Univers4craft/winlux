@@ -151,14 +151,19 @@ def set_desktop_names(names):
     return True
 
 
-def new_desktop():
+def add_desktop():
+    """Ajoute un bureau nommé « Bureau N » ; rend son numéro."""
     count = len(desktops()) or 1
     names = (desktop_names() + [""] * count)[:count]
     _run(["wmctrl", "-n", str(count + 1)])
-    # Sans nom, openbox appelle le bureau « Espace de travail N » (sa traduction),
-    # ce qu'affichent sa bulle de changement de bureau et les autres outils.
+    # Sans nom, openbox appelle le bureau « desktop N » ou « Espace de travail N »,
+    # ce qu'affichent sa bulle de changement de bureau et les autres outils (#3350).
     set_desktop_names(names + [_t("Bureau {n}").format(n=count + 1)])
-    _run(["wmctrl", "-s", str(count)])
+    return count
+
+
+def new_desktop():
+    _run(["wmctrl", "-s", str(add_desktop())])
     return 0
 
 
@@ -533,9 +538,7 @@ def run_view():
                 GLib.timeout_add(150, self.refresh_later)
 
         def move_to_new(self, window):
-            count = len(desktops()) or 1
-            _run(["wmctrl", "-n", str(count + 1)])
-            _run(["wmctrl", "-i", "-r", window, "-t", str(count)])
+            move_window(window, add_desktop())
             GLib.timeout_add(150, self.refresh_later)
 
         def desk_card(self, number, name, on, count):
