@@ -241,8 +241,10 @@ for i in range(12):
     width, height = 700 + i * 8, 400 + i * 4
     run("xdotool", "windowsize", "--sync", terminal, str(width), str(height))
     timings["resize_ms"].append((time.monotonic() - started) * 1000)
+# Pas de champ « p95 » : sur 12 échantillons, le 95e centile au rang le plus
+# proche est le maximum, et le nommer p95 laissait croire qu'une valeur
+# aberrante isolée était un comportement courant (#3374).
 report = {key: {"median": round(sorted(values)[len(values)//2], 2),
-                "p95": round(sorted(values)[-1], 2),
                 "maximum": round(max(values), 2), "samples": len(values)}
           for key, values in timings.items()}
 Path("/var/lib/winlux/window-latency.json").write_text(json.dumps(report, indent=2))

@@ -326,6 +326,9 @@ unsafe fn create_window_common(
     if let Some(d) = diag {
         eprintln!("winlux[fenetre] creer {d} -> {hwnd:#x}");
     }
+    if hwnd != 0 {
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_WINDOWCREATED, hwnd);
+    }
     hwnd
 }
 
@@ -1489,6 +1492,7 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
     // la détruire ; sans ce retour, la fenêtre de VLC restait inactive et sa
     // barre de menus gardait les libellés grisés de l'attente (#1311).
     let owner = owner_to_refocus(hwnd);
+    super::user32_more::shell_hook_window_destroyed(hwnd);
     if gui::destroy_window(hwnd) {
         if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
             crate::thunks::api_note(&format!(
@@ -1611,6 +1615,7 @@ unsafe fn activate_for_focus(hwnd: usize, state: usize) {
     }
     deliver(top, gui::WM_NCACTIVATE, 1, 0);
     deliver(top, gui::WM_ACTIVATE, state, prev as isize);
+    super::user32_more::notify_shell_hook(super::user32_more::HSHELL_WINDOWACTIVATED, top);
 }
 
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
@@ -2012,12 +2017,15 @@ struct NcCalcSizeParams {
 /// fenêtres est alors retiré, sinon deux barres de titre se superposent
 /// (#1131). Il revient si la fenêtre rend plus tard la main à DefWindowProc.
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
-    // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
-    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+    // Programme 32 bits : la procédure x86 reçoit NCCALCSIZE_PARAMS en
+    // disposition x86 (trois RECT puis un pointeur 32 bits de WINDOWPOS),
+    // traduit à l'aller et au retour par wow32::user (recv_conv), comme
+    // WM_WINDOWPOSCHANGING. Seules les fenêtres filles n'ont pas de cadre
+    // du gestionnaire à retirer.
+    if gui::window_parent(hwnd).unwrap_or(0) != 0 {
         if window_diag() {
             eprintln!(
-                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
-                crate::wow32::pointer_size() * 8,
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé (fenêtre fille de {:#x}) (#3205)",
                 gui::window_parent(hwnd).unwrap_or(0)
             );
         }
@@ -2219,6 +2227,7 @@ pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> 
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
         publish_shared(hwnd);
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_REDRAW, hwnd);
         1
     } else {
         0
@@ -2231,6 +2240,7 @@ pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) ->
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
         publish_shared(hwnd);
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_REDRAW, hwnd);
         1
     } else {
         0
@@ -2422,6 +2432,10 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         // cocher et boutons radio à 96 ppp. wxWidgets l'ajoute à la largeur
         // du libellé ; à 0, ses libellés finissaient en « … » (#842).
         71 | 72 => 15,
+        // SM_CONVERTIBLESLATEMODE : 0 en mode tablette, non nul sinon
+        // (Learn, GetSystemMetrics). Un PC sans interrupteur mode tablette
+        // n'est jamais en mode tablette (#1933).
+        0x2003 => crate::dlls::evdev::slate_mode_metric(),
         90 => 96, // LOGPIXELSX
         91 => 96, // LOGPIXELSY
         _ => 0,
@@ -7360,6 +7374,95 @@ mod tests {
             );
             destroy_window(legacy);
             destroy_window(hwnd);
+        }
+    }
+
+    /// #3330 : RegisterShellHookWindow. La fenêtre inscrite reçoit le
+    /// message « SHELLHOOK » (wParam = HSHELL_*, lParam = fenêtre) pour les
+    /// fenêtres de premier niveau sans propriétaire seulement : création,
+    /// activation, titre, destruction. Rien pour une fenêtre possédée ou
+    /// fille, rien après DeregisterShellHookWindow.
+    #[test]
+    fn crochet_du_shell_recoit_les_hshell_3330() {
+        use super::super::user32_more as m;
+        unsafe {
+            let name: Vec<u16> = "Winlux3330Crochet".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: def_window_proc_w as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let creer = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    style,
+                    0,
+                    0,
+                    200,
+                    100,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let register = |h: usize| m::register_shell_hook_window(h);
+            let deregister = |h: usize| m::deregister_shell_hook_window(h);
+            // Fenêtre inexistante : refus (ERROR_INVALID_WINDOW_HANDLE, sans
+            // TEB dans un test).
+            assert_eq!(register(0x3330_0000), 0);
+
+            let crochet = creer(0x8000_0000, 0);
+            assert_ne!(crochet, 0);
+            assert_eq!(register(crochet), 1);
+            let shellhook = register_window_message("SHELLHOOK".into());
+            let recus = |a_moi: &[usize]| {
+                let mut out = Vec::new();
+                let mut msg = Msg::new(0, 0, 0, 0);
+                while peek_message_w(&mut msg, crochet, shellhook, shellhook, 1) != 0 {
+                    // Les autres tests créent leurs fenêtres en parallèle.
+                    if a_moi.contains(&(msg.lparam as usize)) {
+                        out.push((msg.wparam, msg.lparam as usize));
+                    }
+                }
+                out
+            };
+
+            let a = creer(0x80C0_0000, 0); // WS_POPUP | WS_CAPTION, sans propriétaire
+            let possedee = creer(0x80C0_0000, a);
+            let fille = creer(0x4000_0000, a);
+            assert!(a != 0 && possedee != 0 && fille != 0);
+            let title: Vec<u16> = "Nouveau titre".encode_utf16().chain([0]).collect();
+            set_window_text_w(a, title.as_ptr());
+            set_window_text_w(possedee, title.as_ptr());
+            let toutes = [a, possedee, fille];
+            assert_eq!(
+                recus(&toutes),
+                [(m::HSHELL_WINDOWCREATED, a), (m::HSHELL_REDRAW, a)]
+            );
+
+            destroy_window(fille);
+            destroy_window(possedee);
+            destroy_window(a);
+            assert_eq!(recus(&toutes), [(m::HSHELL_WINDOWDESTROYED, a)]);
+
+            // Désinscrite : plus rien, et une seconde désinscription échoue.
+            assert_eq!(deregister(crochet), 1);
+            assert_eq!(deregister(crochet), 0);
+            let b = creer(0x80C0_0000, 0);
+            destroy_window(b);
+            assert!(recus(&[b]).is_empty());
+            destroy_window(crochet);
         }
     }
 

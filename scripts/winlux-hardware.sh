@@ -597,6 +597,27 @@ detect_audio() {
 }
 
 # --- Périphériques d'entrée ---
+# Écran tactile : le noyau pose INPUT_PROP_DIRECT (0x01, donc le bit de valeur 2
+# de « properties » ; 0x00 est INPUT_PROP_POINTER, celui des pavés tactiles)
+# sur tout périphérique qui pointe directement sur l'écran, avec des axes
+# absolus ABS_X (bit 0) ou ABS_MT_POSITION_X (bit 53) dans « capabilities/abs ».
+# Le nom (« silead_ts », « Goodix Capacitive TouchScreen »…) ne sert qu'en
+# secours (#1935). is_touchscreen DOSSIER_DEVICE ; vrai si écran tactile.
+is_touchscreen() {
+    ts_props=$(cat "$1/properties" 2>/dev/null || echo 0)
+    ts_abs=$(cat "$1/capabilities/abs" 2>/dev/null || echo 0)
+    ts_props=${ts_props##* }
+    ts_abs=${ts_abs##* }
+    case "$ts_props$ts_abs" in *[!0-9a-fA-F]*|"") ts_props=0; ts_abs=0 ;; esac
+    if test $(( (0x$ts_props >> 1) & 1 )) -eq 1 && test $(( (0x$ts_abs & 1) | ((0x$ts_abs >> 53) & 1) )) -eq 1; then
+        return 0
+    fi
+    case "$(cat "$1/name" 2>/dev/null || echo "")" in
+        *[Tt]ouch[Ss]creen*|*[Dd]igitizer*) return 0 ;;
+    esac
+    return 1
+}
+
 detect_input() {
     # Touchpad (i2c_hid_acpi, hid_multitouch : chargés d'après le modalias)
     touchpad_found=0
@@ -616,13 +637,10 @@ detect_input() {
     touch_found=0
     for dev in /sys/class/input/event*; do
         test -d "$dev/device" || continue
-        caps=$(cat "$dev/device/capabilities/abs" 2>/dev/null || echo "0")
-        name=$(cat "$dev/device/name" 2>/dev/null || echo "")
-        case "$name" in *[Tt]ouch[Ss]creen*|*[Dd]igitizer*)
+        if is_touchscreen "$dev/device"; then
             touch_found=1
-            log "Écran tactile détecté : $name"
-            ;;
-        esac
+            log "Écran tactile détecté : $(cat "$dev/device/name" 2>/dev/null || echo "?")"
+        fi
     done
     printf '%s\n' "$touch_found" >/run/winlux/hw/has-touchscreen
 }
