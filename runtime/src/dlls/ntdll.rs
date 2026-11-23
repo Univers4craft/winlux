@@ -2624,6 +2624,30 @@ pub unsafe extern "win64" fn nt_open_process_token_ex(
     nt_open_process_token(process, access, token)
 }
 
+/// `NtQueryInformationToken` (Learn, ntifs.h) : `(TokenHandle,
+/// TokenInformationClass, TokenInformation, TokenInformationLength,
+/// ReturnLength) -> NTSTATUS`, la même lecture que GetTokenInformation
+/// (#3310 : 28e interception du courtier d'Acrobat).
+/// Learn : STATUS_BUFFER_TOO_SMALL avec la taille requise dans
+/// ReturnLength ; une classe non servie rend STATUS_INVALID_INFO_CLASS.
+pub unsafe extern "win64" fn nt_query_information_token(
+    token: usize,
+    class: u32,
+    info: *mut u8,
+    len: u32,
+    ret: *mut u32,
+) -> i32 {
+    crate::process::set_last_error(0);
+    if crate::dlls::security::GetTokenInformation(token, class, info, len, ret) != 0 {
+        return STATUS_SUCCESS;
+    }
+    match crate::process::last_error() {
+        122 => STATUS_BUFFER_TOO_SMALL,
+        87 => STATUS_INVALID_INFO_CLASS,
+        _ => status_of_last_error(STATUS_UNSUCCESSFUL),
+    }
+}
+
 /// `NtOpenThreadToken` : STATUS_NO_TOKEN si le thread n'emprunte aucune
 /// identité, comme sous Windows.
 pub unsafe extern "win64" fn nt_open_thread_token(
@@ -2936,6 +2960,7 @@ pub fn exports() -> crate::dlls::Exports {
         "NtOpenThread" => fn nt_open_thread,
         "NtCreateLowBoxToken" => fn crate::dlls::security::nt_create_low_box_token,
         "NtOpenProcessToken" => fn nt_open_process_token,
+        "NtQueryInformationToken" => fn nt_query_information_token,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
         "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
@@ -3265,6 +3290,39 @@ mod ouvertures_tests {
     /// STATUS_OBJECT_NAME_EXISTS avec un handle, et NtOpenMutant le
     /// retrouve (#3270).
     #[test]
+    fn nt_query_information_token_lit_le_jeton_3310() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let mut token = 0usize;
+            assert_eq!(
+                nt_open_process_token(usize::MAX, 0x8, &mut token),
+                STATUS_SUCCESS
+            );
+            // TokenUser (1) : taille requise d'abord, puis la lecture.
+            let mut besoin = 0u32;
+            assert_eq!(
+                nt_query_information_token(token, 1, std::ptr::null_mut(), 0, &mut besoin),
+                STATUS_BUFFER_TOO_SMALL
+            );
+            assert!(besoin >= 16, "taille requise {besoin}");
+            let mut buf = vec![0u8; besoin as usize];
+            let mut lu = 0u32;
+            assert_eq!(
+                nt_query_information_token(token, 1, buf.as_mut_ptr(), besoin, &mut lu),
+                STATUS_SUCCESS
+            );
+            assert_eq!(lu, besoin);
+            // TOKEN_USER : le pointeur de SID désigne le tampon lui-même.
+            let sid = std::ptr::read_unaligned(buf.as_ptr() as *const usize);
+            assert!(sid >= buf.as_ptr() as usize && sid < buf.as_ptr() as usize + buf.len());
+            assert_eq!(
+                nt_query_information_token(token, 0xFFFF, buf.as_mut_ptr(), besoin, &mut lu),
+                STATUS_INVALID_INFO_CLASS
+            );
+        }
+    }
+
+    #[test]
     fn nt_create_mutant_cree_un_mutex_3270() {
         // GetLastError (183 si le nom existait) vit dans le TEB.
         let _teb = crate::process::test_teb();
@@ -3366,6 +3424,15 @@ mod ouvertures_tests {
             "NtOpenMutant",
             "NtCreateMutant",
             "NtCreateSection",
+            "NtAddAtom",
+            "NtAddAtomEx",
+            "NtFindAtom",
+            "NtDeleteAtom",
+            "NtQueryInformationAtom",
+            "NtQueryInformationToken",
+            // Les 27 noms cherchés par le courtier d'Acrobat (passe i17, #3304).
+            "NtOpenSection",
+            "NtDeleteValueKey",
         ] {
             assert!(e.contains_key(name), "{name} absent de ntdll");
         }
