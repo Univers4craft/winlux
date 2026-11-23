@@ -339,20 +339,28 @@ const SHARED_KIND_MUTEX: u32 = 2;
 const SHARED_KIND_SEMAPHORE: u32 = 3;
 
 fn os_thread_id() -> u32 {
-    // Le TEB porte le tid noyau du fil (posé à son installation) : le lire
-    // évite un gettid par EnterCriticalSection ou WaitForSingleObject.
-    // Un TEB de test (tid 0) ou absent retombe sur gettid.
-    let t = crate::process::teb();
-    let tid = if t != 0 {
-        unsafe { *((t + crate::process::TEB_TID) as *const usize) as u32 }
-    } else {
-        0
-    };
-    if tid != 0 {
-        tid
-    } else {
-        unsafe { libc::syscall(libc::SYS_gettid) as u32 }
+    // tid noyau gardé par fil : évite un gettid par EnterCriticalSection ou
+    // WaitForSingleObject. Pas lu dans le TEB : un fil créé hors de notre
+    // chemin hérite de la base GS de son créateur, donc de son TEB et de son
+    // tid, et prenait pour sien un mutex tenu par l'autre (témoin Synchro).
+    thread_local! {
+        static TID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
+    let cached = TID.try_with(|c| c.get()).unwrap_or(0);
+    if cached != 0 {
+        return cached;
+    }
+    static ATFORK: std::sync::Once = std::sync::Once::new();
+    ATFORK.call_once(|| {
+        // Après fork, le fil de l'enfant a un autre tid : le cache repart à zéro.
+        extern "C" fn child() {
+            let _ = TID.try_with(|c| c.set(0));
+        }
+        unsafe { libc::pthread_atfork(None, None, Some(child)) };
+    });
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+    let _ = TID.try_with(|c| c.set(tid));
+    tid
 }
 
 impl MutexObject {
@@ -12428,6 +12436,31 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    /// Un fil créé hors de notre chemin hérite de la base GS (donc du TEB)
+    /// de son créateur : son tid de propriétaire de mutex doit rester le sien.
+    #[test]
+    fn tid_de_mutex_propre_a_chaque_fil_meme_avec_gs_herite() {
+        std::thread::spawn(|| {
+            let _teb = crate::process::test_teb();
+            let t = crate::process::teb();
+            let moi = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+            unsafe { *((t + crate::process::TEB_TID) as *mut usize) = moi as usize };
+            assert_eq!(super::os_thread_id(), moi);
+            let (enfant, vu) = std::thread::spawn(|| {
+                (
+                    unsafe { libc::syscall(libc::SYS_gettid) as u32 },
+                    super::os_thread_id(),
+                )
+            })
+            .join()
+            .unwrap();
+            assert_eq!(vu, enfant, "tid du créateur pris pour celui du fil");
+            assert_ne!(vu, moi);
+        })
+        .join()
+        .unwrap();
+    }
 
     /// LeaveCriticalSection ne réveille plus que s'il y a un dormeur : un fil
     /// bloqué dans EnterCriticalSection doit quand même être réveillé à chaque
