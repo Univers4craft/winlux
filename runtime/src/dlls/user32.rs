@@ -591,6 +591,23 @@ unsafe fn create_window_inner(
         forget_window_longs(hwnd);
         return 0;
     }
+    // Puis WM_NCCALCSIZE (wParam FALSE, lParam : le rectangle de la
+    // fenêtre), avant WM_CREATE, comme CreateWindowEx sous Windows (Learn,
+    // « CreateWindowExW » : « sends WM_NCCREATE, WM_NCCALCSIZE, and
+    // WM_CREATE messages to the window being created »). Chromium laisse ce
+    // premier WM_NCCALCSIZE à DefWindowProc et ne calcule lui-même que les
+    // suivants : sans lui, celui de SWP_FRAMECHANGED était le premier, sa
+    // barre de titre maison était prise pour un cadre standard et celle du
+    // gestionnaire restait au-dessus (#3205). Le rectangle rendu n'est pas
+    // relu : le cadre maison se décide sur SWP_FRAMECHANGED (`frame_changed`).
+    let mut nc_rect = gui::window_rect(hwnd).unwrap_or(rect);
+    crate::dlls::gui::call_wndproc(
+        current_proc(),
+        hwnd,
+        0x0083,
+        0,
+        &mut nc_rect as *mut Rect as isize,
+    );
     // Procédure actuelle de la fenêtre, pas celle de la classe : WinForms
     // sous-classe la fenêtre (SetWindowLongPtr(GWLP_WNDPROC)) dès le
     // premier message et refuse d'en recevoir un second par la procédure de
@@ -7249,6 +7266,105 @@ mod tests {
             _ => {}
         }
         gui::def_window_proc(h, msg, w, l)
+    }
+
+    static VUS_3205: std::sync::Mutex<Vec<(u32, usize, Option<Rect>)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    /// Comme HWNDMessageHandler::OnNCCalcSize de Chromium : le premier
+    /// WM_NCCALCSIZE d'une fenêtre à WS_CAPTION va à DefWindowProc, les
+    /// suivants gardent tout le rectangle (barre de titre maison).
+    unsafe extern "win64" fn proc_chromium_3205(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        thread_local! {
+            static PREMIER: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+        }
+        match msg {
+            WM_NCCREATE => {
+                PREMIER.with(|p| p.set(true));
+                VUS_3205.lock().unwrap().push((msg, w, None));
+            }
+            gui::WM_CREATE => VUS_3205.lock().unwrap().push((msg, w, None)),
+            0x0083 => {
+                let r = if w == 0 {
+                    *(l as *const Rect)
+                } else {
+                    (*(l as *const NcCalcSizeParams)).rects[0]
+                };
+                VUS_3205.lock().unwrap().push((msg, w, Some(r)));
+                if !PREMIER.with(|p| p.replace(false)) {
+                    return 0;
+                }
+            }
+            0x0084 => {
+                let y = (l as u32 >> 16) as u16 as i16 as i32;
+                let top = gui::window_rect(h).map_or(0, |r| r.top);
+                return if y - top < 30 { 2 } else { 1 };
+            }
+            _ => {}
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #3205 : CreateWindowEx envoie WM_NCCALCSIZE (wParam FALSE, rectangle
+    /// de la fenêtre) entre WM_NCCREATE et WM_CREATE. Chromium y prend son
+    /// premier WM_NCCALCSIZE, laissé à DefWindowProc ; celui de
+    /// SWP_FRAMECHANGED est alors traité par lui, et le cadre du
+    /// gestionnaire est retiré sous sa barre de titre maison.
+    #[test]
+    fn creation_envoie_wm_nccalcsize_avant_wm_create() {
+        unsafe {
+            let name: Vec<u16> = "Winlux3205Chromium".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_chromium_3205 as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let hwnd = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0x00CF_0000,
+                10,
+                10,
+                1050,
+                811,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let vus = std::mem::take(&mut *VUS_3205.lock().unwrap());
+            let fenetre = gui::window_rect(hwnd).unwrap();
+            assert_eq!(
+                vus,
+                vec![
+                    (WM_NCCREATE, 0, None),
+                    (0x0083, 0, Some(fenetre)),
+                    (gui::WM_CREATE, 0, None),
+                ]
+            );
+            set_window_pos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            );
+            assert!(!gui::default_nccalcsize_seen());
+            assert!(OWN_FRAME.lock().unwrap().contains(&hwnd));
+            destroy_window(hwnd);
+        }
     }
 
     /// #1476 : un WM_SIZE venu du gestionnaire (agrandir) est précédé de

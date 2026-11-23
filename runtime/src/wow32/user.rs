@@ -700,6 +700,16 @@ fn recv_conv(
             }
             r
         }
+        WM_NCCALCSIZE => {
+            // wParam FALSE : un seul RECT, même disposition, recopié dans
+            // une mémoire que le code x86 adresse (#3205).
+            let mut rc = [0u32; 4];
+            let p = rc.as_mut_ptr() as usize;
+            unsafe { std::ptr::copy_nonoverlapping(p64 as *const u8, p as *mut u8, 16) };
+            let r = call(wp32, p as u32);
+            unsafe { std::ptr::copy_nonoverlapping(p as *const u8, p64 as *mut u8, 16) };
+            r
+        }
         WM_COPYDATA => {
             let cds = [
                 q64(p64, 0) as u32,
