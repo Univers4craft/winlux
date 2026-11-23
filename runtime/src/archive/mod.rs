@@ -167,6 +167,53 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
     r
 }
 
+/// Outils d'archive externes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tool {
+    Bsdtar,
+    SevenZip,
+    Unrar,
+    Unar,
+}
+
+fn have_tool(t: Tool) -> bool {
+    tool_path(t).is_some()
+}
+
+fn tool_path(t: Tool) -> Option<PathBuf> {
+    match t {
+        Tool::Bsdtar => tools::bsdtar(),
+        Tool::SevenZip => tools::sevenzip(),
+        Tool::Unrar => tools::unrar(),
+        Tool::Unar => tools::unar(),
+    }
+}
+
+/// Ordre d'essai des outils d'extraction (#3434) : bsdtar, le seul livré sur
+/// l'ISO, d'abord, pour que le comportement soit le même sur le PC, dans les
+/// tests et sur les runners ; 7-Zip, puis unrar et unar pour un RAR,
+/// seulement en repli quand bsdtar refuse l'archive et que l'utilisateur les
+/// a installés.
+fn extract_order(fmt: Option<Format>, have: impl Fn(Tool) -> bool) -> Vec<Tool> {
+    let mut v = vec![Tool::Bsdtar, Tool::SevenZip];
+    if fmt == Some(Format::Rar) {
+        v.extend([Tool::Unrar, Tool::Unar]);
+    }
+    v.retain(|&t| have(t));
+    v
+}
+
+/// Outil qui écrit un 7z (#3434) : bsdtar d'abord ; 7-Zip seulement pour un
+/// 7z chiffré, ou si bsdtar manque.
+fn create_7z_tool(encrypted: bool, have: impl Fn(Tool) -> bool) -> Option<Tool> {
+    let order: &[Tool] = if encrypted {
+        &[Tool::SevenZip]
+    } else {
+        &[Tool::Bsdtar, Tool::SevenZip]
+    };
+    order.iter().copied().find(|&t| have(t))
+}
+
 fn external_tool_extract(
     archive: &Path,
     dest: &Path,
@@ -174,22 +221,49 @@ fn external_tool_extract(
     progress: &Progress,
 ) -> Res<()> {
     std::fs::create_dir_all(dest)?;
-    let pw_arg = |prefix: &str| format!("{prefix}{}", pw.unwrap_or(""));
-    if let Some(sz) = tools::sevenzip() {
-        let mut c = tools::archiver(&sz);
-        c.arg("x")
-            .arg("-y")
-            .arg("-bsp1")
-            .arg("-bso0")
-            .arg(pw_arg("-p"));
-        c.arg(format!("-o{}", dest.display()))
-            .arg("--")
-            .arg(archive);
-        return tools::run_archiver(c, pw.is_some(), progress);
+    let order = extract_order(Format::from_name(&archive.to_string_lossy()), have_tool);
+    let mut last = ArcError::Unsupported("aucun outil d'archive installé".into());
+    for t in order {
+        let Some(path) = tool_path(t) else {
+            continue;
+        };
+        match run_extract_tool(t, &path, archive, dest, pw, progress) {
+            Ok(()) => return Ok(()),
+            Err(ArcError::Cancelled) => return Err(ArcError::Cancelled),
+            Err(e) => last = e,
+        }
     }
-    if Format::from_name(&archive.to_string_lossy()) == Some(Format::Rar) {
-        if let Some(u) = tools::unrar() {
-            let mut c = tools::archiver(&u);
+    Err(last)
+}
+
+fn run_extract_tool(
+    t: Tool,
+    tool: &Path,
+    archive: &Path,
+    dest: &Path,
+    pw: Option<&str>,
+    progress: &Progress,
+) -> Res<()> {
+    let pw_arg = |prefix: &str| format!("{prefix}{}", pw.unwrap_or(""));
+    let mut c = tools::archiver(tool);
+    match t {
+        Tool::Bsdtar => {
+            c.arg("-xf").arg(archive).arg("-C").arg(dest);
+            if let Some(p) = pw {
+                c.arg("--passphrase").arg(p);
+            }
+        }
+        Tool::SevenZip => {
+            c.arg("x")
+                .arg("-y")
+                .arg("-bsp1")
+                .arg("-bso0")
+                .arg(pw_arg("-p"))
+                .arg(format!("-o{}", dest.display()))
+                .arg("--")
+                .arg(archive);
+        }
+        Tool::Unrar => {
             c.arg("x").arg("-o+").arg("-y");
             c.arg(if pw.is_some() {
                 pw_arg("-p")
@@ -197,29 +271,16 @@ fn external_tool_extract(
                 "-p-".into()
             });
             c.arg("--").arg(archive).arg(format!("{}/", dest.display()));
-            return tools::run_archiver(c, pw.is_some(), progress);
         }
-        if let Some(u) = tools::unar() {
-            let mut c = tools::archiver(&u);
+        Tool::Unar => {
             c.arg("-f").arg("-q").arg("-D").arg("-o").arg(dest);
             if let Some(p) = pw {
                 c.arg("-p").arg(p);
             }
             c.arg(archive);
-            return tools::run_archiver(c, pw.is_some(), progress);
         }
     }
-    if let Some(b) = tools::bsdtar() {
-        let mut c = tools::archiver(&b);
-        c.arg("-xf").arg(archive).arg("-C").arg(dest);
-        if let Some(p) = pw {
-            c.arg("--passphrase").arg(p);
-        }
-        return tools::run_archiver(c, pw.is_some(), progress);
-    }
-    Err(ArcError::Unsupported(
-        "aucun outil d'archive installé".into(),
-    ))
+    tools::run_archiver(c, pw.is_some(), progress)
 }
 
 fn stem_of(archive: &Path) -> String {
@@ -436,8 +497,11 @@ pub fn create(out: &Path, sources: &[PathBuf], pw: Option<&str>, progress: &Prog
             Ok(())
         }
         Format::SevenZ => {
-            let Some(sz) = tools::sevenzip() else {
-                return create_7z_bsdtar(out, sources, pw, progress);
+            // bsdtar, livré sur l'ISO, d'abord ; 7-Zip seulement pour un 7z
+            // chiffré, que libarchive ne sait pas écrire (#3434).
+            let sz = match (create_7z_tool(pw.is_some(), have_tool), tools::sevenzip()) {
+                (Some(Tool::SevenZip), Some(sz)) => sz,
+                _ => return create_7z_bsdtar(out, sources, pw, progress),
             };
             let _ = std::fs::remove_file(out);
             let mut c = tools::archiver(&sz);
@@ -1007,8 +1071,8 @@ mod tests {
             .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
             .collect();
         assert_eq!(envs, [("LC_ALL".into(), Some("C.UTF-8".into()))]);
-        if tools::bsdtar().is_none() || tools::sevenzip().is_some() {
-            eprintln!("bsdtar seul requis : test 3282 sauté");
+        if tools::bsdtar().is_none() {
+            eprintln!("bsdtar absent : test 3282 sauté");
             return;
         }
         let d = tmp("7z-accents");
@@ -1121,6 +1185,68 @@ mod tests {
         );
         assert_eq!(liens.len(), 2, "les liens internes restent");
         assert_eq!(std::fs::read_to_string(out.join("f.txt")).unwrap(), "f");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #3434 : bsdtar d'abord, quel que soit ce qui est installé ; 7-Zip,
+    /// unrar et unar seulement en repli. Vérifié sur des installations
+    /// simulées, sans dépendre des outils de la machine.
+    #[test]
+    fn bsdtar_d_abord_7zip_en_repli_3434() {
+        use Tool::*;
+        let only = |set: &'static [Tool]| move |t: Tool| set.contains(&t);
+        let tous = only(&[Bsdtar, SevenZip, Unrar, Unar]);
+        assert_eq!(
+            extract_order(Some(Format::SevenZ), tous),
+            [Bsdtar, SevenZip]
+        );
+        assert_eq!(
+            extract_order(Some(Format::Rar), tous),
+            [Bsdtar, SevenZip, Unrar, Unar]
+        );
+        assert_eq!(extract_order(Some(Format::Other), tous), [Bsdtar, SevenZip]);
+        // L'ISO : bsdtar seul.
+        assert_eq!(
+            extract_order(Some(Format::SevenZ), only(&[Bsdtar])),
+            [Bsdtar]
+        );
+        // 7-Zip installé à la main, sans bsdtar.
+        assert_eq!(
+            extract_order(Some(Format::Rar), only(&[SevenZip, Unar])),
+            [SevenZip, Unar]
+        );
+        assert!(extract_order(Some(Format::SevenZ), only(&[])).is_empty());
+        // Création d'un 7z.
+        assert_eq!(create_7z_tool(false, tous), Some(Bsdtar));
+        assert_eq!(create_7z_tool(true, tous), Some(SevenZip));
+        assert_eq!(create_7z_tool(false, only(&[SevenZip])), Some(SevenZip));
+        assert_eq!(create_7z_tool(true, only(&[Bsdtar])), None);
+    }
+
+    /// #3434 : un 7z chiffré, que bsdtar refuse, passe par 7-Zip en repli.
+    /// Sauté, en le disant, quand 7-Zip n'est pas installé (cas de l'ISO).
+    #[test]
+    fn sept_z_chiffre_repli_7zip_3434() {
+        let (Some(sz), Some(_)) = (tools::sevenzip(), tools::bsdtar()) else {
+            eprintln!("7-Zip ou bsdtar absent : repli non testable ici, test sauté");
+            return;
+        };
+        let d = tmp("7z-repli");
+        std::fs::write(d.join("secret.txt"), "chut").unwrap();
+        let arc = d.join("s.7z");
+        let st = tools::archiver(&sz)
+            .current_dir(&d)
+            .args(["a", "-t7z", "-psecret", "-mhe=on", "s.7z", "secret.txt"])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let out = d.join("out");
+        extract_to(&arc, &out, Some("secret"), &Progress::default()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(out.join("secret.txt")).unwrap(),
+            "chut"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
