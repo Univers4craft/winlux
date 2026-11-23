@@ -2200,12 +2200,18 @@ pub unsafe extern "win64" fn CryptQueryObject(
         set_last_error(E_INVALIDARG);
         return 0;
     }
-    let data = match object_type {
-        CERT_QUERY_OBJECT_BLOB => blob_slice(object as *const Blob).to_vec(),
+    // Un fichier est projeté (mmap), pas lu : seule la table des
+    // certificats d'un PE est touchée. Un blob n'est plus recopié.
+    let mapped;
+    let data: &[u8] = match object_type {
+        CERT_QUERY_OBJECT_BLOB => blob_slice(object as *const Blob),
         CERT_QUERY_OBJECT_FILE => {
             let path = crate::paths::to_linux(&super::wstr(object as *const u16));
-            match std::fs::read(path) {
-                Ok(d) => d,
+            match crate::loader::ImageFile::open(&path) {
+                Ok(m) => {
+                    mapped = m;
+                    &mapped
+                }
                 Err(_) => {
                     set_last_error(2);
                     return 0;
@@ -2220,7 +2226,7 @@ pub unsafe extern "win64" fn CryptQueryObject(
     if content_flags & CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED != 0
         && format_flags & (1 << CERT_QUERY_FORMAT_BINARY) != 0
     {
-        if let Some(p7) = crate::setup::appx_signature::pe_embedded_pkcs7(&data) {
+        if let Some(p7) = crate::setup::appx_signature::pe_embedded_pkcs7(data) {
             if let Some((certs, _)) = crate::setup::appx_signature::signed_data_parts(p7) {
                 let store = new_store();
                 for der in &certs {
@@ -2251,7 +2257,7 @@ pub unsafe extern "win64" fn CryptQueryObject(
         }
     }
     let found = (content_flags & CERT_QUERY_CONTENT_FLAG_CERT != 0)
-        .then(|| query_cert(&data, if format_flags == 0 { !0 } else { format_flags }))
+        .then(|| query_cert(data, if format_flags == 0 { !0 } else { format_flags }))
         .flatten();
     let Some((der, format)) = found else {
         set_last_error(CRYPT_E_NO_MATCH);
@@ -2789,6 +2795,64 @@ mod tests {
             assert_eq!(blob_at(base, 4), &[] as &[u8]);
             libc::munmap(page, 4096);
         }
+    }
+
+    /// CryptQueryObject sur un fichier : seule la table des certificats du
+    /// PE sert, un .exe signé de 64 Mo n'est plus lu ni copié en entier.
+    #[test]
+    fn signature_d_un_fichier_lue_sans_lire_le_fichier() {
+        let Some(pe) = crate::setup::appx_signature::tests::signed_test_pe() else {
+            return;
+        };
+        fn lus() -> u64 {
+            std::fs::read_to_string("/proc/thread-self/io")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("rchar:"))
+                        .and_then(|l| l[6..].trim().parse().ok())
+                })
+                .unwrap_or(0)
+        }
+        let _teb = crate::process::test_teb();
+        let dir = std::env::temp_dir().join(format!("winlux-cqo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Gros.exe");
+        std::fs::write(&path, &pe).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(64 << 20)
+            .unwrap();
+        let w: Vec<u16> = path.to_str().unwrap().encode_utf16().chain([0]).collect();
+        let (mut content, mut store, mut msg) = (0u32, 0usize, 0usize);
+        let before = lus();
+        let ok = unsafe {
+            CryptQueryObject(
+                CERT_QUERY_OBJECT_FILE,
+                w.as_ptr() as usize,
+                CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                1 << CERT_QUERY_FORMAT_BINARY,
+                0,
+                std::ptr::null_mut(),
+                &mut content,
+                std::ptr::null_mut(),
+                &mut store,
+                &mut msg,
+                std::ptr::null_mut(),
+            )
+        };
+        let read = lus() - before;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(ok, 1);
+        assert_eq!(content, CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED);
+        unsafe {
+            assert_ne!(CertEnumCertificatesInStore(store, 0), 0);
+            assert!(super::super::discord_win32::close_msg(msg));
+            CertCloseStore(store, 0);
+        }
+        assert!(read < 1 << 20, "{read} octets lus pour une signature");
     }
 
     #[test]
