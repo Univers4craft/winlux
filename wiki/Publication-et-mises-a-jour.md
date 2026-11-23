@@ -4,7 +4,8 @@
 
 | Version | Date | Points marquants |
 |---|---|---|
-| **v0.3** | en préparation | Le prochain numéro après la v0.2.21. Objectif : chaque logiciel testé s'installe et ouvre sa première fenêtre, jusqu'à l'écran de connexion quand il en a un. |
+| **v0.3** | en préparation | Le prochain numéro après la v0.2.22. Objectif : chaque logiciel testé s'installe et ouvre sa première fenêtre, jusqu'à l'écran de connexion quand il en a un. |
+| **[v0.2.22](https://github.com/Univers4craft/winlux/releases/tag/v0.2.22)** | 23 novembre 2026 | Paint.NET plus stable et plus rapide à démarrer, Audacity qui joue et enregistre, WinForms simples dans le moteur .NET maison, écran tactile et mode tablette, vue des tâches au clavier, « Extraire tout… », bureau plus calme au repos. |
 | **[v0.2.21](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21)** | 17 novembre 2026 | OBS Studio, Paint.NET, Pythonwin et Notepad++ jusqu'à leur fenêtre, contrat de licence toujours montré avant d'installer, signatures Authenticode vérifiées, programmes 32 bits bien plus complets, Boutique refaite, contrôle parental, pare-feu par application, connexion par code PIN et empreinte. ISO de 1,4 Go. |
 | [v0.2.20](https://github.com/Univers4craft/winlux/releases/tag/v0.2.20) | 8 novembre 2026 | Premiers programmes Windows 32 bits (x86). |
 | [v0.2.19](https://github.com/Univers4craft/winlux/releases/tag/v0.2.19) | 4 novembre 2026 | Heure juste dès l'installation, point de restauration avant chaque mise à jour. |
