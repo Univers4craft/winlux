@@ -73,6 +73,7 @@ APPS = {
     "winlux-alarms": ("violet", '<circle cx="32" cy="34" r="13"/><path d="M32 27v7l5 3M19 21l5-4M45 21l-5-4M24 47l-2 3M40 47l2 3"/>', "Alarmes et horloge"),
     "winlux-colorpicker": ("prisme", '<path d="M38 18l8 8-5 5-8-8z" fill="#fff"/><path d="M35 27L21 41l-2 6 6-2 14-14"/>', "Sélecteur de couleur"),
     "winlux-ocr": ("cyan", '<path d="M17 24v-7h7M40 17h7v7M47 40v7h-7M24 47h-7v-7"/><path d="M25 27h14M25 32h14M25 37h9"/>', "Extraire le texte"),
+    "winlux-capture": ("violet", '<path d="M17 25v-8h8M39 17h8v8M47 39v8h-8M25 47h-8v-8"/><circle cx="32" cy="32" r="6"/>', "Capture d’écran"),
     "winlux-welcome": ("prisme", '<path d="M32 16L48 32L32 48L16 32z"/><path d="M16 32l16-4 16 4M32 16v32"/>', "Bienvenue dans Winlux"),
     "winlux-osk": ("ardoise", '<rect x="14" y="22" width="36" height="22" rx="4"/><path d="M20 29h2M27 29h2M34 29h2M41 29h2M20 36h2M41 36h2M27 37h10"/>', "Clavier visuel"),
     "winlux-widgets": ("cyan", '<circle cx="25" cy="24" r="6"/><path d="M25 13v2M14 24h2M17 16l1.5 1.5M33 16l-1.5 1.5"/><path d="M26 47h17a6 6 0 0 0 0-12 9 9 0 0 0-17 1 5.5 5.5 0 0 0 0 11z" fill="#fff"/>', "Widgets"),

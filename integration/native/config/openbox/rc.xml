@@ -60,6 +60,12 @@
     <keybind key="W-C-t"><action name="Execute"><command>winlux-snap ontop</command></action></keybind>
     <keybind key="W-S-c"><action name="Execute"><command>winlux-colorpicker</command></action></keybind>
     <keybind key="W-S-t"><action name="Execute"><command>winlux-ocr</command></action></keybind>
+    <!-- Capture d'écran (#3046) : zone, fenêtre ou plein écran au choix ; Windows + Impr. écran
+         enregistre tout l'écran, Alt + Impr. écran la fenêtre active. -->
+    <keybind key="W-S-s"><action name="Execute"><command>winlux-capture</command></action></keybind>
+    <keybind key="Print"><action name="Execute"><command>winlux-capture</command></action></keybind>
+    <keybind key="W-Print"><action name="Execute"><command>winlux-capture ecran</command></action></keybind>
+    <keybind key="A-Print"><action name="Execute"><command>winlux-capture fenetre</command></action></keybind>
     <!-- Voix, sur ce PC seulement (#662) : dictée dans la fenêtre active, sous-titres en direct. -->
     <keybind key="W-h"><action name="Execute"><command>winlux-speech dictate</command></action></keybind>
     <keybind key="W-C-l"><action name="Execute"><command>winlux-speech captions</command></action></keybind>
