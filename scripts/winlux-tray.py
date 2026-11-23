@@ -622,6 +622,30 @@ def screen_width():
 # ouvre les notifications.
 QUICK = "/usr/bin/winlux-popup quick"
 
+_OSK = []
+
+
+def _osk_module():
+    """Module du clavier tactile, chargé une seule fois (script voisin, sinon
+    /usr/bin/winlux-osk) ; None s'il manque ou ne se charge pas."""
+    if not _OSK:
+        module = None
+        for path in (Path(__file__).resolve().with_name("winlux-osk.py"), Path("/usr/bin/winlux-osk")):
+            if path.is_file():
+                try:
+                    import importlib.machinery
+                    import importlib.util
+                    loader = importlib.machinery.SourceFileLoader("winlux_osk_tray", str(path))
+                    spec = importlib.util.spec_from_loader("winlux_osk_tray", loader)
+                    module = importlib.util.module_from_spec(spec)
+                    loader.exec_module(module)
+                except Exception:
+                    module = None
+                break
+        _OSK.append(module)
+    return _OSK[0]
+
+
 def render(kind, parent=None):
     """Ligne genmon d'un greffon (<img>, <tool>, <click>) ; None si inconnu."""
     if kind == "battery":
@@ -703,6 +727,14 @@ def render(kind, parent=None):
                                  '<rect width="1" height="1" fill="none"/></svg>')
             temporary.replace(icon)
         return f"<img>{icon}</img><tool></tool>"
+    elif kind == "osk":
+        # Icône du clavier tactile (greffon 12) : calculée ici, dans le service
+        # déjà lancé, et non plus par un Python neuf toutes les 5 s (#3419).
+        module = _osk_module()
+        if module is None:
+            return "<txt></txt><tool></tool>"
+        module._LANG = _LANG  # langue relue par refresh_settings()
+        return module.tray_output()
     elif kind == "notifications":
         count = notification_count()
         body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
@@ -731,7 +763,7 @@ def render(kind, parent=None):
 # scripts/winlux-tray-read.sh) les recopie sans démarrer Python, et retombe
 # sur un calcul direct quand le service n'est pas là.
 
-SERVED = {"balance": 2, "status": 3, "search": 3, "notifications": 2}
+SERVED = {"balance": 2, "status": 3, "search": 3, "notifications": 2, "osk": 5}
 SETTLE = 8  # secondes de lancement de la barre laissées aux greffons
 
 
@@ -1151,7 +1183,7 @@ def main(argv):
     if len(argv) >= 2 and argv[1] == "overflow":
         return overflow(argv)
     if len(argv) != 2:
-        print("usage : winlux-tray status|search|balance|edge|notifications|battery|audio|network|serve", file=sys.stderr)
+        print("usage : winlux-tray status|search|balance|edge|notifications|osk|battery|audio|network|serve", file=sys.stderr)
         return 2
     if argv[1] == "serve":
         # Lancé depuis un greffon : ne garder aucun descripteur hérité de genmon.
