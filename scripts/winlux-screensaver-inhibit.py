@@ -375,7 +375,10 @@ def watch_updates(interval=None):
     def uninhibit(cookie):
         bus.call_sync(NAME, PATHS[0], NAME, "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 10000, None)
 
-    watcher = UpdateWatch(update_busy, inhibit, uninhibit)
+    # WINLUX_UPDATE_ROOT : racine lue par update_busy, pour les tests qui
+    # simulent une installation sans être root (test-boot-journaux.py).
+    root = os.environ.get("WINLUX_UPDATE_ROOT", "/")
+    watcher = UpdateWatch(lambda: update_busy(root), inhibit, uninhibit)
     watcher.tick()
     GLib.timeout_add_seconds(interval or int(os.environ.get("WINLUX_UPDATE_WATCH_SECONDS", "15")), watcher.tick)
     GLib.MainLoop().run()
