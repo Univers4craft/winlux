@@ -1309,6 +1309,69 @@ impl<R: Read> Stream<R> {
     }
 }
 
+/// Longueur explorée après l'image PE pour trouver les données d'un
+/// installateur NSIS ou 7z (#3189). Ces données suivent l'amorce ; quelques
+/// installateurs NSIS glissent des octets entre les deux, d'où une marge
+/// (4 Mio) plutôt que la position exacte. Au-delà, chercher revenait à lire
+/// tout le fichier au lancement de chaque programme ordinaire.
+pub const AFTER_IMAGE: usize = 4 << 20;
+
+/// Sections d'un PE : (adresse virtuelle, taille virtuelle, position dans
+/// le fichier, taille dans le fichier).
+fn pe_sections(data: &[u8]) -> Option<Vec<(usize, usize, usize, usize)>> {
+    let pe = le_u32(data, 0x3C)? as usize;
+    if data.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let n = u16::from_le_bytes(data.get(pe + 6..pe + 8)?.try_into().ok()?) as usize;
+    let opt = u16::from_le_bytes(data.get(pe + 20..pe + 22)?.try_into().ok()?) as usize;
+    let sec = pe + 24 + opt;
+    (0..n.min(96))
+        .map(|i| {
+            let s = sec + i * 40;
+            Some((
+                le_u32(data, s + 12)? as usize,
+                le_u32(data, s + 8)? as usize,
+                le_u32(data, s + 20)? as usize,
+                le_u32(data, s + 16)? as usize,
+            ))
+        })
+        .collect()
+}
+
+/// Fin de l'image PE dans le fichier (fin de la dernière section) : là où
+/// commencent les données qu'un installateur colle à son amorce.
+pub fn pe_end(data: &[u8]) -> Option<usize> {
+    Some(
+        pe_sections(data)?
+            .iter()
+            .map(|&(_, _, raw, size)| raw.saturating_add(size))
+            .max()
+            .unwrap_or(0),
+    )
+}
+
+/// Octets de la section qui porte le répertoire des ressources :
+/// (début, fin) dans le fichier, bornés à sa longueur.
+pub fn resource_section(data: &[u8]) -> Option<(usize, usize)> {
+    let pe = le_u32(data, 0x3C)? as usize;
+    let opt = pe + 24;
+    let dirs = match u16::from_le_bytes(data.get(opt..opt + 2)?.try_into().ok()?) {
+        0x10B => opt + 96,
+        0x20B => opt + 112,
+        _ => return None,
+    };
+    let rva = le_u32(data, dirs + 2 * 8)? as usize;
+    if rva == 0 {
+        return None;
+    }
+    let (_, _, raw, size) = pe_sections(data)?
+        .into_iter()
+        .find(|&(va, vsize, _, size)| rva >= va && rva < va + vsize.max(size))?;
+    let end = raw.saturating_add(size).min(data.len());
+    (raw < end).then_some((raw, end))
+}
+
 pub fn le_u32(d: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_le_bytes(d.get(off..off + 4)?.try_into().ok()?))
 }
