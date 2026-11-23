@@ -1,0 +1,65 @@
+# Diagnostic de #3199, à retirer d'un bloc avec scripts/diag-3199-nokaslr.sh.
+# Démarre en UEFI 32 bits, sous le QEMU d'Ubuntu 26.04 (10.2.1, celui des
+# paniques), l'ISO de validation d'une release existante, puis sa copie avec
+# nokaslr, en alternance. Ne reconstruit rien et ne publie rien. Se lance au
+# push qui l'ajoute ou le modifie, ou à la main.
+name: diag-3199-nokaslr
+
+on:
+  push:
+    paths:
+      - .github/workflows/diag-3199-nokaslr.yml
+      - scripts/diag-3199-nokaslr.sh
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run de release dont l'ISO de validation est reprise
+        required: true
+        default: "45085622419"
+      count:
+        description: Démarrages par variante
+        required: true
+        default: "20"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: diag-3199
+  cancel-in-progress: true
+
+jobs:
+  uefi32:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    env:
+      # Release verte de #3239 (9e59f282, noyau 7.0.0-44, entrée de
+      # diagnostic avec efi=debug) ; son ISO est gardée jusqu'au 26 novembre.
+      RUN_ID: ${{ github.event.inputs.run_id || '45085622419' }}
+      COUNT: ${{ github.event.inputs.count || '20' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Installer QEMU et xorriso
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 xorriso curl
+          ovmf32=$(sh scripts/fetch-ovmf-ia32.sh "$RUNNER_TEMP/ovmf-ia32")
+          echo "WINLUX_OVMF32=$ovmf32/OVMF32_CODE_4M.fd" >>"$GITHUB_ENV"
+          echo "WINLUX_OVMF32_VARS=$ovmf32/OVMF32_VARS_4M.fd" >>"$GITHUB_ENV"
+
+      - name: Reprendre l'ISO de validation
+        uses: actions/download-artifact@v4
+        with:
+          pattern: winlux-iso-validation-*
+          path: build/iso-validation
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Démarrages uefi32, actuelle puis nokaslr
+        run: |
+          iso=$(find build/iso-validation -name '*.iso' | head -n 1)
+          test -n "$iso"
+          sha256sum "$iso"
+          sh scripts/diag-3199-nokaslr.sh "$iso" "$COUNT"
