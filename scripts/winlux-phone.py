@@ -150,25 +150,6 @@ def _t(text):
 HOME = Path.home()
 CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", HOME / ".config/winlux/phone"))
 DATA = Path(os.environ.get("WINLUX_PHONE_DATA", HOME / ".local/state/winlux/phone"))
-
-def private_state_dir(folder):
-    """Dossier d'état privé au compte (#3082), comme private_state de
-    winlux-open : chaque dossier manquant naît en 0700, et le dossier winlux
-    partagé par nos outils est ramené à 0700 s'il existait plus ouvert. Le
-    premier outil lancé ne le crée plus en 0755 pour tous les autres."""
-    folder = Path(folder)
-    missing, probe = [], folder
-    while not probe.exists() and probe != probe.parent:
-        missing.append(probe); probe = probe.parent
-    for directory in reversed(missing):
-        try: os.mkdir(directory, 0o700)
-        except FileExistsError: pass
-    for directory in (folder, *folder.parents):
-        if directory.name == "winlux":
-            if directory.stat().st_mode & 0o077: directory.chmod(0o700)
-            break
-    return folder
-
 _runtime = os.environ.get("XDG_RUNTIME_DIR")
 RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(_runtime) / "winlux-phone" if _runtime else HOME / ".cache/winlux/phone"))
 SOCKET = RUNTIME / "control.sock"
@@ -215,20 +196,11 @@ def read_json(path, default):
 
 def write_json(path, value, mode=0o600):
     path = Path(path)
-    private_state_dir(path.parent)
-    # Né avec son mode (#3082) : les données du téléphone ne sont jamais
-    # lisibles par un autre compte, pas même avant un chmod.
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.write(json.dumps(value, ensure_ascii=False, indent=1))
-        os.chmod(tmp, mode)  # mode exact même sous un umask plus strict
-        tmp.replace(path)
-    except BaseException:
-        try: tmp.unlink()
-        except OSError: pass
-        raise
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.chmod(mode)
+    tmp.replace(path)
 
 
 def paired_devices():
@@ -888,12 +860,14 @@ class Daemon:
                 spawn([sys.executable, os.path.abspath(__file__), "pair-dialog", link.id])
                 self.publish()
         else:
-            # Demandes en cours oubliées AVANT d'effacer les données : un
-            # « Associer » lancé dès que l'effacement est visible ne doit plus
-            # être annulé après coup (sinon l'acceptation du téléphone était
-            # prise pour une nouvelle demande, sans code).
-            pending = self.pending.pop(link.id, None)
-            self.requested.pop(link.id, None)
+            # Demandes en cours effacées AVANT la dissociation (#3158) :
+            # unpair publie l'état « dissocié », et un « Associer » cliqué à
+            # cet instant posait une demande que la fin de ce traitement
+            # effaçait aussitôt ; l'acceptation du téléphone devenait alors
+            # une nouvelle demande d'appairage.
+            with self.lock:
+                pending = self.pending.pop(link.id, None)
+                self.requested.pop(link.id, None)
             if pending:
                 self.desktop.close(pending.get("notification", 0))
             if link.id in self.devices:

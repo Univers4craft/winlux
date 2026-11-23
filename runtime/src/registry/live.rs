@@ -22,6 +22,7 @@
 //!   il ne change plus, même si machine-id change (#1196).
 
 use super::{utf16z, Data, REG_BINARY, REG_DWORD, REG_SZ};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime as Clock;
@@ -184,6 +185,14 @@ fn add_fonts(
         .iter()
         .map(|v| super::string_of(&v.bytes).to_ascii_lowercase())
         .collect();
+    // Déjà inscrite : même valeur, ou valeur qui finit par « \fichier ».
+    // Ensembles plutôt qu'un `format!` par paire (police, valeur connue) :
+    // quadratique, ~1 ms à chaque lancement de programme (Gain #3091).
+    let exact: HashSet<&str> = known.iter().map(String::as_str).collect();
+    let last: HashSet<&str> = known
+        .iter()
+        .filter_map(|k| k.rsplit_once('\\').map(|(_, f)| f))
+        .collect();
     for (name, file) in list {
         let value = if absolute {
             vers.convert(&dir.join(&file))
@@ -191,10 +200,14 @@ fn add_fonts(
             file.clone()
         };
         let lower = value.to_ascii_lowercase();
-        if known
-            .iter()
-            .any(|k| *k == lower || k.ends_with(&format!("\\{}", file.to_ascii_lowercase())))
-        {
+        let file_lower = file.to_ascii_lowercase();
+        let listed = if file_lower.contains('\\') {
+            let tail = format!("\\{file_lower}");
+            known.iter().any(|k| k.ends_with(&tail))
+        } else {
+            last.contains(file_lower.as_str())
+        };
+        if exact.contains(lower.as_str()) || listed {
             continue;
         }
         if data.raw_get(key, &name).is_none() {
