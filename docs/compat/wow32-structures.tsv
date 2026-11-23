@@ -264,7 +264,7 @@ taskbarlist_com.rs	Obj	a-verifier
 taskschd.rs	Obj	a-verifier	
 teams_win32.rs	AssocReg	a-verifier	
 textserv.rs	Hote	interne	test unitaire (hôte factice du module tests)
-textserv.rs	TextServices	a-verifier	objet COM ; aucune passerelle x86 propre dans cette tranche, taille x86 à relire (#3268)
+textserv.rs	TextServices	interne	objet COM x64 seulement : create_text_services refuse (E_NOTIMPL, file:line) si wow32::active(), avant d'écrire ppUnk ; jamais remis à un programme 32 bits (#3268)
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
