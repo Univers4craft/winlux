@@ -42,6 +42,135 @@ pub(super) static IACTIVATIONFACTORY: Iface = Iface {
     ],
 };
 
+// Windows.Networking.Connectivity.NetworkInformation (#2215), servi par
+// `dlls/network_information.rs`, demandé par l'outil de déploiement
+// d'Office (x86) et refusé jusque-là (#3179). Ordre et paramètres :
+// windows-rs 0.62.2 et windows-collections 0.3.2 (MIT). Une énumération,
+// un boolean* ou un UINT32* est `I` ; une DateTime passée par valeur, un
+// jeton d'événement retiré sont `Q`. Le gestionnaire d'événement reste `I` :
+// le runtime ne l'appelle jamais. Les objets que le runtime ne sert pas
+// (E_NOTIMPL ou null : noms de réseau, forfait, adaptateur, opérations
+// asynchrones, WWAN…) sont décrits en IInspectable.
+use crate::dlls::network_information as net;
+
+/// IConnectionCost {BAD7D829-3416-4B10-A202-BAC0B075BDAE}.
+pub(super) static ICONNECTIONCOST: Iface = Iface {
+    name: "IConnectionCost",
+    iid: net::IID_CONNECTION_COST,
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[I]), // get_NetworkCostType(NetworkCostType*)
+        Some(&[I]), // get_Roaming(boolean*)
+        Some(&[I]), // get_OverDataLimit(boolean*)
+        Some(&[I]), // get_ApproachingDataLimit(boolean*)
+    ],
+};
+
+/// IConnectionCost2 {8E113A05-E209-4549-BB25-5E0DB691CB05}.
+pub(super) static ICONNECTIONCOST2: Iface = Iface {
+    name: "IConnectionCost2",
+    iid: net::IID_CONNECTION_COST2,
+    parent: Some(&IINSPECTABLE),
+    methods: &[Some(&[I])], // get_BackgroundDataUsageRestricted(boolean*)
+};
+
+/// IWlanConnectionProfileDetails {562098CB-B35A-4BF1-A884-B7557E88FF86}.
+pub(super) static IWLANCONNECTIONPROFILEDETAILS: Iface = Iface {
+    name: "IWlanConnectionProfileDetails",
+    iid: net::IID_WLAN_DETAILS,
+    parent: Some(&IINSPECTABLE),
+    methods: &[Some(&[OutPtr])], // GetConnectedSsid(HSTRING*)
+};
+
+/// IConnectionProfile {71BA143C-598E-49D0-84EB-8FEBAEDCC195}.
+pub(super) static ICONNECTIONPROFILE: Iface = Iface {
+    name: "IConnectionProfile",
+    iid: net::IID_CONNECTION_PROFILE,
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[OutPtr]),                      // get_ProfileName(HSTRING*)
+        Some(&[I]),                           // GetNetworkConnectivityLevel
+        Some(&[Out(&IINSPECTABLE)]),          // GetNetworkNames
+        Some(&[Out(&ICONNECTIONCOST)]),       // GetConnectionCost
+        Some(&[Out(&IINSPECTABLE)]),          // GetDataPlanStatus
+        Some(&[Out(&IINSPECTABLE)]),          // get_NetworkAdapter
+        Some(&[Q, Q, Out(&IINSPECTABLE)]),    // GetLocalUsage(DateTime, DateTime, …)
+        Some(&[Q, Q, I, Out(&IINSPECTABLE)]), // GetLocalUsagePerRoamingStates
+        Some(&[Out(&IINSPECTABLE)]),          // get_NetworkSecuritySettings
+    ],
+};
+
+/// IConnectionProfile2 {E2045145-4C9F-400C-9150-7EC7D6E2888A}.
+pub(super) static ICONNECTIONPROFILE2: Iface = Iface {
+    name: "IConnectionProfile2",
+    iid: net::IID_CONNECTION_PROFILE2,
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[I]),                                   // get_IsWwanConnectionProfile
+        Some(&[I]),                                   // get_IsWlanConnectionProfile
+        Some(&[Out(&IINSPECTABLE)]),                  // get_WwanConnectionProfileDetails
+        Some(&[Out(&IWLANCONNECTIONPROFILEDETAILS)]), // get_WlanConnectionProfileDetails
+        Some(&[Out(&IINSPECTABLE)]),                  // get_ServiceProviderGuid
+        Some(&[Out(&IINSPECTABLE)]),                  // GetSignalBars
+        Some(&[I]),                                   // GetDomainConnectivityLevel
+        Some(&[Q, Q, I, I, Out(&IINSPECTABLE)]),      // GetNetworkUsageAsync
+        Some(&[Q, Q, I, Out(&IINSPECTABLE)]),         // GetConnectivityIntervalsAsync
+    ],
+};
+
+/// IIterator<ConnectionProfile> : Current, HasCurrent, MoveNext,
+/// GetMany(UINT32, ConnectionProfile*, UINT32*).
+pub(super) static IITERATOR_PROFILE: Iface = Iface {
+    name: "IIterator<ConnectionProfile>",
+    iid: net::IID_ITERATOR_PROFILE,
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[Out(&ICONNECTIONPROFILE)]),          // get_Current
+        Some(&[I]),                                 // get_HasCurrent
+        Some(&[I]),                                 // MoveNext
+        Some(&[I, OutArr(&ICONNECTIONPROFILE), I]), // GetMany
+    ],
+};
+
+/// IIterable<ConnectionProfile> : First.
+pub(super) static IITERABLE_PROFILE: Iface = Iface {
+    name: "IIterable<ConnectionProfile>",
+    iid: net::IID_ITERABLE_PROFILE,
+    parent: Some(&IINSPECTABLE),
+    methods: &[Some(&[Out(&IITERATOR_PROFILE)])],
+};
+
+/// IVectorView<ConnectionProfile> : GetAt, Size, IndexOf,
+/// GetMany(UINT32, UINT32, ConnectionProfile*, UINT32*).
+pub(super) static IVECTORVIEW_PROFILE: Iface = Iface {
+    name: "IVectorView<ConnectionProfile>",
+    iid: net::IID_VIEW_PROFILE,
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[I, Out(&ICONNECTIONPROFILE)]),          // GetAt
+        Some(&[I]),                                    // get_Size
+        Some(&[In(&ICONNECTIONPROFILE), I, I]),        // IndexOf
+        Some(&[I, I, OutArr(&ICONNECTIONPROFILE), I]), // GetMany
+    ],
+};
+
+/// INetworkInformationStatics {5074F851-950D-4165-9C15-365619481EEA}.
+pub(super) static INETWORKINFORMATIONSTATICS: Iface = Iface {
+    name: "INetworkInformationStatics",
+    iid: net::IID_STATICS,
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[Out(&IVECTORVIEW_PROFILE)]), // GetConnectionProfiles
+        Some(&[Out(&ICONNECTIONPROFILE)]),  // GetInternetConnectionProfile
+        Some(&[Out(&IINSPECTABLE)]),        // GetLanIdentifiers
+        Some(&[Out(&IINSPECTABLE)]),        // GetHostNames
+        Some(&[I, Out(&IINSPECTABLE)]),     // GetProxyConfigurationAsync(Uri, …)
+        Some(&[I, I, Out(&IINSPECTABLE)]),  // GetSortedEndpointPairs
+        Some(&[I, I]),                      // add_NetworkStatusChanged
+        Some(&[Q]),                         // remove_NetworkStatusChanged
+    ],
+};
+
 // Windows.Management.Deployment.PackageManager (#2740), servi par
 // `dlls/winrt_package_manager.rs`. Ordre et paramètres : windows-rs 0.62.2
 // (MIT), `IPackageManager_Vtbl` et `IPackageManager2_Vtbl`. Chaque
@@ -139,7 +268,33 @@ pub(super) static IITERABLE_USER: Iface = Iface {
     methods: &[Some(&[Out(&IITERATOR_USER)])],
 };
 
+// Windows.UI.ViewManagement.UISettings (#2206), servi par
+// `dlls/ui_settings.rs`. Ordre et paramètres : windows-rs 0.62.2 (MIT),
+// `IUISettings2_Vtbl`. Le f64 et le jeton i64 rendus le sont par un
+// pointeur vers des données sans pointeur (`I`) ; le gestionnaire passé
+// reste `I` : le runtime ne l'appelle jamais (ces réglages ne changent pas
+// pendant la vie du processus) ; le jeton passé par valeur tient 8 octets.
+
+/// IUISettings2 {BAD82401-2721-44F9-BB91-2BB228BE442F} : demandée par
+/// l'outil de déploiement d'Office (x86), refusée jusque-là (#3177).
+pub(super) static IUISETTINGS2: Iface = Iface {
+    name: "IUISettings2",
+    iid: guid(
+        0xBAD8_2401,
+        0x2721,
+        0x44F9,
+        [0xBB, 0x91, 0x2B, 0xB2, 0x28, 0xBE, 0x44, 0x2F],
+    ),
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[I]),    // get_TextScaleFactor(f64*)
+        Some(&[I, I]), // add_TextScaleFactorChanged(handler, EventRegistrationToken*)
+        Some(&[Q]),    // remove_TextScaleFactorChanged(EventRegistrationToken)
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
+    &IUISETTINGS2,
     &IINSPECTABLE,
     &IACTIVATIONFACTORY,
     &IPACKAGEMANAGER,
@@ -148,6 +303,15 @@ pub(super) static ALL: &[&Iface] = &[
     &IITERATOR_PACKAGE,
     &IITERABLE_USER,
     &IITERATOR_USER,
+    &INETWORKINFORMATIONSTATICS,
+    &IVECTORVIEW_PROFILE,
+    &IITERABLE_PROFILE,
+    &IITERATOR_PROFILE,
+    &ICONNECTIONPROFILE,
+    &ICONNECTIONPROFILE2,
+    &ICONNECTIONCOST,
+    &ICONNECTIONCOST2,
+    &IWLANCONNECTIONPROFILEDETAILS,
 ];
 
 #[cfg(test)]
@@ -159,6 +323,24 @@ mod tests {
     /// runtime par des mandataires. IInspectable a 3 méthodes après
     /// IUnknown, IActivationFactory une de plus (Learn, inspectable.h et
     /// activation.h) ; chacune se retrouve par son IID.
+    /// #3177 : IUISettings2 rendue au code x86, trois méthodes après
+    /// IInspectable ; le jeton retiré passe en 8 octets sur la pile x86.
+    #[test]
+    fn reglages_d_interface_2_decrits() {
+        let iid = guid(
+            0xBAD8_2401,
+            0x2721,
+            0x44F9,
+            [0xBB, 0x91, 0x2B, 0xB2, 0x28, 0xBE, 0x44, 0x2F],
+        );
+        let f = by_iid(&iid).expect("IUISettings2 décrite");
+        assert!(std::ptr::eq(f, &IUISETTINGS2));
+        assert_eq!(f.count(), 9);
+        assert_eq!(slots(f.method(6).unwrap()), 1);
+        assert_eq!(slots(f.method(7).unwrap()), 2);
+        assert_eq!(slots(f.method(8).unwrap()), 2);
+    }
+
     #[test]
     fn winrt_decrit_pour_le_code_x86() {
         assert_eq!(IINSPECTABLE.count(), 6);
@@ -196,5 +378,29 @@ mod tests {
             assert_eq!(slots(k), 2);
             assert!(r.is_none());
         }
+    }
+
+    /// #3179 : NetworkInformation et ses profils rendus au code x86. Le
+    /// nombre de méthodes suit windows-rs (6 d'IInspectable en tête) ;
+    /// GetMany rend un tableau d'interfaces converti élément par élément.
+    #[test]
+    fn informations_reseau_decrites_3179() {
+        let f = by_iid(&net::IID_STATICS).expect("INetworkInformationStatics décrite");
+        assert!(std::ptr::eq(f, &INETWORKINFORMATIONSTATICS));
+        assert_eq!(INETWORKINFORMATIONSTATICS.count(), 14);
+        assert_eq!(ICONNECTIONPROFILE.count(), 15);
+        assert_eq!(ICONNECTIONPROFILE2.count(), 15);
+        assert_eq!(ICONNECTIONCOST.count(), 10);
+        assert_eq!(IVECTORVIEW_PROFILE.count(), 10);
+        assert_eq!(IITERATOR_PROFILE.count(), 10);
+        // GetLocalUsage : deux DateTime de 8 octets et la sortie.
+        assert_eq!(slots(ICONNECTIONPROFILE.method(12).unwrap()), 5);
+        // remove_NetworkStatusChanged : un jeton de 8 octets.
+        assert_eq!(slots(INETWORKINFORMATIONSTATICS.method(13).unwrap()), 2);
+        assert_eq!(slots(IVECTORVIEW_PROFILE.method(9).unwrap()), 4);
+        assert!(matches!(
+            IVECTORVIEW_PROFILE.method(9).unwrap()[2],
+            OutArr(p) if std::ptr::eq(p, &ICONNECTIONPROFILE)
+        ));
     }
 }
