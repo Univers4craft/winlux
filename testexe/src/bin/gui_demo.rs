@@ -1151,7 +1151,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         desktop::tick(hwnd);
                     }
                 } else if wm::native_app().is_some() {
-                    if GetTickCount().wrapping_sub(last_tick) >= 500 {
+                    if GetTickCount().wrapping_sub(last_tick) >= wm::native_tick_ms() {
                         last_tick = GetTickCount();
                         wm::native_tick(hwnd);
                     }
