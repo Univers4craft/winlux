@@ -1233,7 +1233,9 @@ unsafe fn send_message(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             // SAFETY : mêmes arguments que l'appel direct, sur le fil
             // propriétaire ; la procédure est relue, elle a pu changer.
             let call = || match gui::wnd_proc_of(hwnd) {
-                Some(wp) => unsafe { gui::call_wndproc(wp, hwnd, message, wparam, lparam) },
+                Some(wp) => super::pointer::while_sent(|| unsafe {
+                    gui::call_wndproc(wp, hwnd, message, wparam, lparam)
+                }),
                 None => 0,
             };
             match wide {
@@ -1246,7 +1248,8 @@ unsafe fn send_message(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             Err(job) => job(),
         };
     }
-    gui::call_wndproc(wp, hwnd, message, wparam, lparam)
+    // Message envoyé : aucun appareil d'origine jusqu'au retour (#1932).
+    super::pointer::while_sent(|| gui::call_wndproc(wp, hwnd, message, wparam, lparam))
 }
 
 /// Message pour la fenêtre d'un autre processus (#2046) : seule la lecture

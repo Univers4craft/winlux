@@ -248,6 +248,7 @@ pub mod quartz;
 pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
+pub mod tactile;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
 pub mod mdi;
 pub mod msvcp140_2;
@@ -631,6 +632,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     // Stylet : API WM_POINTER et GetMessageExtraInfo (#1199).
                     e.extend(pointer::user32_exports());
+                    // Toucher, injection, source des messages, gestes (#1932).
+                    e.extend(tactile::user32_exports());
                     // Lot D du relevé (#1512) : seulement les noms absents.
                     for (name, addr) in user32_releve::user32_exports() {
                         e.entry(name).or_insert(addr);
