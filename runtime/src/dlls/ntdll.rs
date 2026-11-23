@@ -3060,6 +3060,8 @@ pub fn exports() -> crate::dlls::Exports {
         "strlen" => fn crate::dlls::msvcrt::strlen,
         "wcslen" => fn crate::dlls::crt::wcslen,
         "memcpy" => fn crate::dlls::msvcrt::memcpy,
+        // Recherché juste après memcpy par le même courtier (Acrobat, i20, #3367).
+        "_wcsnicmp" => fn crate::dlls::crt_ucrt::wcsnicmp,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
         "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
@@ -3436,6 +3438,46 @@ mod ouvertures_tests {
         ] {
             assert!(e.contains_key(name), "{name} absent de la table de ntdll");
         }
+    }
+
+    /// #3367 : `_wcsnicmp` est dans la table d'exports de l'image ntdll, lue
+    /// comme le courtier du bac à sable de Chromium la lit (en-têtes PE,
+    /// répertoire d'exports, recherche par nom) et non par GetProcAddress
+    /// ni par le repli de `lookup` vers la CRT, qui le trouvaient déjà.
+    #[test]
+    fn wcsnicmp_dans_l_image_ntdll_3367() {
+        let base = crate::dlls::module_handle("ntdll").expect("ntdll");
+        let rd32 = |a: usize| unsafe { (a as *const u32).read_unaligned() } as usize;
+        let rd16 = |a: usize| unsafe { (a as *const u16).read_unaligned() } as usize;
+        assert_eq!(rd16(base), 0x5A4D);
+        let pe = base + rd32(base + 0x3c);
+        assert_eq!(rd32(pe), 0x4550);
+        let dir = base + rd32(pe + 24 + 112);
+        let noms: Vec<&[u8]> = (0..rd32(dir + 24))
+            .map(|i| {
+                let p = base + rd32(base + rd32(dir + 32) + 4 * i);
+                unsafe { std::ffi::CStr::from_ptr(p as *const std::ffi::c_char) }.to_bytes()
+            })
+            .collect();
+        // La table est triée : le courtier y cherche par dichotomie.
+        assert!(
+            noms.windows(2).all(|w| w[0] < w[1]),
+            "table de ntdll non triée"
+        );
+        for name in ["_wcsnicmp", "_strnicmp", "memcpy", "wcslen", "strlen"] {
+            assert!(
+                noms.binary_search(&name.as_bytes()).is_ok(),
+                "ntdll!{name} absent de la table de l'image"
+            );
+        }
+        // Et le nom mène à la fonction : comparaison sans casse bornée.
+        let a: Vec<u16> = "AbCdX\0".encode_utf16().collect();
+        let b: Vec<u16> = "aBcDy\0".encode_utf16().collect();
+        let f = crate::dlls::lookup("ntdll", "_wcsnicmp").expect("_wcsnicmp");
+        let f: unsafe extern "win64" fn(*const u16, *const u16, usize) -> i32 =
+            unsafe { std::mem::transmute(f) };
+        assert_eq!(unsafe { f(a.as_ptr(), b.as_ptr(), 4) }, 0);
+        assert!(unsafe { f(a.as_ptr(), b.as_ptr(), 5) } < 0);
     }
 
     #[test]
