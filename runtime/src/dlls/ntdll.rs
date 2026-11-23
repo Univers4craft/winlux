@@ -2624,6 +2624,30 @@ pub unsafe extern "win64" fn nt_open_process_token_ex(
     nt_open_process_token(process, access, token)
 }
 
+/// `NtQueryInformationToken` (Learn, ntifs.h) : `(TokenHandle,
+/// TokenInformationClass, TokenInformation, TokenInformationLength,
+/// ReturnLength) -> NTSTATUS`, la même lecture que GetTokenInformation
+/// (#3310 : 28e interception du courtier d'Acrobat).
+/// Learn : STATUS_BUFFER_TOO_SMALL avec la taille requise dans
+/// ReturnLength ; une classe non servie rend STATUS_INVALID_INFO_CLASS.
+pub unsafe extern "win64" fn nt_query_information_token(
+    token: usize,
+    class: u32,
+    info: *mut u8,
+    len: u32,
+    ret: *mut u32,
+) -> i32 {
+    crate::process::set_last_error(0);
+    if crate::dlls::security::GetTokenInformation(token, class, info, len, ret) != 0 {
+        return STATUS_SUCCESS;
+    }
+    match crate::process::last_error() {
+        122 => STATUS_BUFFER_TOO_SMALL,
+        87 => STATUS_INVALID_INFO_CLASS,
+        _ => status_of_last_error(STATUS_UNSUCCESSFUL),
+    }
+}
+
 /// `NtOpenThreadToken` : STATUS_NO_TOKEN si le thread n'emprunte aucune
 /// identité, comme sous Windows.
 pub unsafe extern "win64" fn nt_open_thread_token(
@@ -2716,6 +2740,46 @@ pub unsafe extern "win64" fn nt_open_mutant(
         return status_of_last_error(STATUS_OBJECT_NAME_NOT_FOUND);
     }
     *handle = h;
+    STATUS_SUCCESS
+}
+
+/// `NtCreateMutant` : création (ou ouverture, si le nom existe déjà) d'un
+/// mutex, nommé ou non (#3270). Exportée par ntdll (mingw-w64,
+/// ntdll.def.in). Learn ne la documente pas. **Inférence nommée** : elle a
+/// la forme de ZwCreateEvent (Learn, wdm.h) avec un seul BOOLEAN,
+/// `(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES optionnel, BOOLEAN
+/// InitialOwner) -> NTSTATUS`, et l'effet de CreateMutexW (Learn).
+pub unsafe extern "win64" fn nt_create_mutant(
+    handle: *mut usize,
+    _access: u32,
+    attrs: *const c_void,
+    initial_owner: u8,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let name: Option<Vec<u16>> = oa_path(attrs).map(|nt| {
+        object_name_for_kernel32(&nt)
+            .encode_utf16()
+            .chain([0])
+            .collect()
+    });
+    crate::process::set_last_error(0);
+    let h = crate::dlls::kernel32::create_mutex_w(
+        0,
+        (initial_owner != 0) as i32,
+        name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()),
+    );
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_INVALID_PARAMETER);
+    }
+    *handle = h;
+    // ERROR_ALREADY_EXISTS : Windows rend STATUS_OBJECT_NAME_EXISTS, un
+    // succès (Learn, « Using NTSTATUS Values » : sévérité informative).
+    if crate::process::last_error() == 183 {
+        return STATUS_OBJECT_NAME_EXISTS;
+    }
     STATUS_SUCCESS
 }
 
@@ -2896,11 +2960,13 @@ pub fn exports() -> crate::dlls::Exports {
         "NtOpenThread" => fn nt_open_thread,
         "NtCreateLowBoxToken" => fn crate::dlls::security::nt_create_low_box_token,
         "NtOpenProcessToken" => fn nt_open_process_token,
+        "NtQueryInformationToken" => fn nt_query_information_token,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
         "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
         "NtOpenEvent" => fn nt_open_event,
         "NtOpenMutant" => fn nt_open_mutant,
+        "NtCreateMutant" => fn nt_create_mutant,
         "NtRaiseHardError" => fn nt_raise_hard_error,
     }
 }
@@ -3220,6 +3286,82 @@ mod ouvertures_tests {
 
     /// Fonctions que le bac à sable de Chromium intercepte dans chaque enfant
     /// (#767) : toutes exportées par ntdll, avec un relais de service.
+    /// NtCreateMutant crée un mutex nommé ou non ; un nom existant rend
+    /// STATUS_OBJECT_NAME_EXISTS avec un handle, et NtOpenMutant le
+    /// retrouve (#3270).
+    #[test]
+    fn nt_query_information_token_lit_le_jeton_3310() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let mut token = 0usize;
+            assert_eq!(
+                nt_open_process_token(usize::MAX, 0x8, &mut token),
+                STATUS_SUCCESS
+            );
+            // TokenUser (1) : taille requise d'abord, puis la lecture.
+            let mut besoin = 0u32;
+            assert_eq!(
+                nt_query_information_token(token, 1, std::ptr::null_mut(), 0, &mut besoin),
+                STATUS_BUFFER_TOO_SMALL
+            );
+            assert!(besoin >= 16, "taille requise {besoin}");
+            let mut buf = vec![0u8; besoin as usize];
+            let mut lu = 0u32;
+            assert_eq!(
+                nt_query_information_token(token, 1, buf.as_mut_ptr(), besoin, &mut lu),
+                STATUS_SUCCESS
+            );
+            assert_eq!(lu, besoin);
+            // TOKEN_USER : le pointeur de SID désigne le tampon lui-même.
+            let sid = std::ptr::read_unaligned(buf.as_ptr() as *const usize);
+            assert!(sid >= buf.as_ptr() as usize && sid < buf.as_ptr() as usize + buf.len());
+            assert_eq!(
+                nt_query_information_token(token, 0xFFFF, buf.as_mut_ptr(), besoin, &mut lu),
+                STATUS_INVALID_INFO_CLASS
+            );
+        }
+    }
+
+    #[test]
+    fn nt_create_mutant_cree_un_mutex_3270() {
+        // GetLastError (183 si le nom existait) vit dans le TEB.
+        let _teb = crate::process::test_teb();
+        let nom = format!("winlux-3270-{}", std::process::id());
+        let nt: Vec<u16> = format!("\\Sessions\\1\\BaseNamedObjects\\{nom}")
+            .encode_utf16()
+            .collect();
+        let mut us = [0u8; 16];
+        let octets = (nt.len() * 2) as u16;
+        us[0..2].copy_from_slice(&octets.to_le_bytes());
+        us[2..4].copy_from_slice(&octets.to_le_bytes());
+        us[8..16].copy_from_slice(&(nt.as_ptr() as u64).to_le_bytes());
+        let mut oa = [0u8; 0x30];
+        oa[0..4].copy_from_slice(&0x30u32.to_le_bytes());
+        oa[0x10..0x18].copy_from_slice(&(us.as_ptr() as u64).to_le_bytes());
+        let (mut cree, mut encore, mut ouvert, mut anonyme) = (0usize, 0usize, 0usize, 0usize);
+        let st_cree = unsafe { nt_create_mutant(&mut cree, 0x001F_0001, oa.as_ptr().cast(), 1) };
+        let st_encore =
+            unsafe { nt_create_mutant(&mut encore, 0x001F_0001, oa.as_ptr().cast(), 0) };
+        let st_ouvert = unsafe { nt_open_mutant(&mut ouvert, 0x0010_0000, oa.as_ptr().cast()) };
+        let st_anonyme =
+            unsafe { nt_create_mutant(&mut anonyme, 0x001F_0001, std::ptr::null(), 0) };
+        let st_nul = unsafe { nt_create_mutant(std::ptr::null_mut(), 0, std::ptr::null(), 0) };
+        eprintln!(
+            "      création {st_cree:#x}, recréation {st_encore:#x}, ouverture {st_ouvert:#x}, \
+             anonyme {st_anonyme:#x}, handle nul {st_nul:#x}"
+        );
+        assert_eq!(st_cree, STATUS_SUCCESS);
+        assert_ne!(cree, 0);
+        assert_eq!(st_encore, STATUS_OBJECT_NAME_EXISTS);
+        assert_ne!(encore, 0);
+        assert_eq!(st_ouvert, STATUS_SUCCESS);
+        assert_ne!(ouvert, 0);
+        assert_eq!(st_anonyme, STATUS_SUCCESS);
+        assert_ne!(anonyme, 0);
+        assert_eq!(st_nul, STATUS_INVALID_PARAMETER);
+        assert!(exports().contains_key("NtCreateMutant"));
+    }
+
     /// NtOpenMutant ouvre un mutex nommé créé par CreateMutexW, et rend
     /// STATUS_OBJECT_NAME_NOT_FOUND pour un nom absent (#3252).
     #[test]
@@ -3280,7 +3422,17 @@ mod ouvertures_tests {
             "NtCreateEvent",
             "NtOpenEvent",
             "NtOpenMutant",
+            "NtCreateMutant",
             "NtCreateSection",
+            "NtAddAtom",
+            "NtAddAtomEx",
+            "NtFindAtom",
+            "NtDeleteAtom",
+            "NtQueryInformationAtom",
+            "NtQueryInformationToken",
+            // Les 27 noms cherchés par le courtier d'Acrobat (passe i17, #3304).
+            "NtOpenSection",
+            "NtDeleteValueKey",
         ] {
             assert!(e.contains_key(name), "{name} absent de ntdll");
         }
