@@ -1481,6 +1481,23 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
     };
     if let Some(what) = delay {
         line.push_str(&format!(", chargement différé impossible : {what}"));
+        // Les autres fonctions de cette DLL que le module importe en
+        // différé : une passe les fait connaître toutes (#2627).
+        let names = unsafe {
+            crate::dlls::kernel32_misc::delay_import_list(&rec.info[..n], crate::wow32::active())
+        };
+        if let Some(names) = names {
+            line.push_str(&format!(" ; imports différés de cette DLL : {names}"));
+        }
+        let missing = unsafe {
+            crate::dlls::kernel32_misc::delay_imports_missing(
+                &rec.info[..n],
+                crate::wow32::active(),
+            )
+        };
+        if let Some(missing) = missing {
+            line.push_str(&format!(" ; absentes chez Winlux : {}", missing.join(", ")));
+        }
     }
     if rip != rec.address {
         line.push_str(&format!(", rip {}", crate::thunks::describe_site(rip)));

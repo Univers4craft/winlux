@@ -478,6 +478,45 @@ pub(crate) unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<Stri
     };
     delay_import_names(base, size, pidd, x86).map(|names| names.join(", "))
 }
+/// Parmi les fonctions que le module importe en différé de cette DLL,
+/// celles que la DLL déjà chargée (`hmodCur` de la `DelayLoadInfo`) ne sert
+/// pas : ce que le programme demandera ensuite, connu en une seule passe.
+/// x64 seulement (hmodCur à +48) ; rien si la DLL n'a pas été chargée.
+pub(crate) unsafe fn delay_imports_missing(args: &[usize], x86: bool) -> Option<Vec<String>> {
+    if x86 {
+        return None;
+    }
+    let info = *args.first()?;
+    let hmod = std::ptr::read_unaligned((info + 48) as *const usize);
+    let pidd = std::ptr::read_unaligned((info + 8) as *const usize);
+    if hmod == 0 || pidd == 0 {
+        return None;
+    }
+    let (base, size) = {
+        let modules = crate::loader::MODULES.try_lock().ok()?;
+        let m = modules.iter().find(|m| m.contains(pidd))?;
+        (m.base, m.size)
+    };
+    let names = delay_import_names(base, size, pidd, false)?;
+    let saved = crate::dlls::kernel32::get_last_error();
+    let missing = names
+        .into_iter()
+        .filter(|name| {
+            let found = match name.strip_prefix('#') {
+                Some(ordinal) => ordinal.parse::<usize>().is_ok_and(|o| {
+                    crate::dlls::kernel32::get_proc_address(hmod, o as *const u8) != 0
+                }),
+                None => {
+                    let c = std::ffi::CString::new(name.as_str()).unwrap_or_default();
+                    crate::dlls::kernel32::get_proc_address(hmod, c.as_ptr() as *const u8) != 0
+                }
+            };
+            !found
+        })
+        .collect();
+    crate::process::set_last_error(saved);
+    Some(missing)
+}
 /// Noms (ou « #ordinal ») de l'INT d'un descripteur d'import différé situé
 /// dans l'image [base, base + size). Toute adresse hors de l'image arrête
 /// la lecture.
