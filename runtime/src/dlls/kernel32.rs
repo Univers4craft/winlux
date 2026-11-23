@@ -318,6 +318,9 @@ struct MutexState {
     /// partagée (DuplicateHandle vers un autre processus, #767).
     owner_os: u32,
     recursion: usize,
+    /// Fils endormis sur `changed` dans wait_mutex : sans eux, libérer le
+    /// mutex ne réveille personne (notify_one coûte un appel futex).
+    waiters: usize,
 }
 pub(crate) struct MutexObject {
     state: Mutex<MutexState>,
@@ -336,7 +339,28 @@ const SHARED_KIND_MUTEX: u32 = 2;
 const SHARED_KIND_SEMAPHORE: u32 = 3;
 
 fn os_thread_id() -> u32 {
-    unsafe { libc::syscall(libc::SYS_gettid) as u32 }
+    // tid noyau gardé par fil : évite un gettid par EnterCriticalSection ou
+    // WaitForSingleObject. Pas lu dans le TEB : un fil créé hors de notre
+    // chemin hérite de la base GS de son créateur, donc de son TEB et de son
+    // tid, et prenait pour sien un mutex tenu par l'autre (témoin Synchro).
+    thread_local! {
+        static TID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let cached = TID.try_with(|c| c.get()).unwrap_or(0);
+    if cached != 0 {
+        return cached;
+    }
+    static ATFORK: std::sync::Once = std::sync::Once::new();
+    ATFORK.call_once(|| {
+        // Après fork, le fil de l'enfant a un autre tid : le cache repart à zéro.
+        extern "C" fn child() {
+            let _ = TID.try_with(|c| c.set(0));
+        }
+        unsafe { libc::pthread_atfork(None, None, Some(child)) };
+    });
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+    let _ = TID.try_with(|c| c.set(tid));
+    tid
 }
 
 impl MutexObject {
@@ -346,6 +370,7 @@ impl MutexObject {
                 owner: owned.then(|| std::thread::current().id()),
                 owner_os: if owned { os_thread_id() } else { 0 },
                 recursion: usize::from(owned),
+                waiters: 0,
             }),
             changed: Condvar::new(),
             shared: std::sync::OnceLock::new(),
@@ -5908,7 +5933,9 @@ fn wait_mutex(m: &MutexObject, timeout: u32) -> u32 {
             timeout - elapsed
         };
         drop(gate);
-        let (next, _) = wait_condvar(&m.changed, s, left);
+        s.waiters += 1;
+        let (mut next, _) = wait_condvar(&m.changed, s, left);
+        next.waiters -= 1;
         drop(next);
     }
 }
@@ -6069,7 +6096,9 @@ fn leave_mutex(m: &MutexObject) -> bool {
     } else {
         s.recursion = 0;
         s.owner = None;
-        m.changed.notify_one();
+        if s.waiters > 0 {
+            m.changed.notify_one();
+        }
         drop(s);
         wake_multi_waiters(m);
     }
@@ -12631,6 +12660,64 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    /// Un fil créé hors de notre chemin hérite de la base GS (donc du TEB)
+    /// de son créateur : son tid de propriétaire de mutex doit rester le sien.
+    #[test]
+    fn tid_de_mutex_propre_a_chaque_fil_meme_avec_gs_herite() {
+        std::thread::spawn(|| {
+            let _teb = crate::process::test_teb();
+            let t = crate::process::teb();
+            let moi = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+            unsafe { *((t + crate::process::TEB_TID) as *mut usize) = moi as usize };
+            assert_eq!(super::os_thread_id(), moi);
+            let (enfant, vu) = std::thread::spawn(|| {
+                (
+                    unsafe { libc::syscall(libc::SYS_gettid) as u32 },
+                    super::os_thread_id(),
+                )
+            })
+            .join()
+            .unwrap();
+            assert_eq!(vu, enfant, "tid du créateur pris pour celui du fil");
+            assert_ne!(vu, moi);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// LeaveCriticalSection ne réveille plus que s'il y a un dormeur : un fil
+    /// bloqué dans EnterCriticalSection doit quand même être réveillé à chaque
+    /// libération, y compris après une libération sans dormeur.
+    #[test]
+    fn section_critique_reveille_le_fil_qui_attend() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static DANS: AtomicU32 = AtomicU32::new(0);
+        let mut cs = Box::new([0u8; 64]);
+        let p = cs.as_mut_ptr() as usize;
+        unsafe {
+            super::initialize_critical_section(p as *mut c_void);
+            // Libération sans dormeur, récursion comprise.
+            super::enter_critical_section(p as *mut c_void);
+            super::enter_critical_section(p as *mut c_void);
+            super::leave_critical_section(p as *mut c_void);
+            super::leave_critical_section(p as *mut c_void);
+            for tour in 0..50u32 {
+                super::enter_critical_section(p as *mut c_void);
+                let fil = std::thread::spawn(move || {
+                    super::enter_critical_section(p as *mut c_void);
+                    DANS.store(tour + 1, Ordering::SeqCst);
+                    super::leave_critical_section(p as *mut c_void);
+                });
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                assert_ne!(DANS.load(Ordering::SeqCst), tour + 1, "section tenue");
+                super::leave_critical_section(p as *mut c_void);
+                fil.join().unwrap();
+                assert_eq!(DANS.load(Ordering::SeqCst), tour + 1, "tour {tour}");
+            }
+            super::delete_critical_section(p as *mut c_void);
+        }
+    }
 
     /// #3117 : SetWaitableTimer appelle sa routine de complétion sur le fil
     /// qui l'a armé, pendant ses attentes alertables, et pas ailleurs ; un
