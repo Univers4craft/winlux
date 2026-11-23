@@ -758,6 +758,88 @@ unsafe extern "win64" fn send_input(n: u32, inputs: *const u8, size: i32) -> u32
     super::saisie::send_input(n, inputs, size)
 }
 
+// --- Crochet du shell (RegisterShellHookWindow) -------------------------------------------
+
+/// Codes HSHELL_* (Learn, ShellProc) envoyés aux fenêtres crochet.
+pub const HSHELL_WINDOWCREATED: usize = 1;
+pub const HSHELL_WINDOWDESTROYED: usize = 2;
+pub const HSHELL_WINDOWACTIVATED: usize = 4;
+pub const HSHELL_REDRAW: usize = 6;
+
+/// Fenêtres inscrites par RegisterShellHookWindow, dans l'ordre d'inscription.
+fn shell_hook_windows() -> &'static Mutex<Vec<usize>> {
+    static W: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// RegisterShellHookWindow : `hwnd` recevra le message enregistré
+/// « SHELLHOOK », wParam = code HSHELL_*, lParam = fenêtre concernée
+/// (Learn). Spotify l'importe en différé et mourait en 0xC06D007F à son
+/// premier appel (#3330). Une fenêtre déjà inscrite ne l'est pas deux fois.
+pub(crate) unsafe extern "win64" fn register_shell_hook_window(hwnd: usize) -> i32 {
+    if !crate::dlls::gui::is_window(hwnd) {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    let mut list = lock(shell_hook_windows());
+    if !list.contains(&hwnd) {
+        list.push(hwnd);
+    }
+    1
+}
+
+/// DeregisterShellHookWindow : FALSE si la fenêtre n'était pas inscrite.
+pub(crate) unsafe extern "win64" fn deregister_shell_hook_window(hwnd: usize) -> i32 {
+    let mut list = lock(shell_hook_windows());
+    let before = list.len();
+    list.retain(|&h| h != hwnd);
+    (list.len() != before) as i32
+}
+
+/// Fenêtre de premier niveau sans propriétaire, seule concernée par
+/// HSHELL_WINDOWCREATED, _WINDOWDESTROYED et _WINDOWACTIVATED (Learn,
+/// ShellProc). Les fenêtres « message seulement » n'en sont pas.
+fn top_level_unowned(hwnd: usize) -> bool {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const GWLP_HWNDPARENT: i32 = -8;
+    if hwnd == 0 || crate::dlls::user32::is_message_only(hwnd) {
+        return false;
+    }
+    let Some(style) = crate::dlls::gui::window_style(hwnd) else {
+        return false;
+    };
+    // SAFETY: lecture d'un champ de fenêtre de Winlux, sans pointeur.
+    style & WS_CHILD == 0
+        && unsafe { crate::dlls::user32::get_window_long_ptr_w(hwnd, GWLP_HWNDPARENT) } == 0
+}
+
+/// Poste `code` aux fenêtres crochet pour la fenêtre `hwnd` du processus.
+/// Les fenêtres des autres processus ne sont pas annoncées : chaque
+/// processus Winlux a sa propre table de fenêtres.
+pub fn notify_shell_hook(code: usize, hwnd: usize) {
+    let targets: Vec<usize> = lock(shell_hook_windows()).clone();
+    if targets.is_empty() || !top_level_unowned(hwnd) {
+        return;
+    }
+    let message = crate::dlls::clipboard::registered_id("SHELLHOOK");
+    for target in targets {
+        if crate::dlls::user32::window_diag() {
+            eprintln!("winlux[fenetre] crochet du shell {code} pour {hwnd:#x} -> {target:#x}");
+        }
+        crate::dlls::gui::post_to_window(
+            target,
+            crate::dlls::gui::Msg::new(target, message, code, hwnd as isize),
+        );
+    }
+}
+
+/// Fenêtre détruite : HSHELL_WINDOWDESTROYED tant qu'elle existe encore,
+/// puis elle quitte la liste des fenêtres crochet si elle y était.
+pub fn shell_hook_window_destroyed(hwnd: usize) {
+    notify_shell_hook(HSHELL_WINDOWDESTROYED, hwnd);
+    lock(shell_hook_windows()).retain(|&h| h != hwnd);
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "SetMenuInfo" => fn set_menu_info, "GetMenuInfo" => fn get_menu_info,
@@ -783,6 +865,8 @@ pub fn exports() -> crate::dlls::Exports {
         "LoadCursorFromFileA" => fn load_cursor_from_file_a, "GetLastInputInfo" => fn get_last_input_info,
         "WaitForInputIdle" => fn wait_for_input_idle, "ExitWindowsEx" => fn exit_windows_ex,
         "keybd_event" => fn keybd_event, "SendInput" => fn send_input,
+        "RegisterShellHookWindow" => fn register_shell_hook_window,
+        "DeregisterShellHookWindow" => fn deregister_shell_hook_window,
     }
 }
 
