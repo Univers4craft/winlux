@@ -3060,6 +3060,8 @@ pub fn exports() -> crate::dlls::Exports {
         "strlen" => fn crate::dlls::msvcrt::strlen,
         "wcslen" => fn crate::dlls::crt::wcslen,
         "memcpy" => fn crate::dlls::msvcrt::memcpy,
+        // Recherché juste après memcpy par le même courtier (Acrobat, i20, #3367).
+        "_wcsnicmp" => fn crate::dlls::crt_ucrt::wcsnicmp,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
         "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
@@ -3379,6 +3381,201 @@ mod process_information_tests {
     }
 }
 
+/// Fonctions de la CRT que ntdll.dll exporte sous Windows x64 : noms de
+/// mingw-w64 `mingw-w64-crt/lib-common/ntdllcrt.def.in` (domaine public),
+/// sans les entrées propres à i386/ARM ni les données (`_fltused`). Ceux que
+/// notre CRT sert vont dans la table d'exports de l'image ntdll
+/// (`dlls::add_ntdll_crt`) : un programme qui lit la table lui-même (courtier
+/// du bac à sable Chromium, BSD) les trouve, comme GetProcAddress les
+/// trouvait déjà par le repli vers msvcrt (#3389). Triée.
+pub const CRT_REEXPORTS: &[&str] = &[
+    "__C_specific_handler",
+    "__isascii",
+    "__iscsym",
+    "__iscsymf",
+    "__misaligned_access",
+    "__toascii",
+    "_atoi64",
+    "_errno",
+    "_i64toa",
+    "_i64toa_s",
+    "_i64tow",
+    "_i64tow_s",
+    "_itoa",
+    "_itoa_s",
+    "_itow",
+    "_itow_s",
+    "_lfind",
+    "_local_unwind",
+    "_ltoa",
+    "_ltoa_s",
+    "_ltow",
+    "_ltow_s",
+    "_makepath_s",
+    "_memccpy",
+    "_memicmp",
+    "_setjmp",
+    "_setjmpex",
+    "_snprintf",
+    "_snprintf_s",
+    "_snscanf_s",
+    "_snwprintf",
+    "_snwprintf_s",
+    "_snwscanf_s",
+    "_splitpath",
+    "_splitpath_s",
+    "_strcmpi",
+    "_stricmp",
+    "_strlwr",
+    "_strlwr_s",
+    "_strnicmp",
+    "_strnset_s",
+    "_strset_s",
+    "_strupr",
+    "_strupr_s",
+    "_swprintf",
+    "_tolower",
+    "_toupper",
+    "_ui64toa",
+    "_ui64toa_s",
+    "_ui64tow",
+    "_ui64tow_s",
+    "_ultoa",
+    "_ultoa_s",
+    "_ultow",
+    "_ultow_s",
+    "_vscprintf",
+    "_vscwprintf",
+    "_vsnprintf",
+    "_vsnprintf_s",
+    "_vsnwprintf",
+    "_vsnwprintf_s",
+    "_vswprintf",
+    "_wcsicmp",
+    "_wcslwr",
+    "_wcslwr_s",
+    "_wcsnicmp",
+    "_wcsnset_s",
+    "_wcsset_s",
+    "_wcstoi64",
+    "_wcstoui64",
+    "_wcsupr",
+    "_wcsupr_s",
+    "_wmakepath_s",
+    "_wsplitpath_s",
+    "_wtoi",
+    "_wtoi64",
+    "_wtol",
+    "abs",
+    "atan",
+    "atan2",
+    "atoi",
+    "atol",
+    "bsearch",
+    "bsearch_s",
+    "ceil",
+    "cos",
+    "fabs",
+    "floor",
+    "isalnum",
+    "isalpha",
+    "iscntrl",
+    "isdigit",
+    "isgraph",
+    "islower",
+    "isprint",
+    "ispunct",
+    "isspace",
+    "isupper",
+    "iswalnum",
+    "iswalpha",
+    "iswascii",
+    "iswctype",
+    "iswdigit",
+    "iswgraph",
+    "iswlower",
+    "iswprint",
+    "iswspace",
+    "iswxdigit",
+    "isxdigit",
+    "labs",
+    "log",
+    "longjmp",
+    "mbstowcs",
+    "memchr",
+    "memcmp",
+    "memcpy",
+    "memcpy_s",
+    "memmove",
+    "memmove_s",
+    "memset",
+    "pow",
+    "qsort",
+    "qsort_s",
+    "sin",
+    "sprintf",
+    "sprintf_s",
+    "sqrt",
+    "sscanf",
+    "sscanf_s",
+    "strcat",
+    "strcat_s",
+    "strchr",
+    "strcmp",
+    "strcpy",
+    "strcpy_s",
+    "strcspn",
+    "strlen",
+    "strlwr",
+    "strncat",
+    "strncat_s",
+    "strncmp",
+    "strncpy",
+    "strncpy_s",
+    "strnlen",
+    "strpbrk",
+    "strrchr",
+    "strspn",
+    "strstr",
+    "strtok_s",
+    "strtol",
+    "strtoul",
+    "swprintf",
+    "swprintf_s",
+    "swscanf_s",
+    "tan",
+    "tolower",
+    "toupper",
+    "towlower",
+    "towupper",
+    "vsprintf",
+    "vsprintf_s",
+    "vswprintf_s",
+    "wcscat",
+    "wcscat_s",
+    "wcschr",
+    "wcscmp",
+    "wcscpy",
+    "wcscpy_s",
+    "wcscspn",
+    "wcslen",
+    "wcslwr",
+    "wcsncat",
+    "wcsncat_s",
+    "wcsncmp",
+    "wcsncpy",
+    "wcsncpy_s",
+    "wcsnlen",
+    "wcspbrk",
+    "wcsrchr",
+    "wcsspn",
+    "wcsstr",
+    "wcstok_s",
+    "wcstol",
+    "wcstombs",
+    "wcstoul",
+];
+
 #[cfg(test)]
 mod ouvertures_tests {
     use super::*;
@@ -3436,6 +3633,80 @@ mod ouvertures_tests {
         ] {
             assert!(e.contains_key(name), "{name} absent de la table de ntdll");
         }
+    }
+
+    /// #3389 : toute la CRT que ntdll exporte sous Windows et que notre CRT
+    /// sert est dans la table d'exports de l'image ntdll, lue comme le
+    /// courtier du bac à sable de Chromium la lit ; ce qui n'est servi
+    /// nulle part n'y est pas (pas d'export inventé).
+    #[test]
+    fn crt_de_ntdll_dans_l_image_3389() {
+        assert!(super::CRT_REEXPORTS.windows(2).all(|w| w[0] < w[1]));
+        let base = crate::dlls::module_handle("ntdll").expect("ntdll");
+        let rd32 = |a: usize| unsafe { (a as *const u32).read_unaligned() } as usize;
+        let pe = base + rd32(base + 0x3c);
+        assert_eq!(rd32(pe), 0x4550);
+        let dir = base + rd32(pe + 24 + 112);
+        let noms: Vec<&[u8]> = (0..rd32(dir + 24))
+            .map(|i| {
+                let p = base + rd32(base + rd32(dir + 32) + 4 * i);
+                unsafe { std::ffi::CStr::from_ptr(p as *const std::ffi::c_char) }.to_bytes()
+            })
+            .collect();
+        let dans_l_image = |n: &str| noms.binary_search(&n.as_bytes()).is_ok();
+        // Acrobat, passe i21 : cherché juste après _wcsnicmp.
+        assert!(
+            dans_l_image("swprintf_s"),
+            "ntdll!swprintf_s absent de l'image"
+        );
+        for &n in super::CRT_REEXPORTS {
+            let servi = crate::dlls::lookup("msvcrt", n).is_some();
+            assert_eq!(
+                dans_l_image(n),
+                servi,
+                "ntdll!{n} : image et repli divergent"
+            );
+        }
+    }
+
+    /// #3367 : `_wcsnicmp` est dans la table d'exports de l'image ntdll, lue
+    /// comme le courtier du bac à sable de Chromium la lit (en-têtes PE,
+    /// répertoire d'exports, recherche par nom) et non par GetProcAddress
+    /// ni par le repli de `lookup` vers la CRT, qui le trouvaient déjà.
+    #[test]
+    fn wcsnicmp_dans_l_image_ntdll_3367() {
+        let base = crate::dlls::module_handle("ntdll").expect("ntdll");
+        let rd32 = |a: usize| unsafe { (a as *const u32).read_unaligned() } as usize;
+        let rd16 = |a: usize| unsafe { (a as *const u16).read_unaligned() } as usize;
+        assert_eq!(rd16(base), 0x5A4D);
+        let pe = base + rd32(base + 0x3c);
+        assert_eq!(rd32(pe), 0x4550);
+        let dir = base + rd32(pe + 24 + 112);
+        let noms: Vec<&[u8]> = (0..rd32(dir + 24))
+            .map(|i| {
+                let p = base + rd32(base + rd32(dir + 32) + 4 * i);
+                unsafe { std::ffi::CStr::from_ptr(p as *const std::ffi::c_char) }.to_bytes()
+            })
+            .collect();
+        // La table est triée : le courtier y cherche par dichotomie.
+        assert!(
+            noms.windows(2).all(|w| w[0] < w[1]),
+            "table de ntdll non triée"
+        );
+        for name in ["_wcsnicmp", "_strnicmp", "memcpy", "wcslen", "strlen"] {
+            assert!(
+                noms.binary_search(&name.as_bytes()).is_ok(),
+                "ntdll!{name} absent de la table de l'image"
+            );
+        }
+        // Et le nom mène à la fonction : comparaison sans casse bornée.
+        let a: Vec<u16> = "AbCdX\0".encode_utf16().collect();
+        let b: Vec<u16> = "aBcDy\0".encode_utf16().collect();
+        let f = crate::dlls::lookup("ntdll", "_wcsnicmp").expect("_wcsnicmp");
+        let f: unsafe extern "win64" fn(*const u16, *const u16, usize) -> i32 =
+            unsafe { std::mem::transmute(f) };
+        assert_eq!(unsafe { f(a.as_ptr(), b.as_ptr(), 4) }, 0);
+        assert!(unsafe { f(a.as_ptr(), b.as_ptr(), 5) } < 0);
     }
 
     #[test]

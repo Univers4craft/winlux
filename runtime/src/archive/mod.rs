@@ -279,7 +279,12 @@ pub fn extract_to(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Prog
                 out.flush()?;
                 Ok(())
             } else {
-                tar::extract(BufReader::new(gz), dest, &dummy)
+                // tar s'arrête aux blocs nuls de fin : on lit la suite jusqu'au
+                // bout pour que gzip contrôle sa somme CRC et sa taille (#3324).
+                let mut rd = BufReader::new(gz);
+                tar::extract(&mut rd, dest, &dummy)?;
+                std::io::copy(&mut rd, &mut std::io::sink())?;
+                Ok(())
             }
         }
         Format::TarBz2
@@ -299,7 +304,14 @@ pub fn extract_to(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Prog
                     .map_err(ArcError::from)
                     .and_then(|_| w.flush().map_err(ArcError::from))
             } else {
-                tar::extract(BufReader::new(out), dest, &dummy)
+                // Lire jusqu'au bout : l'outil contrôle sa somme à la fin du
+                // flux, après les blocs nuls de tar (#3324).
+                let mut rd = BufReader::new(out);
+                tar::extract(&mut rd, dest, &dummy).and_then(|()| {
+                    std::io::copy(&mut rd, &mut std::io::sink())
+                        .map(|_| ())
+                        .map_err(ArcError::from)
+                })
             };
             let _ = feeder.join();
             let st = child.wait()?;
@@ -1025,6 +1037,42 @@ mod tests {
                 .as_deref(),
             Some("Bonjour")
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Données pseudo-aléatoires (incompressibles) reproductibles.
+    fn bruit(n: usize) -> Vec<u8> {
+        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
+    }
+
+    /// Un .tar.gz abîmé au milieu ne s'extrait pas « avec succès » : la
+    /// somme CRC de fin de gzip est contrôlée même quand tar s'arrête avant.
+    #[test]
+    fn tar_gz_abime_refuse() {
+        let d = tmp("targz-abime");
+        let src = d.join("dossier");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("gros.bin"), bruit(300_000)).unwrap();
+        let arc = d.join("a.tar.gz");
+        create(&arc, &[src], None, &Progress::default()).unwrap();
+        let mut b = std::fs::read(&arc).unwrap();
+        let mid = b.len() / 2;
+        b[mid] ^= 0xFF;
+        std::fs::write(&arc, &b).unwrap();
+        let r = extract_to(&arc, &d.join("out"), None, &Progress::default());
+        eprintln!(
+            "tar.gz abîmé à l'octet {mid} : {:?}",
+            r.as_ref().map_err(|e| e.to_string())
+        );
+        assert!(r.is_err(), "archive abîmée extraite sans erreur");
         let _ = std::fs::remove_dir_all(&d);
     }
 

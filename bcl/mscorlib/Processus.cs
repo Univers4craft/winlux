@@ -84,6 +84,9 @@ namespace System.Diagnostics
         // 0 : terminé ; 258 : délai écoulé.
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int Attendre(long h, int ms);
+        // WaitForInputIdle de user32 : 0 prêt, 258 délai écoulé, -1 échec (#3287).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int AttendreSaisie(long h, int ms);
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern string Image(long h);
         // [handle, pid, entrée, sortie, erreurs] ou [-erreur].
@@ -380,8 +383,21 @@ namespace System.Diagnostics
             return HasExited;
         }
 
-        public bool WaitForInputIdle() { return true; }
-        public bool WaitForInputIdle(int milliseconds) { return true; }
+        // MS Learn, « Process.WaitForInputIdle » : attend que le processus
+        // attende une saisie ; false au délai ; InvalidOperationException
+        // s'il n'a pas d'interface graphique, s'est terminé ou si aucun
+        // processus n'est associé (#3287).
+        public bool WaitForInputIdle() { return WaitForInputIdle(-1); }
+
+        public bool WaitForInputIdle(int milliseconds)
+        {
+            if (milliseconds < -1) throw new ArgumentOutOfRangeException("milliseconds");
+            long h = Poignee();
+            int r = ProcessusNatif.AttendreSaisie(h, milliseconds);
+            if (r == 0) return true;
+            if (r == 258) return false;
+            throw new InvalidOperationException("WaitForInputIdle failed.  This could be because the process does not have a graphical interface.");
+        }
         public void Refresh() { }
         public bool CloseMainWindow() { return false; }
 
