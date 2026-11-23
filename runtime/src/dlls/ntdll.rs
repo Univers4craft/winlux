@@ -2661,6 +2661,32 @@ pub unsafe extern "win64" fn nt_open_event(
     STATUS_SUCCESS
 }
 
+/// `NtOpenMutant` : ouverture d'un mutex nommé (#3252). Exportée par ntdll
+/// (mingw-w64, ntdll.def.in). Learn ne la documente pas. **Inférence
+/// nommée** : elle a la forme de ZwOpenEvent (Learn, wdm.h) et l'effet
+/// d'OpenMutexW sur le nom désigné par OBJECT_ATTRIBUTES.
+pub unsafe extern "win64" fn nt_open_mutant(
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let Some(nt) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let mut w: Vec<u16> = object_name_for_kernel32(&nt).encode_utf16().collect();
+    w.push(0);
+    let h = crate::dlls::kernel32_legacy::open_mutex_w(access, oa_inherit(attrs), w.as_ptr());
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+    *handle = h;
+    STATUS_SUCCESS
+}
+
 /// `NtQueryFullAttributesFile` : FILE_NETWORK_OPEN_INFORMATION (56 octets).
 pub unsafe extern "win64" fn nt_query_full_attributes_file(
     attrs: *const c_void,
@@ -2842,6 +2868,7 @@ pub fn exports() -> crate::dlls::Exports {
         "NtOpenThreadToken" => fn nt_open_thread_token,
         "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
         "NtOpenEvent" => fn nt_open_event,
+        "NtOpenMutant" => fn nt_open_mutant,
         "NtRaiseHardError" => fn nt_raise_hard_error,
     }
 }
@@ -3161,6 +3188,38 @@ mod ouvertures_tests {
 
     /// Fonctions que le bac à sable de Chromium intercepte dans chaque enfant
     /// (#767) : toutes exportées par ntdll, avec un relais de service.
+    /// NtOpenMutant ouvre un mutex nommé créé par CreateMutexW, et rend
+    /// STATUS_OBJECT_NAME_NOT_FOUND pour un nom absent (#3252).
+    #[test]
+    fn nt_open_mutant_ouvre_un_mutex_nomme_3252() {
+        let nom = format!("winlux-3252-{}", std::process::id());
+        let w: Vec<u16> = nom.encode_utf16().chain([0]).collect();
+        let cree = unsafe { crate::dlls::kernel32::create_mutex_w(0, 0, w.as_ptr()) };
+        assert_ne!(cree, 0);
+        let ouvrir = |nt: &str| -> (i32, usize) {
+            let buf: Vec<u16> = nt.encode_utf16().collect();
+            let mut us = [0u8; 16];
+            let octets = (buf.len() * 2) as u16;
+            us[0..2].copy_from_slice(&octets.to_le_bytes());
+            us[2..4].copy_from_slice(&octets.to_le_bytes());
+            us[8..16].copy_from_slice(&(buf.as_ptr() as u64).to_le_bytes());
+            let mut oa = [0u8; 0x30];
+            oa[0..4].copy_from_slice(&0x30u32.to_le_bytes());
+            oa[0x10..0x18].copy_from_slice(&(us.as_ptr() as u64).to_le_bytes());
+            let mut h = 0usize;
+            let st = unsafe { nt_open_mutant(&mut h, 0x0010_0000, oa.as_ptr().cast()) };
+            (st, h)
+        };
+        let (st, h) = ouvrir(&format!("\\Sessions\\1\\BaseNamedObjects\\{nom}"));
+        eprintln!("      NtOpenMutant({nom}) = {st:#x}, handle {h:#x}");
+        assert_eq!(st, STATUS_SUCCESS);
+        assert_ne!(h, 0);
+        let (absent, h2) = ouvrir("\\Sessions\\1\\BaseNamedObjects\\winlux-3252-absent");
+        assert_eq!(absent, STATUS_OBJECT_NAME_NOT_FOUND);
+        assert_eq!(h2, 0);
+        assert!(exports().contains_key("NtOpenMutant"));
+    }
+
     #[test]
     fn interceptions_de_base_du_bac_a_sable() {
         let e = &crate::dlls::builtins()
@@ -3188,6 +3247,7 @@ mod ouvertures_tests {
             "NtOpenKeyEx",
             "NtCreateEvent",
             "NtOpenEvent",
+            "NtOpenMutant",
             "NtCreateSection",
         ] {
             assert!(e.contains_key(name), "{name} absent de ntdll");
