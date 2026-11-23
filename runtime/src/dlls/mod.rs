@@ -122,6 +122,7 @@ pub mod ftp_apps;
 pub mod gamemode;
 pub mod games_win32;
 pub mod gdi32;
+pub mod gdi32_bounds;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
@@ -789,6 +790,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_bounds::exports());
                     for (name, addr) in user32_releve::gdi32_exports() {
                         e.entry(name).or_insert(addr);
                     }

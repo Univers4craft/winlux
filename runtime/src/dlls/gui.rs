@@ -1504,6 +1504,7 @@ pub fn window_from_dc(hdc: usize) -> usize {
 pub fn free_dc(hdc: usize) {
     lock(dcs()).remove(&hdc);
     lock(clips()).remove(&hdc);
+    super::gdi32_bounds::forget_dc(hdc);
 }
 
 // ---------- Découpage (clipping) des DC ----------
