@@ -151,14 +151,19 @@ def set_desktop_names(names):
     return True
 
 
-def new_desktop():
+def add_desktop():
+    """Ajoute un bureau nommé « Bureau N » ; rend son numéro."""
     count = len(desktops()) or 1
     names = (desktop_names() + [""] * count)[:count]
     _run(["wmctrl", "-n", str(count + 1)])
-    # Sans nom, openbox appelle le bureau « Espace de travail N » (sa traduction),
-    # ce qu'affichent sa bulle de changement de bureau et les autres outils.
+    # Sans nom, openbox appelle le bureau « desktop N » ou « Espace de travail N »,
+    # ce qu'affichent sa bulle de changement de bureau et les autres outils (#3350).
     set_desktop_names(names + [_t("Bureau {n}").format(n=count + 1)])
-    _run(["wmctrl", "-s", str(count)])
+    return count
+
+
+def new_desktop():
+    _run(["wmctrl", "-s", str(add_desktop())])
     return 0
 
 
@@ -187,6 +192,54 @@ def rename_desktop(number, name):
     names = (desktop_names() + [""] * count)[:count]
     names[number] = name.strip()
     return set_desktop_names(names)
+
+
+class ClientListWatch:
+    """Connexion X à part qui signale chaque changement de _NET_CLIENT_LIST
+    sur la fenêtre racine : une fenêtre ouverte ou fermée pendant que la vue
+    est affichée (#3347). Rien ne tourne entre deux changements."""
+    PROPERTY_NOTIFY = 28
+    PROPERTY_CHANGE_MASK = 1 << 22
+
+    def __init__(self):
+        self.x11 = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+        x11 = self.x11
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x11.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+        x11.XConnectionNumber.argtypes = [ctypes.c_void_p]
+        x11.XPending.argtypes = [ctypes.c_void_p]
+        x11.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        self.display = x11.XOpenDisplay(None)
+        if not self.display: raise OSError("XOpenDisplay")
+        self.atom = x11.XInternAtom(self.display, b"_NET_CLIENT_LIST", 0)
+        x11.XSelectInput(self.display, x11.XDefaultRootWindow(self.display), self.PROPERTY_CHANGE_MASK)
+        x11.XFlush(self.display)
+        self.event = (ctypes.c_long * 24)()  # XEvent : 192 octets
+
+    def fileno(self):
+        return self.x11.XConnectionNumber(self.display)
+
+    def changed(self):
+        """Vide la file ; vrai si _NET_CLIENT_LIST a changé."""
+        changed = False
+        while self.x11.XPending(self.display):
+            self.x11.XNextEvent(self.display, ctypes.byref(self.event))
+            # XPropertyEvent : type (int), serial, send_event, display, window, atom.
+            if self.event[0] & 0xFFFFFFFF == self.PROPERTY_NOTIFY and self.event[5] == self.atom:
+                changed = True
+        return changed
+
+    def close(self):
+        if self.display:
+            self.x11.XCloseDisplay(self.display)
+            self.display = None
 
 
 # ── Vue des tâches (GTK) ────────────────────────────────────────────────────
@@ -341,13 +394,42 @@ def run_view():
             self.connect("map-event", lambda *_: GLib.idle_add(self.show_focus))
             self.connect("button-release-event", lambda *_: self.close_view())
             self.refresh()
+            # Fenêtres ouvertes ou fermées pendant que la vue est affichée (#3347).
+            try:
+                self.watch = ClientListWatch()
+                GLib.io_add_watch(self.watch.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN, self.clients_changed)
+            except OSError:
+                self.watch = None
+
+        def clients_changed(self, *_):
+            if self.watch is not None and self.watch.changed() and not getattr(self, "pending", False):
+                # Une rafale (programme qui ouvre trois fenêtres) ne refait la vue qu'une fois.
+                self.pending = True
+                GLib.timeout_add(80, self.refresh_clients)
+            return True
+
+        def refresh_clients(self):
+            if self.dragging or Gtk.grab_get_current() is not None:
+                return True  # glisser ou menu en cours : la vue sera refaite après
+            self.pending = False
+            desks = desktops()
+            current = next((number for number, _, on in desks if on), 0)
+            if [item[0] for item in self.listed(current)] != getattr(self, "shown_ids", None):
+                self.refresh()
+            return False
+
+        def listed(self, current):
+            shown = [item for item in on_desktop(windows(), current) if item[2] not in ("xfce4-panel", "xfdesktop")]
+            return [item for item in shown if int(item[0], 16) != self.own_id()]
 
         def refresh(self):
+            focused = self.get_focus()
+            focused = getattr(focused.get_child(), "window_id", None) if isinstance(focused, Gtk.FlowBoxChild) else None
             for child in self.flow.get_children() + self.desks.get_children(): child.destroy()
             desks = desktops() or [(0, display_name(0, ""), True)]
             current = next((number for number, _, on in desks if on), 0)
-            shown = [item for item in on_desktop(windows(), current) if item[2] not in ("xfce4-panel", "xfdesktop")]
-            shown = [item for item in shown if int(item[0], 16) != self.own_id()]
+            shown = self.listed(current)
+            self.shown_ids = [item[0] for item in shown]
             if not shown:
                 label = Gtk.Label(label=_t("Aucune fenêtre ouverte sur ce bureau."))
                 label.get_style_context().add_class("hint")
@@ -368,7 +450,8 @@ def run_view():
             add.connect("clicked", lambda *_: (new_desktop(), GLib.timeout_add(150, self.refresh_later)))
             self.desks.pack_start(add, False, False, 0)
             self.show_all()
-            first = self.flow.get_child_at_index(0)
+            # La carte qui avait le focus le garde quand la vue est refaite.
+            first = self.flow.get_child_at_index(self.shown_ids.index(focused) if focused in self.shown_ids else 0)
             if shown and first is not None:
                 first.grab_focus()
             elif getattr(self, "current_desk", None) is not None:
@@ -455,9 +538,7 @@ def run_view():
                 GLib.timeout_add(150, self.refresh_later)
 
         def move_to_new(self, window):
-            count = len(desktops()) or 1
-            _run(["wmctrl", "-n", str(count + 1)])
-            _run(["wmctrl", "-i", "-r", window, "-t", str(count)])
+            move_window(window, add_desktop())
             GLib.timeout_add(150, self.refresh_later)
 
         def desk_card(self, number, name, on, count):
