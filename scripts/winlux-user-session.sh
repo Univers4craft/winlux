@@ -89,14 +89,20 @@ if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$
 
 # Gestionnaire de fenêtres lancé tout de suite : il démarre pendant le son
 # et le service de fichiers, attendu seulement avant la barre des tâches.
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
 rc="$HOME/.config/openbox/rc.xml"
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
 if test -f "$rc"; then
-    /usr/bin/openbox --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
 else
-    /usr/bin/openbox --sm-disable >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable >"$logs/window-manager.log" 2>&1 &
 fi
 wm_pid=$!
 pids="$pids $wm_pid"
+# Une fenêtre affichée pendant le démarrage d'openbox ne doit pas attendre un
+# autre événement X (#3190) : réveils tant qu'il démarre.
+if test -x /usr/bin/winlux-wm-reveil; then (/usr/bin/winlux-wm-reveil "$wm_pid" </dev/null >/dev/null 2>&1 &); fi
 # Son (#115) : PipeWire du compte, un flux par programme (volume par appli).
 if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber && ! pgrep -u "$uid" -x pipewire >/dev/null 2>&1; then
     start pipewire.log /usr/bin/pipewire
@@ -468,9 +474,23 @@ while kill -0 "$wm_pid" 2>/dev/null; do
                 done
                 sleep 1
                 kill -USR1 "$compositor_pid" 2>/dev/null || true
+                # Fond Aurore animé (#3079), seulement s'il est activé dans Paramètres.
+                if test -x /usr/bin/winlux-fond-anime; then /usr/bin/winlux-fond-anime ensure; fi
             ) </dev/null >/dev/null 2>&1 &
         fi
-        while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do sleep 1; done
+        # Attente sans « sleep 1 » à chaque seconde (#3297) : avec un piège
+        # sur SIGCHLD, « wait » rend la main dès qu'un enfant se termine, le
+        # bureau ou le gestionnaire de fenêtres (POSIX, wait : un signal piégé
+        # interrompt l'attente). Un enfant qui finirait entre le test et le
+        # wait est rattrapé par un réveil toutes les 10 s (un sleep, pas dix).
+        trap : CHLD
+        ticker=
+        while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do
+            kill -0 "$ticker" 2>/dev/null || { sleep 10 & ticker=$!; }
+            wait "$desktop_pid" 2>/dev/null
+        done
+        trap - CHLD
+        kill "$ticker" 2>/dev/null || true
         kill "$desktop_pid" 2>/dev/null || true
         wait "$desktop_pid" 2>/dev/null || true
     else

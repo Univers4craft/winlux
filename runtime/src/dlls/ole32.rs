@@ -991,6 +991,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::global_options::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Application par défaut d'une extension (IApplicationAssociationRegistration, #3295).
+        if let Some(hr) = super::teams_win32::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Serveur en processus inscrit au registre (InprocServer32, #16).
         if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
             if let Some(hr) = create_from_registry(&guid, &iid, out) {

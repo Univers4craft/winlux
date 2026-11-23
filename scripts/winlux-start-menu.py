@@ -468,6 +468,10 @@ class Start(Gtk.Application):
         # calculé en arrière-plan à chaque ouverture (#685).
         self.open_category = None
         self.side_generation = 0
+        # Catalogue des applications : relu seulement quand GIO signale un
+        # lanceur ajouté, retiré ou modifié (#3121), plus à chaque ouverture.
+        self.apps_stale = True
+        self.app_monitor = None
         self.side_data = None
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
@@ -498,19 +502,17 @@ class Start(Gtk.Application):
         # dernière ouverture : relues à chaque ouverture.
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): pass
-        # Services de la session livrés avec une entrée de menu par leur paquet.
-        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
-                     if listed(app) and app.get_id() not in SESSION_SERVICES}
-        # Textes repliés préparés une fois le menu dessiné (priorité « au
-        # repos », après l'affichage) : la première frappe ne les calcule plus.
-        GLib.idle_add(warm_index, list(self.apps.values()))
+        if self.apps_stale or not hasattr(self, "apps"): self.load_apps()
         changed = auto_pin(self.state, self.apps)
         changed |= note_new_apps(self.state, self.apps, time.time())
         if changed: self.save()
         self.all_apps = False
         self.open_category = None
-        self.search.set_text("")
-        self.render()
+        # La liste est construite une seule fois, par place() plus bas : vider
+        # une recherche restée tapée ne la reconstruit pas, et un render() ici
+        # était refait aussitôt par place(), pour rien (#3217).
+        with self.search.handler_block(self.search_changed):
+            self.search.set_text("")
         # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
         # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
         # premier appui et se trouvait en partie dessous.
@@ -544,10 +546,38 @@ class Start(Gtk.Application):
         affichage des widgets (styles, tailles, fenêtre X). Laissé au
         premier appui, il en coûtait 36 à 52 ms contre 4 à 11 ensuite, et ce
         premier appui préchargé n'était pas deux fois plus rapide qu'un
-        lancement à froid (#2834)."""
+        lancement à froid (#2834). Le catalogue des applications aussi."""
         self.window.get_child().show_all()
         self.window.realize()
         self.window.get_preferred_size()
+        self.load_apps()
+
+    def load_apps(self):
+        """Lit le catalogue des applications (Gio.AppInfo.get_all : 13 à 19 ms
+        médiane, jusqu'à 39 ms, sur le PC de damien, à chaque ouverture
+        jusqu'ici, #3121). Relu ensuite seulement sur le signal « changed »
+        de Gio.AppInfoMonitor : lanceur installé, retiré ou modifié."""
+        if self.app_monitor is None:
+            # Le moniteur ne signale rien tant que get_all n'a pas été appelé
+            # une fois : créé juste avant la première lecture.
+            self.app_monitor = Gio.AppInfoMonitor.get()
+            self.app_monitor.connect("changed", self.apps_changed)
+        self.apps_stale = False
+        # Services de la session livrés avec une entrée de menu par leur paquet.
+        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
+                     if listed(app) and app.get_id() not in SESSION_SERVICES}
+        # Textes repliés préparés au repos, après l'affichage : la première
+        # frappe ne les calcule plus.
+        GLib.idle_add(warm_index, list(self.apps.values()))
+        return False
+
+    def apps_changed(self, _monitor):
+        """Catalogue changé : relu au repos si le menu est caché, pour que
+        l'ouverture suivante n'ait rien à relire ; sinon à la prochaine
+        ouverture (la liste affichée ne bouge pas sous le pointeur)."""
+        self.apps_stale = True
+        if not (self.window and self.window.get_visible()):
+            GLib.idle_add(lambda: self.load_apps() if self.apps_stale else False)
 
     def workarea(self):
         display = self.window.get_display()
@@ -671,7 +701,7 @@ class Start(Gtk.Application):
         self.body = body
         self.left.pack_start(body, True, True, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
-        self.search.connect("search-changed", lambda *_: self.render())
+        self.search_changed = self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         search_row = Gtk.Box(spacing=8)
         search_row.pack_start(self.search, True, True, 0)

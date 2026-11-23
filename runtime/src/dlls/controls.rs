@@ -32,6 +32,7 @@ const WM_ERASEBKGND: u32 = 0x0014;
 const WM_SETFONT: u32 = 0x0030;
 const WM_GETFONT: u32 = 0x0031;
 const WM_DRAWITEM: u32 = 0x002B;
+const WM_MEASUREITEM: u32 = 0x002C;
 const WM_NCCREATE: u32 = 0x0081;
 const WM_NCDESTROY: u32 = 0x0082;
 const WM_GETDLGCODE: u32 = 0x0087;
@@ -743,6 +744,45 @@ struct DrawItemStruct {
     hdc: usize,
     rc_item: Rect,
     item_data: usize,
+}
+
+#[repr(C)]
+struct MeasureItemStruct {
+    ctl_type: u32,
+    ctl_id: u32,
+    item_id: u32,
+    item_width: u32,
+    item_height: u32,
+    item_data: usize,
+}
+
+/// WM_MEASUREITEM au propriétaire d'une liste dessinée par lui : rend la
+/// hauteur qu'il a choisie, `default` s'il n'a rien changé.
+fn measure_item(hwnd: usize, ctl_type: u32, item: u32, default: i32) -> i32 {
+    let mut mis = MeasureItemStruct {
+        ctl_type,
+        ctl_id: user32::control_id(hwnd) as u32,
+        item_id: item,
+        item_width: client(hwnd).width().max(0) as u32,
+        item_height: default.max(1) as u32,
+        item_data: 0,
+    };
+    send(
+        parent(hwnd),
+        WM_MEASUREITEM,
+        user32::control_id(hwnd) as usize,
+        &mut mis as *mut MeasureItemStruct as isize,
+    );
+    if user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] WM_MEASUREITEM {hwnd:#x} -> parent {:#x} élément {} : {} -> {}",
+            parent(hwnd),
+            item as i32,
+            default,
+            mis.item_height
+        );
+    }
+    (mis.item_height as i32).max(1)
 }
 
 fn draw_item(
@@ -3555,12 +3595,30 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
             if kind == Kind::ComboBox {
                 let font = font_of(&snapshot(hwnd).unwrap_or(Ctl::new(kind, true)));
                 let full = client(hwnd).height();
-                let closed = (line_height(font) + 10).max(22);
+                let mut closed = (line_height(font) + 10).max(22);
+                // Combo dessinée par son propriétaire : il donne lui-même la
+                // hauteur du champ et celle des éléments par WM_MEASUREITEM,
+                // envoyé à la création (Learn, WM_MEASUREITEM). Sans cela, le
+                // champ suivait notre police et non la hauteur que WinForms
+                // attend : la boîte Redimensionner de Paint.NET replaçait ses
+                // listes sans fin entre 17 et 25 pixels (#3222).
+                if owner_draw_list(hwnd) {
+                    let item = line_height(font) + 4;
+                    // Champ : itemID (UINT)-1, « combo edit field » (Learn).
+                    let field = measure_item(hwnd, 3, u32::MAX, closed - 6);
+                    closed = field.clamp(1, 200) + 6;
+                    let h = measure_item(hwnd, 3, 0, item);
+                    with_ctl(hwnd, |c| c.item_h = h.clamp(1, 255));
+                }
                 with_ctl(hwnd, |c| {
                     c.full_h = full;
                     c.closed_h = closed;
                 });
-                if combo_type(hwnd) != CBS_SIMPLE && full > closed {
+                // Fermée, une liste déroulante a toujours la hauteur de son
+                // champ, même demandée plus basse : la hauteur lue juste
+                // après CreateWindowEx doit être celle que SetWindowPos
+                // imposera ensuite (#3222).
+                if combo_type(hwnd) != CBS_SIMPLE && full != closed {
                     if let Some(rect) = gui::window_rect(hwnd) {
                         gui::set_window_rect(
                             hwnd,
@@ -3571,6 +3629,13 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
                         );
                     }
                 }
+            }
+            if kind == Kind::ListBox && style(hwnd) & LBS_OWNERDRAWFIXED != 0 {
+                // Liste à hauteur fixe dessinée par son propriétaire : un seul
+                // WM_MEASUREITEM à la création (Learn, WM_MEASUREITEM).
+                let font = font_of(&snapshot(hwnd).unwrap_or(Ctl::new(kind, true)));
+                let h = measure_item(hwnd, 2, 0, line_height(font) + 4);
+                with_ctl(hwnd, |c| c.item_h = h.clamp(1, 255));
             }
             if kind == Kind::Edit {
                 let n = title(hwnd).chars().count();
