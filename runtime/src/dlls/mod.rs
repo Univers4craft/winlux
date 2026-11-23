@@ -122,6 +122,7 @@ pub mod ftp_apps;
 pub mod gamemode;
 pub mod games_win32;
 pub mod gdi32;
+pub mod gdi32_bounds;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
@@ -292,6 +293,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod taskschd_dll;
 pub mod teams_win32;
+pub mod textserv;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -789,6 +791,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_bounds::exports());
                     for (name, addr) in user32_releve::gdi32_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -1084,16 +1087,17 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
-            // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
-            // charger (LoadLibrary de wxWidgets, #795).
+            // sont fournies par controls::richedit (LoadLibrary de wxWidgets,
+            // #795). msftedit et riched20 servent aussi les Text Services sans
+            // fenêtre, avec les mêmes IID (#3268).
             Builtin {
                 name: "msftedit",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {
                 name: "riched20",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {

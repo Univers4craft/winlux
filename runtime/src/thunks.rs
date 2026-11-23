@@ -287,10 +287,37 @@ pub fn api_note(line: &str) {
     }
 }
 
+/// `WINLUX_APITRACE_DELAY=<secondes>` : rien n'est écrit avant ce délai
+/// après le lancement, pour tracer un programme au repos sans remplir le
+/// journal de son démarrage (#3219).
+fn api_trace_delay() -> Option<std::time::Duration> {
+    static D: std::sync::OnceLock<Option<std::time::Duration>> = std::sync::OnceLock::new();
+    *D.get_or_init(|| {
+        let s: f64 = std::env::var("WINLUX_APITRACE_DELAY")
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        (s.is_finite() && s > 0.0).then(|| std::time::Duration::from_secs_f64(s))
+    })
+}
+
+/// Vrai tant que le délai de `WINLUX_APITRACE_DELAY` n'est pas écoulé.
+fn api_trace_waiting() -> bool {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let Some(delay) = api_trace_delay() else {
+        return false;
+    };
+    T0.get_or_init(std::time::Instant::now).elapsed() < delay
+}
+
 /// Écrit une ligne dans le journal d'API du processus (stderr si le
 /// fichier ne peut pas être créé).
 fn api_log(line: &str) {
     static LOG: Mutex<Option<Option<ApiLog>>> = Mutex::new(None);
+    if api_trace_waiting() {
+        return;
+    }
     // Pas d'arrêt par SuspendThread en tenant le journal (#2065).
     let _hold = crate::dlls::thread_ctl::no_park();
     let mut g = LOG
@@ -691,6 +718,10 @@ struct ComTraced {
 
 /// Appels COM tracés depuis le démarrage (pour les tests).
 static COM_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub(crate) fn com_calls() -> u64 {
+    COM_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Journal d'une méthode COM tracée, après son retour : table et case,
 /// `this` et les trois arguments suivants, valeur rendue (HRESULT dans
@@ -799,7 +830,7 @@ pub fn com_trace_table<T>(t: &'static T, module: &str, label: &str) -> Option<*c
     Some(com_trace_table_for(t, label) as *const T)
 }
 
-fn com_trace_table_for<T>(t: &'static T, label: &str) -> usize {
+pub(crate) fn com_trace_table_for<T>(t: &'static T, label: &str) -> usize {
     static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
     let key = t as *const T as usize;
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
