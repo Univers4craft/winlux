@@ -1405,6 +1405,9 @@ struct ViewState {
     raster: f64,
     detect_scale: bool,
     bounds_mode: u32,
+    /// ICoreWebView2Controller4 (#3237) : dépôt venu d'une autre
+    /// application, permis par défaut.
+    external_drop: bool,
 }
 
 struct View {
@@ -1477,6 +1480,7 @@ impl View {
                 background: 0xFFFF_FFFF,
                 raster: monitor_scale(),
                 detect_scale: true,
+                external_drop: true,
                 ..Default::default()
             }),
             handlers: Mutex::new(Vec::new()),
@@ -1886,7 +1890,34 @@ fn controller_methods() -> Vec<(usize, usize)> {
         (30, ctrl_remove_handler as *const () as usize),
         (31, ctrl_get_bounds_mode as *const () as usize),
         (32, ctrl_put_bounds_mode as *const () as usize),
+        // ICoreWebView2Controller4 (#3237).
+        (33, ctrl_get_external_drop as *const () as usize),
+        (34, ctrl_put_external_drop as *const () as usize),
     ]
+}
+
+unsafe extern "win64" fn ctrl_get_external_drop(this: usize, out: *mut i32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = i32::from(super::lock(&v.state).external_drop);
+    S_OK
+}
+/// put_AllowExternalDrop : le moteur refuse ou accepte le dépôt d'un objet
+/// glissé depuis une autre application.
+unsafe extern "win64" fn ctrl_put_external_drop(this: usize, on: i32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    super::lock(&v.state).external_drop = on != 0;
+    v.send(&format!(
+        "{{\"op\":\"settings\",\"external_drop\":{}}}",
+        on != 0
+    ));
+    S_OK
 }
 
 /// Échelle de l'écran : PPP du système rapportés à 96.
@@ -4065,6 +4096,7 @@ mod tests {
                 zoom: 1.0,
                 raster: monitor_scale(),
                 detect_scale: true,
+                external_drop: true,
                 ..Default::default()
             }),
             handlers: Mutex::new(Vec::new()),
@@ -4212,6 +4244,37 @@ mod tests {
         assert_eq!(unsafe { ctrl_put_detect(ctrl, 1) }, S_OK);
         assert_eq!(RASTER_CALLS.load(Ordering::SeqCst), 1);
         view.controller.store(0, Ordering::SeqCst);
+        com_release(ctrl);
+    }
+
+    /// #3237 : AllowExternalDrop de ICoreWebView2Controller4, vrai par
+    /// défaut, se relit et part au moteur.
+    #[test]
+    fn depot_externe_du_controleur_3237() {
+        let vt = vtable(Family::Controller);
+        assert_eq!(vt[3 + 33], ctrl_get_external_drop as *const () as usize);
+        assert_eq!(vt[3 + 34], ctrl_put_external_drop as *const () as usize);
+        let view = vue_de_test();
+        let ctrl = new_com(
+            Family::Controller,
+            None,
+            Some(view.clone()),
+            Args::default(),
+        );
+        let mut on = 0i32;
+        assert_eq!(unsafe { ctrl_get_external_drop(ctrl, &mut on) }, S_OK);
+        assert_eq!(on, 1);
+        assert_eq!(unsafe { ctrl_put_external_drop(ctrl, 0) }, S_OK);
+        assert_eq!(unsafe { ctrl_get_external_drop(ctrl, &mut on) }, S_OK);
+        assert_eq!(on, 0);
+        assert_eq!(
+            super::super::lock(&view.sent).last().map(String::as_str),
+            Some("{\"op\":\"settings\",\"external_drop\":false}")
+        );
+        assert_eq!(
+            unsafe { ctrl_get_external_drop(ctrl, std::ptr::null_mut()) },
+            E_POINTER
+        );
         com_release(ctrl);
     }
 }
