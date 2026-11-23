@@ -885,6 +885,9 @@ jobs:
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
 
+      - name: Ancrage au repos, aucun réveil souris immobile (#3279)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-ancrage-repos.py
+
       - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py
 
@@ -893,6 +896,9 @@ jobs:
 
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py
+
+      - name: Fenêtre affichée pendant le démarrage d'openbox gérée grâce à winlux-wm-reveil (#3190)
+        run: /usr/bin/python3 -B scripts/test-wm-reveil.py
 
       - name: Windows + X au-dessus du bouton Démarrer sous openbox réel
         run: /usr/bin/python3 -B scripts/test-quick-menu-position.py
