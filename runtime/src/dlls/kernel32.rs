@@ -7263,6 +7263,12 @@ unsafe fn create_process_common(
     cmd.env_remove(crate::dlls::inherit::ENV);
     cmd.env_remove(crate::process::SUSPENDED_ENV);
     cmd.env_remove(crate::loader::SAME_BASE_ENV);
+    // Seul le processus créé par le gestionnaire de services est le service :
+    // ce qu'il lance est un processus ordinaire, qui pose ses propres
+    // questions d'autorisation et que service_process ne doit pas prendre
+    // pour le service (#3385). Avec un bloc d'environnement,
+    // linux_plumbing_env l'écartait déjà ; sans bloc, l'enfant en héritait.
+    cmd.env_remove("WINLUX_SERVICE_NAME");
     if let Some(b) = same_base.as_ref() {
         cmd.env(crate::loader::SAME_BASE_ENV, b);
     }
@@ -9942,6 +9948,106 @@ mod tests_code_enfant {
         assert_eq!(linux_exit_status(3010) & 0xFF, 194);
         assert_eq!(linux_exit_status(0xC000_0005) & 0xFF, 5);
         assert_eq!(linux_exit_status(0xFFFF_FFFF) & 0xFF, 255);
+    }
+
+    const ENFANT_SERVICE: &str = "WINLUX_TEST_ENFANT_SERVICE_3385";
+
+    /// #3385 : un programme lancé par CreateProcess (lpEnvironment NULL)
+    /// depuis un service n'hérite pas du nom du service. Le binaire de test
+    /// est relancé comme un service (WINLUX_SERVICE_NAME posé sur sa seule
+    /// commande, comme spawn_service) : rien n'est changé dans
+    /// l'environnement de ce processus.
+    #[test]
+    fn enfant_d_un_service_sans_nom_de_service() {
+        let name = format!("WinluxTest{}", std::process::id());
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::kernel32::tests_code_enfant::service_qui_lance_un_enfant",
+                "--test-threads=1",
+                "--include-ignored",
+                "--nocapture",
+            ])
+            .env(ENFANT_SERVICE, "1")
+            .env("WINLUX_SERVICE_NAME", &name)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        println!("{text}");
+        assert!(text.contains("1 passed"), "service simulé : {text}");
+    }
+
+    /// Service simulé de `enfant_d_un_service_sans_nom_de_service`.
+    #[test]
+    #[ignore = "lancé comme processus enfant"]
+    fn service_qui_lance_un_enfant() {
+        if std::env::var_os(ENFANT_SERVICE).is_none() {
+            return;
+        }
+        let name = std::env::var("WINLUX_SERVICE_NAME").unwrap();
+        // L'enfant reste vivant 2 s, le temps que service_process parcoure
+        // /proc, puis sort en 3 s'il voit le nom du service.
+        let app = std::ffi::CString::new("/bin/sh").unwrap();
+        let line = std::ffi::CString::new(
+            "sh -c \"sleep 2; test -z \\\"$WINLUX_SERVICE_NAME\\\" || exit 3\"",
+        )
+        .unwrap();
+        let startup = StartupInfoA {
+            cb: std::mem::size_of::<StartupInfoA>() as u32,
+            reserved: std::ptr::null_mut(),
+            desktop: std::ptr::null_mut(),
+            title: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+            x_size: 0,
+            y_size: 0,
+            x_chars: 0,
+            y_chars: 0,
+            fill_attribute: 0,
+            flags: 0,
+            show_window: 0,
+            reserved2_size: 0,
+            reserved2: std::ptr::null_mut(),
+            std_input: 0,
+            std_output: 0,
+            std_error: 0,
+        };
+        let mut info = ProcessInformation {
+            process: 0,
+            thread: 0,
+            process_id: 0,
+            thread_id: 0,
+        };
+        let ok = unsafe {
+            create_process_a(
+                app.as_ptr() as *const u8,
+                line.as_ptr() as *const u8,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            )
+        };
+        assert_eq!(ok, 1);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Le service est ce processus, que service_process écarte : l'enfant
+        // vivant ne doit pas être pris pour lui.
+        let found =
+            crate::dlls::advapi32_services::service_process(std::path::Path::new("/proc"), &name);
+        println!("service_process({name}) depuis le service : {found:?}");
+        assert_eq!(found, None, "l'enfant est pris pour le service");
+        assert_eq!(wait_for_single_object(info.process, 10_000), 0);
+        let mut code = 0;
+        assert_eq!(unsafe { get_exit_code_process(info.process, &mut code) }, 1);
+        println!("code de l'enfant : {code}");
+        assert_eq!(code, 0, "l'enfant a hérité de WINLUX_SERVICE_NAME");
+        close_handle(info.thread);
+        close_handle(info.process);
     }
 
     const ENFANT_SORTIE: &str = "WINLUX_TEST_ENFANT_SORTIE_2758";
