@@ -503,6 +503,10 @@ pub(crate) struct ThreadObject {
     /// Fil d'un autre processus ouvert par OpenThread (#2024) : PID Linux
     /// de ce processus, 0 pour un fil d'ici.
     pub(crate) foreign_pid: AtomicI32,
+    /// Fil d'un autre processus : son starttime (champ 22 de
+    /// /proc/<pid>/task/<tid>/stat) lu à l'ouverture, revérifié à chaque
+    /// appel pour qu'un tid réattribué ne soit jamais visé (#3320).
+    pub(crate) foreign_start: std::sync::atomic::AtomicU64,
 }
 
 impl ThreadObject {
@@ -523,6 +527,7 @@ impl ThreadObject {
             slot: super::thread_ctl::SuspendSlot::new(),
             rust_id: OnceLock::new(),
             foreign_pid: AtomicI32::new(0),
+            foreign_start: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -6459,9 +6464,10 @@ pub extern "win64" fn suspend_thread(h: usize) -> u32 {
         return u32::MAX;
     };
     if t.is_foreign() {
-        // Fil d'un autre processus (#2024) : refus net, jamais un faux succès.
-        crate::process::set_last_error(5);
-        return u32::MAX;
+        // Fil d'un autre processus (#2024, #3320) : accepté sans rien faire
+        // seulement si son processus est déjà arrêté (NtSuspendProcess,
+        // comme crashpad avant son instantané) ; sinon refus net.
+        return foreign_suspend_count(&t);
     }
     {
         let mut s = lock(&t.state);
@@ -6503,9 +6509,9 @@ pub unsafe extern "win64" fn get_thread_context(h: usize, ctx: *mut u8) -> i32 {
         return 0;
     };
     if t.is_foreign() {
-        // Registres d'un fil d'un autre processus : pas lus d'ici (#2024).
-        crate::process::set_last_error(5);
-        return 0;
+        // Fil d'un autre processus (#3320) : Rip et Rsp seulement, lus dans
+        // /proc par le processus appelant, sous le contrôle ptrace du noyau.
+        return foreign_get_context(&t, ctx);
     }
     if is_current(&t) {
         super::thread_ctl::get_own_context(ctx);
@@ -6586,9 +6592,12 @@ pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize
 /// absent de /proc/<pid>/task).
 fn open_foreign_thread(tid: i32) -> Option<Arc<ThreadObject>> {
     let pid = foreign_thread_pid(tid)?;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat")).ok()?;
+    let (_, start) = thread_stat_state_start(&stat)?;
     let t = ThreadObject::new(false);
     t.os_tid.store(tid, Ordering::Release);
     t.foreign_pid.store(pid, Ordering::Release);
+    t.foreign_start.store(start, Ordering::Release);
     lock(&t.state).win_tid = tid as u32;
     Some(Arc::new(t))
 }
@@ -6626,6 +6635,116 @@ fn foreign_thread_owner(status: &str, my_uid: u32, my_pid: i32) -> Option<i32> {
     let pid = field("Tgid:")? as i32;
     let uid = field("Uid:")?;
     (uid == my_uid && pid != my_pid).then_some(pid)
+}
+
+/// État (champ 3) et starttime (champ 22) d'une ligne de
+/// /proc/<pid>/task/<tid>/stat ; le nom (champ 2) peut contenir espaces et
+/// parenthèses, d'où la lecture après la dernière « ) » (proc(5)).
+fn thread_stat_state_start(stat: &str) -> Option<(char, u64)> {
+    let rest = &stat[stat.rfind(')')? + 1..];
+    let mut fields = rest.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    // Après l'état (champ 3), le starttime est le 19e champ suivant.
+    let start = fields.nth(18)?.parse().ok()?;
+    Some((state, start))
+}
+
+/// Pointeur de pile et d'instruction d'un fil, d'après
+/// /proc/<pid>/task/<tid>/syscall (proc(5)) : « nr a1 … a6 sp pc » dans un
+/// appel système, « -1 sp pc » bloqué hors appel, « running » s'il tourne
+/// (rien alors).
+fn syscall_sp_pc(text: &str) -> Option<(u64, u64)> {
+    let fields: Vec<&str> = text.split_whitespace().collect();
+    if fields.len() < 3 {
+        return None;
+    }
+    let hex = |f: &str| u64::from_str_radix(f.strip_prefix("0x")?, 16).ok();
+    Some((
+        hex(fields[fields.len() - 2])?,
+        hex(fields[fields.len() - 1])?,
+    ))
+}
+
+/// Garde-fou de #3320, refait à chaque appel : l'état du fil si son status
+/// et sa ligne stat disent toujours le même compte réel (`my_uid`), le même
+/// processus (`pid`, jamais le courant) et le même starttime qu'à
+/// l'ouverture. Un tid réattribué à un autre processus est refusé.
+fn foreign_thread_still_same(
+    status: &str,
+    stat: &str,
+    my_uid: u32,
+    my_pid: i32,
+    pid: i32,
+    start: u64,
+) -> Option<char> {
+    let owner = foreign_thread_owner(status, my_uid, my_pid)?;
+    let (state, now_start) = thread_stat_state_start(stat)?;
+    (owner == pid && now_start == start).then_some(state)
+}
+
+impl ThreadObject {
+    /// État actuel d'un fil d'un autre processus, s'il est toujours celui
+    /// ouvert par OpenThread (#3320). Lu par le processus appelant, avec
+    /// ses propres droits.
+    fn foreign_state(&self) -> Option<char> {
+        let pid = self.foreign_pid.load(Ordering::Acquire);
+        let tid = self.os_tid.load(Ordering::Acquire);
+        if pid == 0 || tid <= 0 {
+            return None;
+        }
+        let status = std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/status")).ok()?;
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat")).ok()?;
+        foreign_thread_still_same(
+            &status,
+            &stat,
+            unsafe { libc::getuid() },
+            std::process::id() as i32,
+            pid,
+            self.foreign_start.load(Ordering::Acquire),
+        )
+    }
+}
+
+/// SuspendThread et ResumeThread sur un fil d'un autre processus (#3320) :
+/// 1 (« suspendu par la suspension du processus ») et rien d'autre, ni
+/// signal ni compteur, seulement si ce fil est arrêté (état T) ; sinon
+/// ERROR_ACCESS_DENIED. Crashpad suspend le processus planté avant de
+/// lire ses fils et écarte tout fil dont SuspendThread échoue.
+fn foreign_suspend_count(t: &ThreadObject) -> u32 {
+    if t.foreign_state() == Some('T') {
+        1
+    } else {
+        crate::process::set_last_error(5);
+        u32::MAX
+    }
+}
+
+/// GetThreadContext sur un fil d'un autre processus (#3320) : Rip et Rsp
+/// de /proc/<pid>/task/<tid>/syscall, que le noyau ne laisse lire qu'à un
+/// appelant autorisé à s'y attacher (ptrace, Yama). ContextFlags ne vaut
+/// que CONTEXT_AMD64 : SegCs, SegSs et EFlags ne sont pas connus, donc
+/// CONTEXT_CONTROL n'est pas annoncé ; le reste du CONTEXT est laissé tel
+/// que l'appelant l'a passé.
+unsafe fn foreign_get_context(t: &ThreadObject, ctx: *mut u8) -> i32 {
+    const CONTEXT_AMD64: u32 = 0x0010_0000;
+    let pid = t.foreign_pid.load(Ordering::Acquire);
+    let tid = t.os_tid.load(Ordering::Acquire);
+    let read = || {
+        t.foreign_state()?;
+        let text = std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/syscall")).ok()?;
+        let regs = syscall_sp_pc(&text)?;
+        // Revérifié après la lecture : le fil lu est toujours celui ouvert.
+        t.foreign_state()?;
+        Some(regs)
+    };
+    let Some((sp, pc)) = read() else {
+        crate::process::set_last_error(5);
+        return 0;
+    };
+    (ctx.add(0x30) as *mut u32).write_unaligned(CONTEXT_AMD64);
+    (ctx.add(0x98) as *mut u64).write_unaligned(sp);
+    (ctx.add(0xF8) as *mut u64).write_unaligned(pc);
+    1
 }
 
 impl ThreadObject {
@@ -7717,10 +7836,7 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
         return u32::MAX;
     };
     match obj {
-        SyncHandle::Thread(t) if t.is_foreign() => {
-            crate::process::set_last_error(5);
-            u32::MAX
-        }
+        SyncHandle::Thread(t) if t.is_foreign() => foreign_suspend_count(&t),
         SyncHandle::Thread(t) => {
             let _gate = sync_gate();
             let mut s = lock(&t.state);
@@ -14119,12 +14235,44 @@ mod tests {
         let q = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
         assert_eq!(q(0) as u32, 0x103, "STATUS_PENDING tant qu'il tourne");
         assert_eq!((q(16), q(24)), (pid as u64, pid as u64), "ClientId");
-        // Ni suspension ni registres d'ici : refus net (ERROR_ACCESS_DENIED).
+        // Processus qui tourne : ni suspension ni reprise (#2024, #3320).
         assert_eq!(suspend_thread(h), u32::MAX);
         assert_eq!(resume_thread(h), u32::MAX);
         let mut ctx = vec![0u8; 1232];
-        assert_eq!(unsafe { get_thread_context(h, ctx.as_mut_ptr()) }, 0);
         assert_eq!(unsafe { set_thread_context(h, ctx.as_ptr()) }, 0);
+        // Processus arrêté (comme par NtSuspendProcess) : Suspend et Resume
+        // rendent 1 sans rien faire, le contexte rend Rip et Rsp seulement,
+        // SetThreadContext reste refusé (#3320).
+        unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        let stopped = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|s| thread_stat_state_start(&s))
+                .is_some_and(|(c, _)| c == 'T')
+        });
+        assert!(stopped, "enfant arrêté");
+        assert_eq!(suspend_thread(h), 1);
+        assert_eq!(resume_thread(h), 1);
+        let st = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        assert_eq!(
+            thread_stat_state_start(&st).unwrap().0,
+            'T',
+            "toujours arrêté"
+        );
+        ctx.fill(0xAA);
+        assert_eq!(unsafe { get_thread_context(h, ctx.as_mut_ptr()) }, 1);
+        let flags = u32::from_le_bytes(ctx[0x30..0x34].try_into().unwrap());
+        assert_eq!(
+            flags, 0x0010_0000,
+            "CONTEXT_AMD64 seul, sans CONTEXT_CONTROL"
+        );
+        let rsp = u64::from_le_bytes(ctx[0x98..0xA0].try_into().unwrap());
+        let rip = u64::from_le_bytes(ctx[0xF8..0x100].try_into().unwrap());
+        assert!(rsp != 0 && rip != 0, "Rsp {rsp:#x} et Rip {rip:#x}");
+        assert_eq!(ctx[0x78], 0xAA, "Rax non touché");
+        assert_eq!(unsafe { set_thread_context(h, ctx.as_ptr()) }, 0);
+        unsafe { libc::kill(pid as i32, libc::SIGCONT) };
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(wait_for_single_object(h, 5_000), 0, "fin du fil vue");
@@ -14134,6 +14282,88 @@ mod tests {
         close_handle(h);
         // Fil inexistant : refus, comme avant.
         assert_eq!(open_thread(0x1F03FF, 0, i32::MAX as u32 - 7), 0);
+    }
+
+    /// #3320 : lectures de /proc et garde-fou refait à chaque appel.
+    #[test]
+    fn fil_etranger_etat_starttime_et_registres_3320() {
+        // Nom avec espaces et parenthèses : lu après la dernière « ) ».
+        let stat =
+            "4243 (a) b (c) T 1 4242 4242 0 -1 4194560 1 2 3 4 5 6 7 8 20 0 1 0 987654 1000 10";
+        assert_eq!(thread_stat_state_start(stat), Some(('T', 987654)));
+        assert_eq!(thread_stat_state_start("4243 (x) S"), None, "tronquée");
+        // Les trois formes de syscall.
+        assert_eq!(
+            syscall_sp_pc("230 0x1 0x0 0x7ffd10 0x0 0x0 0x0 0x7ffd1000 0x7f00aa\n"),
+            Some((0x7ffd1000, 0x7f00aa)),
+            "dans un appel système"
+        );
+        assert_eq!(
+            syscall_sp_pc("-1 0x7ffd2000 0x401000\n"),
+            Some((0x7ffd2000, 0x401000))
+        );
+        assert_eq!(syscall_sp_pc("running\n"), None, "il tourne");
+        assert_eq!(syscall_sp_pc(""), None, "illisible");
+        assert_eq!(syscall_sp_pc("-1 zz 0x1"), None, "malformé");
+        // Même compte, même processus, même starttime : l'état ; sinon rien.
+        let status = |uid: u32, tgid: i32| {
+            format!("Name:\tx\nTgid:\t{tgid}\nPid:\t4243\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        };
+        let ok = foreign_thread_still_same(&status(1000, 4242), stat, 1000, 1, 4242, 987654);
+        assert_eq!(ok, Some('T'));
+        assert_eq!(
+            foreign_thread_still_same(&status(1000, 4242), stat, 1000, 1, 4242, 987653),
+            None,
+            "tid réattribué : autre starttime"
+        );
+        assert_eq!(
+            foreign_thread_still_same(&status(1001, 4242), stat, 1000, 1, 4242, 987654),
+            None,
+            "autre compte"
+        );
+        assert_eq!(
+            foreign_thread_still_same(&status(1000, 5000), stat, 1000, 1, 4242, 987654),
+            None,
+            "autre processus"
+        );
+        // Handle d'un fil mort, puis tid absent : refus (condition A).
+        init();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let h = open_thread(0x1F03FF, 0, pid);
+        assert_ne!(h, 0);
+        unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(suspend_thread(h), u32::MAX, "fil disparu");
+        let mut ctx = vec![0u8; 1232];
+        assert_eq!(unsafe { get_thread_context(h, ctx.as_mut_ptr()) }, 0);
+        close_handle(h);
+        // En root : un processus arrêté d'un autre compte (uid 65534) ne
+        // s'ouvre toujours pas, donc aucune lecture n'est faite (condition B).
+        if unsafe { libc::getuid() } == 0 {
+            use std::os::unix::process::CommandExt;
+            let mut other = std::process::Command::new("sleep")
+                .arg("30")
+                .uid(65534)
+                .gid(65534)
+                .spawn()
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            unsafe { libc::kill(other.id() as i32, libc::SIGSTOP) };
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert_eq!(
+                open_thread(0x1F03FF, 0, other.id()),
+                0,
+                "autre compte, arrêté"
+            );
+            other.kill().unwrap();
+            other.wait().unwrap();
+        }
     }
 
     /// Garde-fou de sécurité de #2024 : le fil d'un processus d'un autre
