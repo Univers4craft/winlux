@@ -231,6 +231,12 @@ print("WINLUX_NATIVE_WINDOW_SNAPPING=0", flush=True)
 
 # End-to-end geometry acknowledgement latency. This includes subprocess and
 # X11 round trips; it is not a measurement of the visible display frame rate.
+# Tailles alternées, bien plus éloignées qu'une cellule de caractère : le
+# terminal arrondit sa taille au caractère, et une demande qui retombe sur la
+# taille en place ne change rien ; « xdotool windowsize --sync » attend alors
+# un changement jusqu'à son délai d'environ 15 s (500 × 30 ms). Les pas de
+# 8 × 4 px d'avant produisaient ainsi des « redimensionnements » de 15 s
+# (15 077 et 15 135 ms sur les releases du 23 novembre, #3374).
 timings = {"move_ms": [], "resize_ms": []}
 for i in range(12):
     started = time.monotonic()
@@ -238,7 +244,7 @@ for i in range(12):
     run("xdotool", "windowmove", "--sync", terminal, str(x), str(y))
     timings["move_ms"].append((time.monotonic() - started) * 1000)
     started = time.monotonic()
-    width, height = 700 + i * 8, 400 + i * 4
+    width, height = (700, 400) if i % 2 == 0 else (820, 480)
     run("xdotool", "windowsize", "--sync", terminal, str(width), str(height))
     timings["resize_ms"].append((time.monotonic() - started) * 1000)
 # Pas de champ « p95 » : sur 12 échantillons, le 95e centile au rang le plus
