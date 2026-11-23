@@ -894,6 +894,9 @@ jobs:
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py
 
+      - name: Fenêtre affichée pendant le démarrage d'openbox gérée grâce à winlux-wm-reveil (#3190)
+        run: /usr/bin/python3 -B scripts/test-wm-reveil.py
+
       - name: Windows + X au-dessus du bouton Démarrer sous openbox réel
         run: /usr/bin/python3 -B scripts/test-quick-menu-position.py
 
