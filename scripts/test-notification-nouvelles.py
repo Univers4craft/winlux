@@ -70,8 +70,10 @@ try:
     (home / "config/winlux").mkdir(parents=True, exist_ok=True)
     (home / "config/winlux/do-not-disturb").touch()
     notify("Pendant Ne pas déranger")
+    # Le démon répond avant d'écrire (#3343) : le compte suit dans la seconde.
+    arrived = wait(lambda: unseen() == 3, 1)
     print(f"compte après Ne pas déranger : {unseen()}", flush=True)
-    check(unseen() == 3, "reçue en Ne pas déranger : nouvelle aussi")
+    check(arrived, "reçue en Ne pas déranger : nouvelle aussi")
     line = tray["render"]("notifications")
     print(f"cloche : {line}", flush=True)
     check("3 nouvelles notifications" in line and "notifications-3-" in line,
@@ -91,7 +93,7 @@ try:
           "cloche sans pastille une fois vues")
     popup.kill(); popup.wait(); popup = None
     notify("Après le centre")
-    check(unseen() == 1, "nouvelle notification après fermeture du centre : pastille rallumée")
+    check(wait(lambda: unseen() == 1, 1), "nouvelle notification après fermeture du centre : pastille rallumée")
 finally:
     for process in (popup, daemon):
         if process: process.kill()

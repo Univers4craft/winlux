@@ -79,6 +79,10 @@ OWN_MEMBERS = {name: interface for interface, methods in METHODS.items() for nam
 OWN_MEMBERS["Introspect"] = INTROSPECTABLE
 
 
+# Caractères du corps donnés à la bulle (4 lignes de 38 au plus affichées).
+TOAST_BODY = 600
+
+
 class BusReply:
     """Réponse à un appel reçu par le filtre (#3278) : mêmes noms que
     Gio.DBusMethodInvocation, sans en garder aucune."""
@@ -122,9 +126,22 @@ class Notifications:
             Gio.BusNameOwnerFlags.NONE, self.acquired, None, lambda *_: Gtk.main_quit())
 
     def save(self):
+        if getattr(self, "saving", None):
+            GLib.source_remove(self.saving); self.saving = None
         private_state()
         write_private(STATE, json.dumps(self.history[-200:], ensure_ascii=False))
         write_unseen(unseen_count(self.history))
+
+    def save_later(self):
+        """Historique écrit une fois la file d'appels vidée (#3343) : une rafale
+        de notifications donne une écriture, pas une par notification."""
+        if not getattr(self, "saving", None):
+            self.saving = GLib.idle_add(self.save_pending, priority=GLib.PRIORITY_LOW)
+
+    def save_pending(self):
+        self.saving = None
+        self.save()
+        return False
 
     def mark_seen(self, identity=None):
         """Notification vue (bulle cliquée ou fermée), ou toutes (centre ouvert)."""
@@ -236,15 +253,19 @@ class Notifications:
             self.history = self.history[-200:]
             retained = {item["id"] for item in self.history}
             self.live = {key: value for key, value in self.live.items() if key in retained}
-            self.save()
+            # Réponse d'abord (#3343) : le programme qui appelle (libnotify
+            # attend la réponse) ne patiente ni pour le disque ni pour la bulle.
+            invocation.return_value(GLib.Variant("(u)", (identity,)))
+            self.save_later()
             if not PREF.exists():
-                self.show(identity,title[:1024],body[:8192],timeout,app=app[:256],icon=icon,hints=hints)
+                # La bulle n'en montre que 4 lignes : inutile de mettre en page
+                # 8 192 caractères (50 ms) pour les cacher.
+                self.show(identity,title[:1024],body[:TOAST_BODY],timeout,app=app[:256],icon=icon,hints=hints)
                 # Indices standard : « suppress-sound » coupe le son,
                 # « sound-name » choisit un son système Winlux connu.
                 if not bool(hints.get("suppress-sound", False)):
                     wanted = str(hints.get("sound-name", "notification"))
                     play_sound(wanted if (SOUNDS / f"{wanted}.wav").is_file() and "/" not in wanted else "notification")
-            invocation.return_value(GLib.Variant("(u)", (identity,)))
 
     def show(self, identity, title, body, timeout, app="", icon="", hints=None):
         """Bulle façon Windows 11 (#624) : en bas à droite, juste au-dessus de la
