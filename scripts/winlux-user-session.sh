@@ -93,6 +93,7 @@ if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$
 rc="$HOME/.config/openbox/rc.xml"
 wm=/usr/lib/winlux/winlux-openbox
 test -x "$wm" || wm=/usr/bin/openbox
+wmctrl=/usr/bin/wmctrl
 if test -f "$rc"; then
     "$wm" --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
 else
@@ -169,11 +170,31 @@ case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
         fi
     fi ;;
 esac
-for attempt in $(seq 1 50); do
-    /usr/bin/wmctrl -m >/dev/null 2>&1 && break
-    kill -0 "$wm_pid" 2>/dev/null || { cat "$logs/window-manager.log" >&2; exit 1; }
-    sleep 0.1
-done
+# Le gestionnaire doit répondre avant la barre des tâches. Mort, ou vivant
+# mais muet après 15 s : la session s'arrête en le disant, avec son journal,
+# au lieu de s'ouvrir sans gestionnaire de fenêtres (#3401). L'attente reste
+# sous les 20 s au-delà desquels l'init ne compte plus un échec de session
+# comme rapide (build-live-iso.sh) : trois échecs mènent à son écran de
+# secours (voir #3148) au lieu d'une relance sans fin.
+attendre_gestionnaire() {
+    attente=${WINLUX_WM_WAIT_TENTHS:-150}
+    essai=0
+    while test "$essai" -lt "$attente"; do
+        "$wmctrl" -m >/dev/null 2>&1 && return 0
+        if ! kill -0 "$wm_pid" 2>/dev/null; then
+            echo "winlux-user-session : le gestionnaire de fenêtres $wm s'est arrêté au démarrage" >&2
+            cat "$logs/window-manager.log" >&2 2>/dev/null || true
+            return 1
+        fi
+        sleep 0.1
+        essai=$((essai + 1))
+    done
+    echo "winlux-user-session : le gestionnaire de fenêtres $wm (pid $wm_pid) est vivant mais n'a pas répondu à « wmctrl -m » en $((attente / 10)) s" >&2
+    cat "$logs/window-manager.log" >&2 2>/dev/null || true
+    kill "$wm_pid" 2>/dev/null || true
+    return 1
+}
+attendre_gestionnaire || exit 1
 # Sans connexion automatique, la session s'ouvre verrouillée : le mot de passe
 # du compte est demandé avant d'afficher le bureau.
 if test "${WINLUX_LOCK_AT_START:-0}" = 1 && test -x /usr/bin/winlux-lock; then
