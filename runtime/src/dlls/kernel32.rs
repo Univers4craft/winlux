@@ -475,6 +475,9 @@ pub(crate) struct ThreadObject {
     pub(crate) slot: super::thread_ctl::SuspendSlot,
     /// Thread Rust correspondant (file d'APC de QueueUserAPC).
     pub(crate) rust_id: OnceLock<ThreadId>,
+    /// Fil d'un autre processus ouvert par OpenThread (#2024) : PID Linux
+    /// de ce processus, 0 pour un fil d'ici.
+    pub(crate) foreign_pid: AtomicI32,
 }
 
 impl ThreadObject {
@@ -494,6 +497,7 @@ impl ThreadObject {
             exit_jump: Mutex::new(Box::new([0; 8])),
             slot: super::thread_ctl::SuspendSlot::new(),
             rust_id: OnceLock::new(),
+            foreign_pid: AtomicI32::new(0),
         }
     }
 }
@@ -565,6 +569,8 @@ pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
         }));
     }
     match lookup_sync(h)? {
+        // Fil d'un autre processus : ni suspension ni contexte d'ici (#2024).
+        SyncHandle::Thread(t) if t.is_foreign() => None,
         SyncHandle::Thread(t) => match t.os_tid.load(Ordering::Acquire) {
             0 => Some(ThreadTarget::NotStarted(t)),
             tid => Some(ThreadTarget::Running(tid)),
@@ -5908,7 +5914,11 @@ fn wait_mutex(m: &MutexObject, timeout: u32) -> u32 {
 }
 fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
     let start = std::time::Instant::now();
+    let foreign = t.is_foreign();
     loop {
+        if foreign {
+            t.refresh_foreign();
+        }
         let gate = sync_gate();
         let s = lock(&t.state);
         if s.finished {
@@ -5927,6 +5937,11 @@ fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
             timeout - elapsed
         };
         drop(gate);
+        let left = if foreign {
+            left.min(FOREIGN_THREAD_POLL_MS)
+        } else {
+            left
+        };
         let (next, _) = wait_condvar(&t.changed, s, left);
         drop(next);
     }
@@ -6414,6 +6429,11 @@ pub extern "win64" fn suspend_thread(h: usize) -> u32 {
         crate::process::set_last_error(6);
         return u32::MAX;
     };
+    if t.is_foreign() {
+        // Fil d'un autre processus (#2024) : refus net, jamais un faux succès.
+        crate::process::set_last_error(5);
+        return u32::MAX;
+    }
     {
         let mut s = lock(&t.state);
         if s.finished {
@@ -6453,6 +6473,11 @@ pub unsafe extern "win64" fn get_thread_context(h: usize, ctx: *mut u8) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if t.is_foreign() {
+        // Registres d'un fil d'un autre processus : pas lus d'ici (#2024).
+        crate::process::set_last_error(5);
+        return 0;
+    }
     if is_current(&t) {
         super::thread_ctl::get_own_context(ctx);
         return 1;
@@ -6480,6 +6505,10 @@ pub unsafe extern "win64" fn set_thread_context(h: usize, ctx: *const u8) -> i32
         crate::process::set_last_error(6);
         return 0;
     };
+    if t.is_foreign() {
+        crate::process::set_last_error(5);
+        return 0;
+    }
     if is_current(&t) {
         let flags = (ctx.add(0x30) as *const u32).read_unaligned();
         if flags & 0x1 != 0 {
@@ -6512,7 +6541,7 @@ pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize
     } else {
         thread_object_by_tid(tid as i32)
     };
-    let Some(t) = t else {
+    let Some(t) = t.or_else(|| open_foreign_thread(tid as i32)) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -6520,6 +6549,132 @@ pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize
     crate::dlls::inherit::set(h, inherit != 0);
     h
 }
+
+/// Fil `tid` d'un autre processus du même compte (#2024). Sous Windows,
+/// OpenThread ouvre le fil de tout processus du même compte : crashpad
+/// ouvre ainsi chaque fil du processus planté. Refusé pour un fil d'un
+/// autre compte, ou d'un processus qui n'est pas le sien (tid de /proc
+/// absent de /proc/<pid>/task).
+fn open_foreign_thread(tid: i32) -> Option<Arc<ThreadObject>> {
+    let pid = foreign_thread_pid(tid)?;
+    let t = ThreadObject::new(false);
+    t.os_tid.store(tid, Ordering::Release);
+    t.foreign_pid.store(pid, Ordering::Release);
+    lock(&t.state).win_tid = tid as u32;
+    Some(Arc::new(t))
+}
+
+/// PID du processus d'un fil `tid` d'un autre processus du même compte
+/// réel, d'après /proc/<tid>/status (Tgid, Uid).
+fn foreign_thread_pid(tid: i32) -> Option<i32> {
+    if tid <= 0 {
+        return None;
+    }
+    let status = std::fs::read_to_string(format!("/proc/{tid}/status")).ok()?;
+    let pid = foreign_thread_owner(
+        &status,
+        unsafe { libc::getuid() },
+        std::process::id() as i32,
+    )?;
+    std::path::Path::new(&format!("/proc/{pid}/task/{tid}"))
+        .exists()
+        .then_some(pid)
+}
+
+/// Garde-fou de sécurité de #2024 : le processus (Tgid) du fil décrit par
+/// `status`, seulement si son uid réel est `my_uid` et que ce n'est pas le
+/// processus courant. Un fil d'un autre compte ne s'ouvre jamais.
+fn foreign_thread_owner(status: &str, my_uid: u32, my_pid: i32) -> Option<i32> {
+    let field = |name: &str| -> Option<u32> {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name))?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    };
+    let pid = field("Tgid:")? as i32;
+    let uid = field("Uid:")?;
+    (uid == my_uid && pid != my_pid).then_some(pid)
+}
+
+impl ThreadObject {
+    pub(crate) fn is_foreign(&self) -> bool {
+        self.foreign_pid.load(Ordering::Acquire) != 0
+    }
+
+    /// Fil d'un autre processus : relu dans /proc, marqué fini quand il
+    /// n'existe plus ou n'est plus qu'un zombie. Son code de sortie n'est
+    /// pas connu d'ici : 0. Vrai s'il est fini.
+    fn refresh_foreign(&self) -> bool {
+        let pid = self.foreign_pid.load(Ordering::Acquire);
+        if pid == 0 {
+            return lock(&self.state).finished;
+        }
+        let tid = self.os_tid.load(Ordering::Acquire);
+        let alive = std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat"))
+            .ok()
+            .and_then(|s| {
+                let i = s.rfind(')')?;
+                s[i + 1..].trim_start().chars().next()
+            })
+            .is_some_and(|c| c != 'Z' && c != 'X');
+        let mut s = lock(&self.state);
+        if !alive && !s.finished {
+            s.finished = true;
+            s.exit_code = 0;
+            self.changed.notify_all();
+        }
+        s.finished
+    }
+}
+
+/// Champs de THREAD_BASIC_INFORMATION pour un handle de fil (#2024) :
+/// (code de sortie ou STATUS_PENDING, TEB, PID, TID, priorité relative).
+/// Le TEB d'un fil d'un autre processus est lu dans l'annuaire que ce
+/// processus publie (`process::foreign_teb_of_tid`).
+pub(crate) fn thread_basic_info(h: usize) -> Option<(u32, usize, u32, u32, i32)> {
+    let me = std::process::id();
+    if h == get_current_thread() {
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+        return Some((0x103, crate::process::teb(), me, tid, 0));
+    }
+    let Some(SyncHandle::Thread(t)) = lookup_sync(h) else {
+        return None;
+    };
+    let finished = t.refresh_foreign();
+    let tid = t.os_tid.load(Ordering::Acquire);
+    let pid = match t.foreign_pid.load(Ordering::Acquire) {
+        0 => me as i32,
+        p => p,
+    };
+    let teb = if finished || tid == 0 {
+        0
+    } else if pid == me as i32 {
+        crate::process::teb_of_tid(tid).unwrap_or(0)
+    } else {
+        crate::process::foreign_teb_of_tid(pid, tid).unwrap_or(0)
+    };
+    let s = lock(&t.state);
+    let status = if s.finished { s.exit_code } else { 0x103 };
+    let win_tid = if s.win_tid != 0 {
+        s.win_tid
+    } else {
+        tid as u32
+    };
+    Some((
+        status,
+        teb,
+        pid as u32,
+        win_tid,
+        t.priority.load(Ordering::Relaxed),
+    ))
+}
+
+/// Relecture d'un fil d'un autre processus pendant une attente : rien ne
+/// nous prévient de sa fin.
+const FOREIGN_THREAD_POLL_MS: u32 = 10;
 
 /// Termine le thread Win32 courant : rappels DLL_THREAD_DETACH, libération
 /// du TEB, puis signalement du handle avec son code de sortie. Appelé à la
@@ -7511,6 +7666,7 @@ pub unsafe extern "win64" fn get_exit_code_thread(handle: usize, code: *mut u32)
     }
     match lookup_sync(handle) {
         Some(SyncHandle::Thread(t)) => {
+            t.refresh_foreign();
             let s = lock(&t.state);
             *code = if s.finished { s.exit_code } else { 259 };
             1
@@ -7532,6 +7688,10 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
         return u32::MAX;
     };
     match obj {
+        SyncHandle::Thread(t) if t.is_foreign() => {
+            crate::process::set_last_error(5);
+            u32::MAX
+        }
         SyncHandle::Thread(t) => {
             let _gate = sync_gate();
             let mut s = lock(&t.state);
@@ -8301,7 +8461,9 @@ fn wait_sources(
             }
             None => true,
         },
-        SyncHandle::Thread(_) | SyncHandle::CompletionPort(_) => false,
+        // Un fil d'un autre processus se relit (#2024).
+        SyncHandle::Thread(t) => t.is_foreign(),
+        SyncHandle::CompletionPort(_) => false,
     }
 }
 /// Durée du prochain sommeil : le temps restant, ramené à MULTI_CAP_MS si
@@ -8452,7 +8614,7 @@ unsafe fn wait_for_multiple_objects_inner(
                             s.owner.is_none() || s.owner.as_ref() == Some(&me)
                         }
                     },
-                    SyncHandle::Thread(t) => lock(&t.state).finished,
+                    SyncHandle::Thread(t) => t.refresh_foreign(),
                     SyncHandle::Process(p) => poll_process(p),
                     SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
                     SyncHandle::Semaphore(sem) => match sem.shared.get() {
@@ -13782,6 +13944,130 @@ mod tests {
         assert_eq!(unsafe { get_exit_code_thread(h, &mut code) }, 1);
         assert_eq!(code, 42);
         assert_eq!(close_handle(h), 1);
+    }
+
+    /// OpenThread sur le fil d'un autre processus du même compte (#2024) :
+    /// handle valide, identifiant, ThreadBasicInformation (processus et
+    /// fil), attente qui se termine avec le fil.
+    #[test]
+    fn open_thread_ouvre_le_fil_d_un_autre_processus() {
+        init();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let h = open_thread(0x1F03FF, 0, pid);
+        assert_ne!(h, 0, "fil principal d'un autre processus du même compte");
+        assert_eq!(thread_id_of_handle(h), Some(pid));
+        assert_eq!(wait_for_single_object(h, 0), 258, "vivant");
+        let mut b = [0u8; 48];
+        let mut n = 0u32;
+        let st = unsafe {
+            crate::dlls::ntdll::nt_query_information_thread(
+                h,
+                0,
+                b.as_mut_ptr() as *mut c_void,
+                48,
+                &mut n,
+            )
+        };
+        assert_eq!((st, n), (0, 48));
+        let q = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
+        assert_eq!(q(0) as u32, 0x103, "STATUS_PENDING tant qu'il tourne");
+        assert_eq!((q(16), q(24)), (pid as u64, pid as u64), "ClientId");
+        // Ni suspension ni registres d'ici : refus net (ERROR_ACCESS_DENIED).
+        assert_eq!(suspend_thread(h), u32::MAX);
+        assert_eq!(resume_thread(h), u32::MAX);
+        let mut ctx = vec![0u8; 1232];
+        assert_eq!(unsafe { get_thread_context(h, ctx.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { set_thread_context(h, ctx.as_ptr()) }, 0);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(wait_for_single_object(h, 5_000), 0, "fin du fil vue");
+        let mut code = 259;
+        assert_eq!(unsafe { get_exit_code_thread(h, &mut code) }, 1);
+        assert_ne!(code, 259);
+        close_handle(h);
+        // Fil inexistant : refus, comme avant.
+        assert_eq!(open_thread(0x1F03FF, 0, i32::MAX as u32 - 7), 0);
+    }
+
+    /// Garde-fou de sécurité de #2024 : le fil d'un processus d'un autre
+    /// compte ne s'ouvre jamais, celui du même compte oui.
+    #[test]
+    fn open_thread_refuse_le_fil_d_un_autre_compte() {
+        let status = |uid: u32| {
+            format!("Name:\tx\nTgid:\t4242\nPid:\t4243\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        };
+        assert_eq!(foreign_thread_owner(&status(1000), 1000, 1), Some(4242));
+        assert_eq!(
+            foreign_thread_owner(&status(1001), 1000, 1),
+            None,
+            "autre compte"
+        );
+        assert_eq!(foreign_thread_owner(&status(0), 1000, 1), None, "root");
+        assert_eq!(
+            foreign_thread_owner(&status(1000), 1000, 4242),
+            None,
+            "soi-même"
+        );
+        assert_eq!(
+            foreign_thread_owner("Name:\tx\n", 1000, 1),
+            None,
+            "illisible"
+        );
+        // En root (conteneur) : un vrai processus d'un autre compte.
+        if unsafe { libc::getuid() } == 0 {
+            use std::os::unix::process::CommandExt;
+            init();
+            let mut child = std::process::Command::new("sleep")
+                .arg("30")
+                .uid(65534)
+                .gid(65534)
+                .spawn()
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert_eq!(
+                open_thread(0x1F03FF, 0, child.id()),
+                0,
+                "fil d'un autre compte"
+            );
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+    }
+
+    /// ThreadBasicInformation d'un fil de ce processus : son vrai TEB.
+    #[test]
+    fn information_de_base_d_un_fil_d_ici_donne_son_teb() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        static TEB: AtomicUsize = AtomicUsize::new(0);
+        static FIN: AtomicBool = AtomicBool::new(false);
+        extern "win64" fn note_teb(_p: usize) -> u32 {
+            TEB.store(crate::process::teb(), Ordering::SeqCst);
+            while !FIN.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            0
+        }
+        init();
+        let mut tid = 0;
+        let h = unsafe { create_thread(0, 0, note_teb as *const () as usize, 0, 0, &mut tid) };
+        assert_ne!(h, 0);
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while TEB.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < limite {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let (status, teb, pid, t, _) = thread_basic_info(h).unwrap();
+        assert_eq!(status, 0x103);
+        assert_eq!(pid, std::process::id());
+        assert_eq!(t, tid);
+        assert_ne!(teb, 0);
+        assert_eq!(teb, TEB.load(Ordering::SeqCst));
+        FIN.store(true, Ordering::SeqCst);
+        assert_eq!(wait_for_single_object(h, 5_000), 0);
+        close_handle(h);
     }
 
     #[test]
