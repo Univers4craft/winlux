@@ -80,7 +80,7 @@ const MS_TAIL_40: [u8; 8] = [0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5];
 const MS_TAIL_DD: [u8; 8] = [0xb3, 0x2e, 0x00, 0xc0, 0x4f, 0x99, 0x0b, 0xb4];
 
 /// (CLSID, version) des classes de document servies.
-const CLASSES: &[(Guid, u8)] = &[
+pub(crate) const CLASSES: &[(Guid, u8)] = &[
     (g(0x2933_bf90, 0x7b36, 0x11d2, DOM_TAIL), 2), // Microsoft.XMLDOM
     (g(0xf6d9_0f11, 0x9c73, 0x11d3, MS_TAIL_DD), 3), // Msxml2.DOMDocument
     (g(0xf6d9_0f12, 0x9c73, 0x11d3, MS_TAIL_DD), 3),

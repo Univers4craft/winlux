@@ -1150,7 +1150,7 @@ unsafe extern "win64" fn SHCreateAssociationRegistration(iid: *const u8, out: *m
 
 /// CLSID ApplicationAssociationRegistration (windows-rs 0.58, MIT,
 /// Win32/UI/Shell) : la même classe par CoCreateInstance (Acrobat, #3295).
-const CLSID_APPLICATION_ASSOCIATION_REGISTRATION: Guid = guid(
+pub(crate) const CLSID_APPLICATION_ASSOCIATION_REGISTRATION: Guid = guid(
     0x5912_09c7,
     0x767b,
     0x42b2,
