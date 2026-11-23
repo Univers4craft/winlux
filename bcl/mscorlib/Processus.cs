@@ -91,6 +91,12 @@ namespace System.Diagnostics
         internal static extern long[] Lancer(string ligne, string dossier, int redirections, bool sansFenetre);
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int Shell(string fichier, string parametres, string dossier, string verbe);
+        // Fenêtre principale (première de premier niveau visible et sans
+        // propriétaire), 0 sans ; titre d'une fenêtre (#3285).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern long FenetrePrincipale(int pid);
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string TitreFenetre(long hwnd);
     }
 
     public enum ProcessWindowStyle { Normal = 0, Hidden = 1, Minimized = 2, Maximized = 3 }
@@ -259,8 +265,27 @@ namespace System.Diagnostics
 
         public string MachineName { get { Associe(); return "."; } }
         public bool Responding { get { return true; } }
-        public IntPtr MainWindowHandle { get { return IntPtr.Zero; } }
-        public string MainWindowTitle { get { return ""; } }
+        // Lues à chaque appel, sans cache : Refresh n'a rien à oublier
+        // (MS Learn, « Process.MainWindowHandle », #3285).
+        public IntPtr MainWindowHandle
+        {
+            get
+            {
+                Associe();
+                if (_pid == Inactif) return IntPtr.Zero;
+                return new IntPtr(ProcessusNatif.FenetrePrincipale(_pid));
+            }
+        }
+
+        public string MainWindowTitle
+        {
+            get
+            {
+                IntPtr h = MainWindowHandle;
+                if (h == IntPtr.Zero) return "";
+                return ProcessusNatif.TitreFenetre(h.ToInt64()) ?? "";
+            }
+        }
         public int SessionId { get { Associe(); return 1; } }
         public int BasePriority { get { return 8; } }
 
