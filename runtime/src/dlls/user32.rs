@@ -2012,12 +2012,15 @@ struct NcCalcSizeParams {
 /// fenêtres est alors retiré, sinon deux barres de titre se superposent
 /// (#1131). Il revient si la fenêtre rend plus tard la main à DefWindowProc.
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
-    // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
-    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+    // Programme 32 bits : la procédure x86 reçoit NCCALCSIZE_PARAMS en
+    // disposition x86 (trois RECT puis un pointeur 32 bits de WINDOWPOS),
+    // traduit à l'aller et au retour par wow32::user (recv_conv), comme
+    // WM_WINDOWPOSCHANGING. Seules les fenêtres filles n'ont pas de cadre
+    // du gestionnaire à retirer.
+    if gui::window_parent(hwnd).unwrap_or(0) != 0 {
         if window_diag() {
             eprintln!(
-                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
-                crate::wow32::pointer_size() * 8,
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé (fenêtre fille de {:#x}) (#3205)",
                 gui::window_parent(hwnd).unwrap_or(0)
             );
         }
