@@ -7239,7 +7239,11 @@ pub(crate) mod tests {
         let q = current_queue();
         assert!(pending_paint(hwnd, 0, 0).is_none());
         request_paint(hwnd);
-        let m = take_message(&q, hwnd, 0, 0).expect("WM_PAINT en file");
+        // Filtré sur WM_PAINT : un test voisin qui fait passer le programme
+        // au premier plan poste WM_ACTIVATEAPP à toutes ses fenêtres de
+        // premier niveau, celle-ci comprise, comme Windows le fait pour
+        // toutes les fenêtres de premier niveau de l'application.
+        let m = take_message(&q, hwnd, WM_PAINT, WM_PAINT).expect("WM_PAINT en file");
         assert_eq!(m.message, WM_PAINT);
         // Sans BeginPaint, la zone reste invalidée : WM_PAINT revient dès que
         // la file est vide, mais pas pour un filtre qui l'exclut.
@@ -7250,13 +7254,13 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // BeginPaint valide aussi.
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         let (hdc, _) = begin_paint(hwnd).unwrap();
         end_paint(hwnd, hdc);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // DefWindowProc valide lui-même (comme BeginPaint/EndPaint sous Windows).
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         def_window_proc(hwnd, WM_PAINT, 0, 0);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
