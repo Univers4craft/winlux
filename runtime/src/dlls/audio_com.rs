@@ -249,11 +249,20 @@ pub unsafe fn create_builtin(
 /// # Safety
 /// `riid` et `out` doivent être valides.
 pub unsafe fn class_object(clsid: &Guid, riid: *const Guid, out: *mut *mut c_void) -> Option<i32> {
-    let create = builtin_creator(clsid)?;
+    Some(factory(builtin_creator(clsid)?, riid, out))
+}
+
+/// Fabrique de classes (IClassFactory) autour de `create`, demandée sous
+/// `riid` : sert à toute classe intégrée que CoGetClassObject doit rendre
+/// comme CoCreateInstance la crée (#3294).
+///
+/// # Safety
+/// `riid` et `out` doivent être valides.
+pub unsafe fn factory(create: Creator, riid: *const Guid, out: *mut *mut c_void) -> i32 {
     let f = Com::create(CF_VT.ptr(), Factory { create });
     let hr = cf_qi(f, riid, out);
     Com::release(f);
-    Some(hr)
+    hr
 }
 
 /// DllGetClassObject commun aux DLL audio intégrées.

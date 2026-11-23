@@ -270,6 +270,26 @@ fn lock(l: &Link) -> std::sync::MutexGuard<'_, State> {
     l.state.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Fabrique de la classe ShellLink pour CoGetClassObject (#3294) : Learn
+/// décrit CoCreateInstance comme CoGetClassObject(IID_IClassFactory) puis
+/// CreateInstance, donc la classe que sert l'un doit être servie par l'autre.
+///
+/// # Safety
+/// `riid` et `out` doivent être valides.
+pub unsafe fn class_object(clsid: &Guid, riid: *const Guid, out: *mut *mut c_void) -> Option<i32> {
+    if *clsid != CLSID_SHELL_LINK || crate::wow32::active() {
+        return None;
+    }
+    Some(super::audio_com::factory(create_from_factory, riid, out))
+}
+
+unsafe fn create_from_factory(riid: *const Guid, out: *mut *mut c_void) -> i32 {
+    match read_guid(riid) {
+        Some(iid) => create_builtin(&CLSID_SHELL_LINK, &iid, out).unwrap_or(0x8004_0154u32 as i32),
+        None => E_INVALIDARG,
+    }
+}
+
 /// Classe ShellLink pour CoCreateInstance.
 ///
 /// # Safety

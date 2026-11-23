@@ -1121,6 +1121,10 @@ pub unsafe extern "win64" fn co_get_class_object(
         if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
             return hr;
         }
+        // Raccourcis Windows : la même classe que CoCreateInstance (#3294).
+        if let Some(hr) = super::shell_link::class_object(&guid, riid, out) {
+            return hr;
+        }
         if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
             if let Some(hr) = super::com_registry::class_object(&guid, &iid, out) {
                 return hr;
