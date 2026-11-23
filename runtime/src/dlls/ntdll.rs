@@ -1685,13 +1685,45 @@ pub unsafe extern "win64" fn nt_query_information_process(
 
 /// `NtQueryInformationThread` : stub.
 pub unsafe extern "win64" fn nt_query_information_thread(
-    _handle: usize,
-    _info_class: u32,
-    _info: *mut c_void,
-    _length: u32,
-    _return_length: *mut u32,
+    handle: usize,
+    info_class: u32,
+    info: *mut c_void,
+    length: u32,
+    return_length: *mut u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    match info_class {
+        0 => {
+            // ThreadBasicInformation, 48 octets en x64 : ExitStatus (et
+            // remplissage), TebBaseAddress, ClientId (UniqueProcess,
+            // UniqueThread), AffinityMask, Priority, BasePriority. Disposition
+            // de crashpad (util/win/process_structs.h, Apache 2.0), qui lit
+            // ainsi le TEB de chaque fil d'un processus planté (#2024).
+            let Some((status, teb, pid, tid, prio)) =
+                crate::dlls::kernel32::thread_basic_info(handle)
+            else {
+                return STATUS_INVALID_HANDLE;
+            };
+            let cpus = std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(64);
+            let mask = if cpus == 64 {
+                u64::MAX
+            } else {
+                (1u64 << cpus) - 1
+            };
+            let mut b = Vec::with_capacity(48);
+            b.extend_from_slice(&(status as u64).to_le_bytes());
+            b.extend_from_slice(&(teb as u64).to_le_bytes());
+            b.extend_from_slice(&(pid as u64).to_le_bytes());
+            b.extend_from_slice(&(tid as u64).to_le_bytes());
+            b.extend_from_slice(&mask.to_le_bytes());
+            // Priorité : classe normale (8) plus la priorité relative.
+            b.extend_from_slice(&(8 + prio).to_le_bytes());
+            b.extend_from_slice(&prio.to_le_bytes());
+            write_info(info, length, return_length, &b)
+        }
+        _ => STATUS_NOT_IMPLEMENTED,
+    }
 }
 
 /// `NtSetInformationThread` : stub (souvent appelé pour changer la priorité).
