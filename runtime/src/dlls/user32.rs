@@ -326,6 +326,9 @@ unsafe fn create_window_common(
     if let Some(d) = diag {
         eprintln!("winlux[fenetre] creer {d} -> {hwnd:#x}");
     }
+    if hwnd != 0 {
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_WINDOWCREATED, hwnd);
+    }
     hwnd
 }
 
@@ -1489,6 +1492,7 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
     // la détruire ; sans ce retour, la fenêtre de VLC restait inactive et sa
     // barre de menus gardait les libellés grisés de l'attente (#1311).
     let owner = owner_to_refocus(hwnd);
+    super::user32_more::shell_hook_window_destroyed(hwnd);
     if gui::destroy_window(hwnd) {
         if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
             crate::thunks::api_note(&format!(
@@ -1611,6 +1615,7 @@ unsafe fn activate_for_focus(hwnd: usize, state: usize) {
     }
     deliver(top, gui::WM_NCACTIVATE, 1, 0);
     deliver(top, gui::WM_ACTIVATE, state, prev as isize);
+    super::user32_more::notify_shell_hook(super::user32_more::HSHELL_WINDOWACTIVATED, top);
 }
 
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
@@ -2012,12 +2017,15 @@ struct NcCalcSizeParams {
 /// fenêtres est alors retiré, sinon deux barres de titre se superposent
 /// (#1131). Il revient si la fenêtre rend plus tard la main à DefWindowProc.
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
-    // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
-    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+    // Programme 32 bits : la procédure x86 reçoit NCCALCSIZE_PARAMS en
+    // disposition x86 (trois RECT puis un pointeur 32 bits de WINDOWPOS),
+    // traduit à l'aller et au retour par wow32::user (recv_conv), comme
+    // WM_WINDOWPOSCHANGING. Seules les fenêtres filles n'ont pas de cadre
+    // du gestionnaire à retirer.
+    if gui::window_parent(hwnd).unwrap_or(0) != 0 {
         if window_diag() {
             eprintln!(
-                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
-                crate::wow32::pointer_size() * 8,
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé (fenêtre fille de {:#x}) (#3205)",
                 gui::window_parent(hwnd).unwrap_or(0)
             );
         }
@@ -2219,6 +2227,7 @@ pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> 
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
         publish_shared(hwnd);
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_REDRAW, hwnd);
         1
     } else {
         0
@@ -2231,6 +2240,7 @@ pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) ->
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
         publish_shared(hwnd);
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_REDRAW, hwnd);
         1
     } else {
         0
@@ -2422,6 +2432,10 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         // cocher et boutons radio à 96 ppp. wxWidgets l'ajoute à la largeur
         // du libellé ; à 0, ses libellés finissaient en « … » (#842).
         71 | 72 => 15,
+        // SM_CONVERTIBLESLATEMODE : 0 en mode tablette, non nul sinon
+        // (Learn, GetSystemMetrics). Un PC sans interrupteur mode tablette
+        // n'est jamais en mode tablette (#1933).
+        0x2003 => crate::dlls::evdev::slate_mode_metric(),
         90 => 96, // LOGPIXELSX
         91 => 96, // LOGPIXELSY
         _ => 0,
@@ -5246,9 +5260,22 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(
     handles: *const usize,
     timeout: u32,
     wake_mask: u32,
-    _flags: u32,
+    flags: u32,
 ) -> u32 {
-    msg_wait_for_multiple_objects(count, handles, 0, timeout, wake_mask)
+    // Learn (MsgWaitForMultipleObjectsEx) : MWMO_WAITALL attend tous les
+    // objets ; MWMO_ALERTABLE rend aussi la main quand une APC est mise en
+    // file pour le fil (QueueUserAPC, routine de complétion), après l'avoir
+    // exécutée, avec WAIT_IO_COMPLETION. Ignorer ces drapeaux laissait un
+    // fil qui reçoit son travail par APC attendre pour toujours (#3281).
+    const MWMO_WAITALL: u32 = 0x1;
+    const MWMO_ALERTABLE: u32 = 0x2;
+    let wait_all = i32::from(flags & MWMO_WAITALL != 0);
+    if flags & MWMO_ALERTABLE != 0 {
+        return crate::dlls::kernel32::alertable_wait(timeout, |slice| {
+            msg_wait_for_multiple_objects(count, handles, wait_all, slice, wake_mask)
+        });
+    }
+    msg_wait_for_multiple_objects(count, handles, wait_all, timeout, wake_mask)
 }
 
 // ---------- Scroll bar stubs ----------
@@ -7350,6 +7377,95 @@ mod tests {
         }
     }
 
+    /// #3330 : RegisterShellHookWindow. La fenêtre inscrite reçoit le
+    /// message « SHELLHOOK » (wParam = HSHELL_*, lParam = fenêtre) pour les
+    /// fenêtres de premier niveau sans propriétaire seulement : création,
+    /// activation, titre, destruction. Rien pour une fenêtre possédée ou
+    /// fille, rien après DeregisterShellHookWindow.
+    #[test]
+    fn crochet_du_shell_recoit_les_hshell_3330() {
+        use super::super::user32_more as m;
+        unsafe {
+            let name: Vec<u16> = "Winlux3330Crochet".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: def_window_proc_w as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let creer = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    style,
+                    0,
+                    0,
+                    200,
+                    100,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let register = |h: usize| m::register_shell_hook_window(h);
+            let deregister = |h: usize| m::deregister_shell_hook_window(h);
+            // Fenêtre inexistante : refus (ERROR_INVALID_WINDOW_HANDLE, sans
+            // TEB dans un test).
+            assert_eq!(register(0x3330_0000), 0);
+
+            let crochet = creer(0x8000_0000, 0);
+            assert_ne!(crochet, 0);
+            assert_eq!(register(crochet), 1);
+            let shellhook = register_window_message("SHELLHOOK".into());
+            let recus = |a_moi: &[usize]| {
+                let mut out = Vec::new();
+                let mut msg = Msg::new(0, 0, 0, 0);
+                while peek_message_w(&mut msg, crochet, shellhook, shellhook, 1) != 0 {
+                    // Les autres tests créent leurs fenêtres en parallèle.
+                    if a_moi.contains(&(msg.lparam as usize)) {
+                        out.push((msg.wparam, msg.lparam as usize));
+                    }
+                }
+                out
+            };
+
+            let a = creer(0x80C0_0000, 0); // WS_POPUP | WS_CAPTION, sans propriétaire
+            let possedee = creer(0x80C0_0000, a);
+            let fille = creer(0x4000_0000, a);
+            assert!(a != 0 && possedee != 0 && fille != 0);
+            let title: Vec<u16> = "Nouveau titre".encode_utf16().chain([0]).collect();
+            set_window_text_w(a, title.as_ptr());
+            set_window_text_w(possedee, title.as_ptr());
+            let toutes = [a, possedee, fille];
+            assert_eq!(
+                recus(&toutes),
+                [(m::HSHELL_WINDOWCREATED, a), (m::HSHELL_REDRAW, a)]
+            );
+
+            destroy_window(fille);
+            destroy_window(possedee);
+            destroy_window(a);
+            assert_eq!(recus(&toutes), [(m::HSHELL_WINDOWDESTROYED, a)]);
+
+            // Désinscrite : plus rien, et une seconde désinscription échoue.
+            assert_eq!(deregister(crochet), 1);
+            assert_eq!(deregister(crochet), 0);
+            let b = creer(0x80C0_0000, 0);
+            destroy_window(b);
+            assert!(recus(&[b]).is_empty());
+            destroy_window(crochet);
+        }
+    }
+
     static WIN_EVENTS_1498: std::sync::Mutex<Vec<(u32, usize)>> = std::sync::Mutex::new(Vec::new());
 
     unsafe extern "win64" fn crochet_1498(
@@ -7434,6 +7550,102 @@ mod tests {
                 258
             );
             kill_timer(0, id);
+        }
+    }
+
+    /// #3281 : MsgWaitForMultipleObjectsEx suit ses drapeaux (Learn).
+    /// MWMO_ALERTABLE : une APC en file tourne et l'attente rend
+    /// WAIT_IO_COMPLETION, y compris une APC mise en file par un autre fil
+    /// pendant l'attente ; sans le drapeau, elle ne tourne pas.
+    /// MWMO_WAITALL : un seul objet signalé ne suffit pas.
+    #[test]
+    fn msg_wait_ex_alertable_et_attendre_tout_3281() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static APPELS: AtomicU32 = AtomicU32::new(0);
+        extern "win64" fn apc(_param: usize) {
+            APPELS.fetch_add(1, Ordering::Relaxed);
+        }
+        extern "win64" fn routine(_arg: usize, _low: u32, _high: u32) {
+            APPELS.fetch_add(1, Ordering::Relaxed);
+        }
+        use crate::dlls::kernel32 as k;
+        unsafe {
+            let moi = k::get_current_thread();
+            assert_eq!(k::queue_user_apc(apc as *const () as usize, moi, 0), 1);
+            // Sans MWMO_ALERTABLE : délai écoulé, APC toujours en file.
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 30, 0x04FF, 0),
+                258
+            );
+            assert_eq!(
+                APPELS.load(Ordering::Relaxed),
+                0,
+                "APC hors attente alertable"
+            );
+            // Avec : elle tourne, WAIT_IO_COMPLETION.
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 1000, 0x04FF, 0x2),
+                0xC0
+            );
+            assert_eq!(APPELS.load(Ordering::Relaxed), 1);
+            // APC mise en file par un autre fil (minuteur) pendant l'attente.
+            let t = k::create_waitable_timer_a(0, 0, std::ptr::null());
+            let due: i64 = -200_000; // 20 ms, relatif
+            assert_eq!(
+                k::set_waitable_timer(t, &due, 0, routine as *const () as usize, 0, 0),
+                1
+            );
+            let debut = std::time::Instant::now();
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 5000, 0x04FF, 0x2),
+                0xC0
+            );
+            assert!(
+                debut.elapsed().as_millis() < 2000,
+                "APC pas servie pendant l'attente"
+            );
+            assert_eq!(APPELS.load(Ordering::Relaxed), 2);
+            k::close_handle(t);
+            // QueueUserAPC depuis un autre fil, sur un fil déjà entré dans
+            // l'attente sans délai (Discord : « Voice » vers « aecdump »).
+            let _ = k::current_thread_object(); // fil de test inscrit comme fil Windows
+            let tid = k::get_current_thread_id();
+            let autre = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                let h = k::open_thread(0x0010, 0, tid); // THREAD_SET_CONTEXT
+                assert_ne!(h, 0);
+                let ok = k::queue_user_apc(apc as *const () as usize, h, 0);
+                k::close_handle(h);
+                ok
+            });
+            let debut = std::time::Instant::now();
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 3000, 0x04FF, 0x2),
+                0xC0,
+                "attente alertable non réveillée par QueueUserAPC"
+            );
+            assert!(debut.elapsed().as_millis() < 2000);
+            assert_eq!(autre.join().unwrap(), 1);
+            assert_eq!(APPELS.load(Ordering::Relaxed), 3);
+            // MWMO_WAITALL : un objet sur deux ne suffit pas.
+            let a = k::create_event_a(0, 1, 1, std::ptr::null());
+            let b = k::create_event_a(0, 1, 0, std::ptr::null());
+            let hs = [a, b];
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(2, hs.as_ptr(), 30, 0, 0x1),
+                258
+            );
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(2, hs.as_ptr(), 30, 0, 0),
+                0
+            );
+            k::set_event(b);
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(2, hs.as_ptr(), 30, 0, 0x1),
+                0
+            );
+            k::close_handle(a);
+            k::close_handle(b);
         }
     }
 

@@ -1590,8 +1590,8 @@ pub unsafe extern "win64" fn direct_input_create_ex(
 /// `CoCreateInstance(CLSID_DirectInput8, …)` puis `Initialize`, au lieu de
 /// DirectInput8Create. Sans elles, pygame 32 bits réessayait sans fin et
 /// n'ouvrait jamais sa fenêtre (#1516).
-const CLSID_DIRECTINPUT: Guid = guid(0x25E609E0, 0xB259, 0x11CF, BFC7);
-const CLSID_DIRECTINPUT8: Guid = guid(0x25E609E4, 0xB259, 0x11CF, BFC7);
+pub(crate) const CLSID_DIRECTINPUT: Guid = guid(0x25E609E0, 0xB259, 0x11CF, BFC7);
+pub(crate) const CLSID_DIRECTINPUT8: Guid = guid(0x25E609E4, 0xB259, 0x11CF, BFC7);
 
 pub unsafe fn create_builtin(
     clsid: &super::ole32::Guid,
