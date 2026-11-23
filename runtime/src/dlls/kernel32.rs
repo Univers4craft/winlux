@@ -8476,6 +8476,62 @@ fn multi_sleep(left: u32, cap: bool) -> u32 {
     }
 }
 
+/// Attente d'objets mêlée à d'autres descripteurs, pour
+/// MsgWaitForMultipleObjects (#3170) : le fil dort dans poll(2) jusqu'au
+/// signal d'un objet, d'un descripteur de `extra` (connexion X11, éveil de
+/// la file de messages) ou du délai, au lieu de relire toutes les 10 ms.
+pub(crate) struct ObjectWait {
+    hs: Vec<usize>,
+    objects: Vec<Option<SyncHandle>>,
+    pidfds: Vec<Option<Option<std::os::fd::OwnedFd>>>,
+    waiter: MultiWait,
+}
+
+impl ObjectWait {
+    pub(crate) fn new(hs: &[usize]) -> ObjectWait {
+        let objects: Vec<Option<SyncHandle>> = hs.iter().map(|&h| lookup_sync(h)).collect();
+        let waiter = MultiWait::register(&objects.iter().flatten().collect::<Vec<_>>());
+        ObjectWait {
+            hs: hs.to_vec(),
+            pidfds: hs.iter().map(|_| None).collect(),
+            objects,
+            waiter,
+        }
+    }
+
+    /// À appeler avant de relire l'état des objets et de la file.
+    pub(crate) fn arm(&self) {
+        self.waiter.arm();
+    }
+
+    /// Dort au plus `ms` millisecondes. Un objet sans source de réveil
+    /// (objet partagé entre processus, entrée console) ramène le sommeil à
+    /// MULTI_CAP_MS, comme pour WaitForMultipleObjects.
+    pub(crate) fn block(&mut self, extra: &[i32], ms: u32) {
+        let mut fds: Vec<libc::pollfd> = extra
+            .iter()
+            .filter(|&&fd| fd >= 0)
+            .map(|&fd| libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        let mut cap = false;
+        for (i, &h) in self.hs.iter().enumerate() {
+            match &self.objects[i] {
+                Some(o) => cap |= wait_sources(o, h, &mut self.pidfds[i], &mut fds),
+                None => {
+                    let sock = crate::dlls::ws2_32::wait_fds(h);
+                    cap |= sock.is_empty();
+                    fds.extend(sock);
+                }
+            }
+        }
+        self.waiter.block(fds, multi_sleep(ms, cap));
+    }
+}
+
 /// Attente « un seul parmi » qui contient des événements de WSACreateEvent
 /// (#1351) : ceux-ci, et les autres handles, sont interrogés sans attente
 /// jusqu'au premier prêt. Un événement WSA est à réinitialisation manuelle :
