@@ -20,6 +20,10 @@ extern "system" {
     fn OpenThread(access: u32, inherit: i32, tid: u32) -> Handle;
     fn GetThreadId(thread: Handle) -> u32;
     fn GetExitCodeThread(thread: Handle, code: *mut u32) -> i32;
+    fn SuspendThread(thread: Handle) -> u32;
+    fn ResumeThread(thread: Handle) -> u32;
+    fn GetThreadContext(thread: Handle, context: *mut u8) -> i32;
+    fn SetThreadContext(thread: Handle, context: *const u8) -> i32;
     fn ReadProcessMemory(
         process: Handle,
         address: *const c_void,
@@ -38,7 +42,13 @@ extern "system" {
         length: u32,
         returned: *mut u32,
     ) -> i32;
+    fn NtSuspendProcess(process: Handle) -> i32;
+    fn NtResumeProcess(process: Handle) -> i32;
 }
+
+/// CONTEXT x64 aligné sur 16 octets (1232 octets).
+#[repr(C, align(16))]
+struct Contexte([u8; 1232]);
 
 const THREAD_ALL_ACCESS: u32 = 0x1F_FFFF;
 const FICHIER: &core::ffi::CStr = c"fil_etranger.tid";
@@ -201,6 +211,42 @@ pub extern "C" fn mainCRTStartup() -> ! {
             teb != 0 && word(child.process, teb + 0x48) == Some(tid as u64),
             "ReadProcessMemory : ClientId.UniqueThread du TEB lu"
         );
+
+        // #3320 : processus en marche, ni suspension ni registres.
+        check!(
+            SuspendThread(thread) == u32::MAX,
+            "SuspendThread refusé tant que l'enfant tourne"
+        );
+        // Processus suspendu (comme crashpad avant son instantané) : les
+        // appels réussissent sans rien faire, Rip et Rsp seulement.
+        NtSuspendProcess(child.process);
+        let mut compte = u32::MAX;
+        for _ in 0..100 {
+            compte = SuspendThread(thread);
+            if compte != u32::MAX {
+                break;
+            }
+            Sleep(10);
+        }
+        check!(compte == 1, "SuspendThread : 1 sur l'enfant suspendu");
+        let mut ctx = Contexte([0; 1232]);
+        (ctx.0.as_mut_ptr().add(0x30) as *mut u32).write(0x0010_001F);
+        let lu = GetThreadContext(thread, ctx.0.as_mut_ptr()) != 0;
+        let drapeaux = (ctx.0.as_ptr().add(0x30) as *const u32).read();
+        let rsp = (ctx.0.as_ptr().add(0x98) as *const u64).read();
+        out(b"  Rsp lu : ");
+        out_hex(rsp);
+        out(b"\n");
+        check!(
+            lu && drapeaux == 0x0010_0000 && rsp != 0,
+            "GetThreadContext : Rsp, sans CONTEXT_CONTROL annoncé"
+        );
+        check!(
+            SetThreadContext(thread, ctx.0.as_ptr()) == 0,
+            "SetThreadContext toujours refusé"
+        );
+        check!(ResumeThread(thread) == 1, "ResumeThread : 1, sans effet");
+        NtResumeProcess(child.process);
 
         TerminateProcess(child.process, 9);
         check!(
