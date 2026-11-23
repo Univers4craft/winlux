@@ -6120,6 +6120,10 @@ impl gui::GuiBackend for X11Backend {
         let _ = self.conn.flush();
     }
 
+    fn is_unmanaged(&self, hwnd: usize) -> bool {
+        self.popups.contains(&hwnd)
+    }
+
     fn set_popup(&mut self, hwnd: usize) {
         self.popups.insert(hwnd);
         self.extents.remove(&hwnd);
