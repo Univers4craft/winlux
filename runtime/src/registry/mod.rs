@@ -891,6 +891,8 @@ struct Cache {
     /// Empreinte de `proxy.conf` : un proxy changé côté Linux se voit tout de suite.
     proxy: Stamp,
     data: Data,
+    /// Valeurs calculées posées sur `data` (à retirer avant d'écrire).
+    live: live::LiveValues,
 }
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
@@ -979,10 +981,6 @@ fn overlay_network(data: &mut Data) {
     }
 }
 
-fn load_from_disk(path: &Path) -> Result<Data, i32> {
-    Ok(load_with_live(path)?.0)
-}
-
 /// Registre du disque plus les vues calculées ; rend aussi les valeurs de
 /// la vue dynamique, à ne pas réécrire sur le disque (#1046).
 fn load_with_live(path: &Path) -> Result<(Data, live::LiveValues), i32> {
@@ -1014,12 +1012,13 @@ fn current(cache: &mut Option<Cache>) -> Result<&Data, i32> {
     let proxy = stamp(&crate::admin::path(crate::proxy::CONFIG));
     let fresh = matches!(cache, Some(c) if c.path == path && c.stamp == now && now.is_some() && c.proxy == proxy);
     if !fresh {
-        let data = load_from_disk(&path)?;
+        let (data, live) = load_with_live(&path)?;
         *cache = Some(Cache {
             path,
             stamp: now,
             proxy,
             data,
+            live,
         });
     }
     Ok(&cache.as_ref().expect("cache rempli").data)
@@ -1055,9 +1054,71 @@ fn write_to_disk(path: &Path, data: &Data) -> Result<(), i32> {
         .open(&temp)
         .map_err(|_| ERROR_ACCESS_DENIED)?;
     f.write_all(serialize(data).as_bytes())
-        .and_then(|_| f.sync_all())
         .map_err(|_| ERROR_ACCESS_DENIED)?;
-    std::fs::rename(&temp, path).map_err(|_| ERROR_ACCESS_DENIED)
+    std::fs::rename(&temp, path).map_err(|_| ERROR_ACCESS_DENIED)?;
+    schedule_flush(path);
+    Ok(())
+}
+
+/// Délai du vidage différé sur le disque.
+const FLUSH_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Fichier à vider sur le disque, en attente du fil de vidage.
+static FLUSH_PENDING: (Mutex<Option<PathBuf>>, std::sync::Condvar) =
+    (Mutex::new(None), std::sync::Condvar::new());
+
+/// Comme sous Windows, une écriture ne vide pas le registre sur le disque :
+/// selon la page Learn de RegFlushKey, un vidage paresseux écrit les
+/// changements peu après, et RegFlushKey seul force l'écriture. Ici, le
+/// fichier est remplacé tout de suite (les autres applis le voient aussitôt,
+/// et un `rename` ne laisse jamais de fichier à moitié écrit), puis un fil
+/// fait le `fsync` une seconde après la dernière écriture. Un `fsync` à
+/// chaque valeur coûtait 2 à 20 ms selon la taille du registre (#3429).
+fn schedule_flush(path: &Path) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    *crate::dlls::lock(&FLUSH_PENDING.0) = Some(path.to_path_buf());
+    FLUSH_PENDING.1.notify_one();
+    STARTED.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("winlux-registre-vidage".into())
+            .spawn(|| loop {
+                {
+                    let mut g = crate::dlls::lock(&FLUSH_PENDING.0);
+                    while g.is_none() {
+                        g = FLUSH_PENDING
+                            .1
+                            .wait(g)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
+                }
+                std::thread::sleep(FLUSH_DELAY);
+                flush();
+            });
+        match spawned {
+            Ok(_) => FLUSH_STARTED_OK.store(true, Ordering::Relaxed),
+            // Sans fil, on revient au vidage immédiat.
+            Err(_) => crate::log_warn!(
+                "registry",
+                "fil de vidage du registre impossible : vidage immédiat"
+            ),
+        }
+    });
+    if !FLUSH_STARTED_OK.load(Ordering::Relaxed) {
+        flush();
+    }
+}
+
+/// Vrai quand le fil de vidage tourne.
+static FLUSH_STARTED_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Vide tout de suite sur le disque le registre en attente (RegFlushKey).
+pub fn flush() {
+    let pending = crate::dlls::lock(&FLUSH_PENDING.0).take();
+    if let Some(path) = pending {
+        if let Ok(f) = File::open(&path) {
+            let _ = f.sync_all();
+        }
+    }
 }
 
 /// Lecture cohérente du registre.
@@ -1071,7 +1132,18 @@ pub fn write<T>(f: impl FnOnce(&mut Data) -> Result<T, i32>) -> Result<T, i32> {
     let mut cache = crate::dlls::lock(&CACHE);
     let path = store_path();
     let _lock = file_lock(&path)?;
-    let (mut data, values) = load_with_live(&path)?;
+    // Sous le verrou, une empreinte inchangée prouve que personne n'a
+    // réécrit le fichier depuis notre copie : la relire et la réanalyser
+    // (tout le registre, plus les vues calculées) ne servirait à rien et
+    // coûtait l'essentiel de chaque RegSetValueEx (#3429).
+    let now = stamp(&path);
+    let proxy_now = stamp(&crate::admin::path(crate::proxy::CONFIG));
+    let (mut data, values) = match cache.take() {
+        Some(c) if c.path == path && c.stamp == now && now.is_some() && c.proxy == proxy_now => {
+            (c.data, c.live)
+        }
+        _ => load_with_live(&path)?,
+    };
     let proxy_before = proxy_values(&data);
     let out = f(&mut data)?;
     sync_proxy(&proxy_before, &data);
@@ -1083,6 +1155,7 @@ pub fn write<T>(f: impl FnOnce(&mut Data) -> Result<T, i32>) -> Result<T, i32> {
         proxy: stamp(&crate::admin::path(crate::proxy::CONFIG)),
         path,
         data,
+        live: values,
     });
     Ok(out)
 }
