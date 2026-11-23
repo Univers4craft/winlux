@@ -24,6 +24,11 @@ const HR_FILE_NOT_FOUND: i32 = 0x8007_0002u32 as i32;
 const STG_E_INVALIDPARAMETER: i32 = 0x8003_0057u32 as i32;
 /// DISP_E_TYPEMISMATCH.
 const DISP_E_TYPEMISMATCH: i32 = 0x8002_0005u32 as i32;
+/// STRSAFE_E_INSUFFICIENT_BUFFER (strsafe.h) : copie tronquée.
+const STRSAFE_E_INSUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
+const E_FAIL: i32 = 0x8000_4005u32 as i32;
+const VT_VECTOR: u16 = 0x1000;
+const VT_ARRAY: u16 = 0x2000;
 
 const VT_EMPTY: u16 = 0;
 const VT_NULL: u16 = 1;
@@ -268,6 +273,104 @@ pub unsafe extern "win64" fn PropVariantToStringAlloc(pv: *const u8, out: usize)
         return E_OUTOFMEMORY;
     }
     crate::wow32::write_ptr(out, p as usize);
+    S_OK
+}
+
+/// PropVariantToBSTR (Learn, propvarutil.h) : VT_BSTR et VT_LPWSTR
+/// extraits tels quels, VT_EMPTY donne une BSTR vide allouée, le reste
+/// passe par la conversion en texte ; si elle échoue, *pbstrOut vaut NULL
+/// et le code d'échec est rendu. Les vecteurs (« 3; 1; 4 ») ne sont pas
+/// encore servis : DISP_E_TYPEMISMATCH, sortie NULL.
+pub unsafe extern "win64" fn PropVariantToBSTR(pv: *const u8, out: usize) -> i32 {
+    if out == 0 {
+        return E_POINTER;
+    }
+    crate::wow32::write_ptr(out, 0);
+    if pv.is_null() {
+        return E_INVALIDARG;
+    }
+    let text = match text_of(pv) {
+        Ok(t) => t,
+        Err(hr) => return hr,
+    };
+    let b = super::oleaut32::sys_alloc_string_len(text.as_ptr(), text.len() as u32);
+    if b.is_null() {
+        return E_OUTOFMEMORY;
+    }
+    crate::wow32::write_ptr(out, b as usize);
+    S_OK
+}
+
+/// PropVariantToString (Learn) : au plus cch-1 caractères et le zéro
+/// final ; trop long, copie tronquée terminée et
+/// STRSAFE_E_INSUFFICIENT_BUFFER ; conversion impossible, psz = "".
+pub unsafe extern "win64" fn PropVariantToString(pv: *const u8, psz: *mut u16, cch: u32) -> i32 {
+    if psz.is_null() || cch == 0 {
+        return E_INVALIDARG;
+    }
+    *psz = 0;
+    if pv.is_null() {
+        return E_INVALIDARG;
+    }
+    let text = match text_of(pv) {
+        Ok(t) => t,
+        Err(hr) => return hr,
+    };
+    let n = text.len().min(cch as usize - 1);
+    std::ptr::copy_nonoverlapping(text.as_ptr(), psz, n);
+    *psz.add(n) = 0;
+    if n < text.len() {
+        STRSAFE_E_INSUFFICIENT_BUFFER
+    } else {
+        S_OK
+    }
+}
+
+/// PropVariantToBuffer (Learn) : VT_VECTOR|VT_UI1 ou VT_ARRAY|VT_UI1,
+/// les cb premiers octets ; autre type, E_INVALIDARG ; valeur plus courte
+/// que cb, E_FAIL sans toucher au tampon.
+pub unsafe extern "win64" fn PropVariantToBuffer(pv: *const u8, dst: *mut u8, cb: u32) -> i32 {
+    if pv.is_null() || (dst.is_null() && cb != 0) {
+        return E_INVALIDARG;
+    }
+    let (len, data) = match vt(pv) {
+        t if t == VT_VECTOR | VT_UI1 => {
+            // CAUB : cElems (ULONG) à +8, pElems au pointeur suivant.
+            let n = std::ptr::read_unaligned(pv.add(8) as *const u32) as usize;
+            let step = crate::wow32::pointer_size();
+            (
+                n,
+                crate::wow32::read_ptr(pv as usize + 8 + step) as *const u8,
+            )
+        }
+        t if t == VT_ARRAY | VT_UI1 => {
+            use super::oleaut32 as oa;
+            let sa = value_ptr(pv);
+            if sa == 0 || oa::safe_array_get_dim(sa) != 1 {
+                return E_INVALIDARG;
+            }
+            let (mut lo, mut hi) = (0i32, -1i32);
+            oa::safe_array_get_l_bound(sa, 1, &mut lo);
+            oa::safe_array_get_u_bound(sa, 1, &mut hi);
+            let n = (i64::from(hi) - i64::from(lo) + 1).max(0) as usize;
+            let mut data = std::ptr::null_mut::<c_void>();
+            if oa::safe_array_access_data(sa, &mut data) < 0 {
+                return E_INVALIDARG;
+            }
+            let hr = copy_prefix(n, data as *const u8, dst, cb);
+            oa::safe_array_unaccess_data(sa);
+            return hr;
+        }
+        _ => return E_INVALIDARG,
+    };
+    copy_prefix(len, data, dst, cb)
+}
+
+unsafe fn copy_prefix(len: usize, data: *const u8, dst: *mut u8, cb: u32) -> i32 {
+    if len < cb as usize || (cb != 0 && data.is_null()) {
+        return E_FAIL;
+    }
+    std::ptr::copy_nonoverlapping(data, dst, cb as usize);
     S_OK
 }
 
@@ -595,6 +698,9 @@ pub fn exports() -> crate::dlls::Exports {
         "InitPropVariantFromFileTime" => fn InitPropVariantFromFileTime,
         "PropVariantChangeType" => fn PropVariantChangeType,
         "PropVariantToGUID" => fn PropVariantToGUID,
+        "PropVariantToBSTR" => fn PropVariantToBSTR,
+        "PropVariantToString" => fn PropVariantToString,
+        "PropVariantToBuffer" => fn PropVariantToBuffer,
         "PropVariantToStringAlloc" => fn PropVariantToStringAlloc,
         "PropVariantToUInt32" => fn PropVariantToUInt32,
         "StgSerializePropVariant" => fn StgSerializePropVariant,
@@ -618,6 +724,86 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3319 : PropVariantToBSTR, PropVariantToString, PropVariantToBuffer
+    /// selon Learn (VT_EMPTY → "", troncature signalée, octets d'un blob).
+    #[test]
+    fn propvariant_vers_bstr_texte_et_tampon_3319() {
+        use crate::dlls::oleaut32 as oa;
+        unsafe {
+            let w: Vec<u16> = "Haut-parleurs\0".encode_utf16().collect();
+            let lp = [VT_LPWSTR as u64, w.as_ptr() as u64, 0];
+            let mut b = 1usize;
+            assert_eq!(
+                PropVariantToBSTR(lp.as_ptr().cast(), &mut b as *mut usize as usize),
+                0
+            );
+            assert_eq!(oa::sys_string_len(b as *const u16), 13);
+            assert_eq!(crate::dlls::wstr(b as *const u16), "Haut-parleurs");
+            oa::sys_free_string(b as *mut u16);
+
+            let vide = [0u64; 3];
+            assert_eq!(
+                PropVariantToBSTR(vide.as_ptr().cast(), &mut b as *mut usize as usize),
+                0
+            );
+            assert!(b != 0);
+            assert_eq!(oa::sys_string_len(b as *const u16), 0);
+            oa::sys_free_string(b as *mut u16);
+
+            let entier = [VT_UI4 as u64, 7, 0];
+            assert_eq!(
+                PropVariantToBSTR(entier.as_ptr().cast(), &mut b as *mut usize as usize),
+                0
+            );
+            assert_eq!(crate::dlls::wstr(b as *const u16), "7");
+            oa::sys_free_string(b as *mut u16);
+
+            // Conversion impossible : échec et sortie NULL.
+            let inconnu = [0x0049u64, 0, 0];
+            b = 1;
+            assert!(PropVariantToBSTR(inconnu.as_ptr().cast(), &mut b as *mut usize as usize) < 0);
+            assert_eq!(b, 0);
+
+            let mut buf = [0xFFFFu16; 6];
+            assert_eq!(
+                PropVariantToString(lp.as_ptr().cast(), buf.as_mut_ptr(), 6),
+                STRSAFE_E_INSUFFICIENT_BUFFER
+            );
+            assert_eq!(crate::dlls::wstr(buf.as_ptr()), "Haut-");
+            let mut grand = [0u16; 32];
+            assert_eq!(
+                PropVariantToString(lp.as_ptr().cast(), grand.as_mut_ptr(), 32),
+                0
+            );
+            assert_eq!(crate::dlls::wstr(grand.as_ptr()), "Haut-parleurs");
+            grand[0] = b'x' as u16;
+            assert!(PropVariantToString(inconnu.as_ptr().cast(), grand.as_mut_ptr(), 32) < 0);
+            assert_eq!(grand[0], 0);
+
+            let octets = [1u8, 2, 3, 4];
+            let mut caub = [0u64; 3];
+            caub[0] = (VT_VECTOR | VT_UI1) as u64;
+            caub[1] = 4;
+            caub[2] = octets.as_ptr() as u64;
+            let mut dst = [0u8; 3];
+            assert_eq!(
+                PropVariantToBuffer(caub.as_ptr().cast(), dst.as_mut_ptr(), 3),
+                0
+            );
+            assert_eq!(dst, [1, 2, 3]);
+            let mut trop = [9u8; 5];
+            assert_eq!(
+                PropVariantToBuffer(caub.as_ptr().cast(), trop.as_mut_ptr(), 5),
+                E_FAIL
+            );
+            assert_eq!(trop, [9; 5]);
+            assert_eq!(
+                PropVariantToBuffer(entier.as_ptr().cast(), dst.as_mut_ptr(), 1),
+                E_INVALIDARG
+            );
+        }
+    }
 
     #[test]
     fn propvariant_conversions_et_serialisation() {
