@@ -13,6 +13,7 @@ composition.rs	Factory	a-verifier
 composition.rs	Handler	a-verifier	
 composition.rs	Slot	a-verifier	
 controls.rs	DrawItemStruct	a-verifier	
+controls.rs	MeasureItemStruct	x86	WM_MEASUREITEM traduit par wow32/comctl.rs (MEASUREITEMSTRUCT, 24 octets en x86 : itemData en ULONG_PTR de 4 octets)
 controls/bars.rs	CbeItem	a-verifier	
 controls/bars.rs	NmHdr	a-verifier	
 controls/bars.rs	NmToolbar	a-verifier	
