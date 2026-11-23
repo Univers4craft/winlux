@@ -752,7 +752,7 @@ const WAIT_FAILED: u32 = 0xFFFF_FFFF;
 /// c'est-à-dire qu'il a une file et une fenêtre. Un programme console
 /// échoue tout de suite, comme sous Windows ; un processus qui se termine
 /// sans fenêtre aussi.
-unsafe extern "win64" fn wait_for_input_idle(process: usize, ms: u32) -> u32 {
+pub(crate) unsafe extern "win64" fn wait_for_input_idle(process: usize, ms: u32) -> u32 {
     let Some(pid) = crate::dlls::kernel32::process_os_pid(process) else {
         crate::process::set_last_error(6); // ERROR_INVALID_HANDLE
         return WAIT_FAILED;

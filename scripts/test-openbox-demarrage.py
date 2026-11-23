@@ -60,9 +60,12 @@ finally:
 
 
 def main():
-    for outil in ("Xvfb", "xprop", "wmctrl", "xwininfo"):
-        if not shutil.which(outil):
-            print(f"{outil} absent : test sauté"); return 0
+    # Un outil manquant fait échouer le test : sauté, il laissait l'étape
+    # verte sans rien vérifier (#3407).
+    manquants = [o for o in ("Xvfb", "xprop", "wmctrl", "xwininfo") if not shutil.which(o)]
+    if manquants:
+        print(f"ÉCHEC : outils absents ({', '.join(manquants)}) : le test ne peut rien vérifier (#3407)")
+        return 1
     if not OPENBOX.is_file():
         print(f"ÉCHEC : openbox de Winlux absent ({OPENBOX}) : sh scripts/build-openbox.sh build/openbox")
         return 1
