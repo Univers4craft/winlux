@@ -1087,8 +1087,9 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
-            // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
-            // charger (LoadLibrary de wxWidgets, #795).
+            // sont fournies par controls::richedit (LoadLibrary de wxWidgets,
+            // #795). msftedit et riched20 servent aussi les Text Services sans
+            // fenêtre, avec les mêmes IID (#3268).
             Builtin {
                 name: "msftedit",
                 exports: textserv::exports(),
@@ -1096,7 +1097,7 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "riched20",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {

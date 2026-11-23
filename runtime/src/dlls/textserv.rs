@@ -957,6 +957,30 @@ mod tests {
         }
     }
 
+    /// GetProcAddress trouve les IID comme données dans msftedit et
+    /// riched20, à la même adresse, donc avec la même valeur.
+    #[test]
+    fn iid_exportes_par_msftedit_et_riched20_3268() {
+        use super::super::kernel32::get_proc_address;
+        let mut vus = Vec::new();
+        for dll in ["msftedit.dll", "riched20.dll"] {
+            let h = super::super::module_handle(dll).expect(dll);
+            let lire = |nom: &[u8]| unsafe { get_proc_address(h, nom.as_ptr()) };
+            let iid = lire(b"IID_ITextServices\0");
+            assert_eq!(
+                iid,
+                std::ptr::addr_of!(IID_ITEXT_SERVICES) as usize,
+                "{dll}"
+            );
+            assert_eq!(unsafe { *(iid as *const Guid) }, IID_ITEXT_SERVICES);
+            assert_ne!(lire(b"IID_ITextHost\0"), 0, "{dll}");
+            assert_ne!(lire(b"IID_ITextHost2\0"), 0, "{dll}");
+            assert_ne!(lire(b"CreateTextServices\0"), 0, "{dll}");
+            vus.push(iid);
+        }
+        assert_eq!(vus[0], vus[1]);
+    }
+
     #[test]
     fn texte_a_dessiner_double_le_retour_chariot_3268() {
         let t: Vec<u16> = "a\rb\r\nc".encode_utf16().collect();
