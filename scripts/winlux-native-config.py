@@ -858,24 +858,33 @@ GENERIC_DESKTOP_NAME = re.compile(r"\s*((desktop|bureau|workspace|espace de trav
 
 
 def localize_desktop_names(openbox_config):
-    namespace = "http://openbox.org/3.4/rc"
+    """Renomme dans le texte même du rc.xml : le reste du fichier (commentaires,
+    mise en forme) reste octet pour octet celui du compte."""
     try:
-        ET.register_namespace("", namespace)
-        tree = ET.parse(openbox_config)
-    except (OSError, ET.ParseError):
+        text = openbox_config.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return False
-    names = tree.getroot().find(f"{{{namespace}}}desktops/{{{namespace}}}names")
-    changed = False
-    for number, name in enumerate(names if names is not None else []):
-        wanted = _t("Bureau {n}").format(n=number + 1)
-        if GENERIC_DESKTOP_NAME.fullmatch(name.text or "") and name.text != wanted:
-            name.text = wanted
-            changed = True
-    if changed:
-        temporary = openbox_config.with_suffix(".xml.tmp")
-        tree.write(temporary, encoding="utf-8", xml_declaration=True)
+    block = re.search(r"<desktops>.*?</desktops>", text, re.S)
+    names = re.search(r"<names>(.*?)</names>", block.group(0), re.S) if block else None
+    if names is None:
+        return False
+    count = iter(range(1, 1000))
+
+    def rename(match):
+        wanted = _t("Bureau {n}").format(n=next(count))
+        return f"<name>{wanted}</name>" if GENERIC_DESKTOP_NAME.fullmatch(match.group(1)) else match.group(0)
+
+    inner = re.sub(r"<name>([^<]*)</name>", rename, names.group(1))
+    if inner == names.group(1):
+        return False
+    start, end = block.start() + names.start(1), block.start() + names.end(1)
+    temporary = openbox_config.with_suffix(".xml.tmp")
+    try:
+        temporary.write_text(text[:start] + inner + text[end:], encoding="utf-8")
         temporary.replace(openbox_config)
-    return changed
+    except OSError:
+        return False
+    return True
 
 
 localize_desktop_names(openbox_config)

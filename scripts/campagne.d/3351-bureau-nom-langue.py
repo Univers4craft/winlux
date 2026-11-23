@@ -38,3 +38,13 @@ with _tmp_3351.TemporaryDirectory() as _dossier_3351:
     _config_3351(_home_3351, "en")
     _garde_3351 = _noms_3351(_home_3351)
 ok(_garde_3351 == ["Travail"], "openbox : un nom de bureau choisi n'est pas renommé au changement de langue (#3351)")
+# Seul le nom change : le rc.xml du compte garde ses commentaires et sa mise
+# en forme (une réécriture par ElementTree les perdait).
+with _tmp_3351.TemporaryDirectory() as _dossier_3351:
+    _home_3351 = Path(_dossier_3351)
+    _config_3351(_home_3351, "en")
+    _livre_3351 = (NATIVE / "config/openbox/rc.xml").read_text(encoding="utf-8").splitlines()
+    _compte_3351 = (_home_3351 / ".config/openbox/rc.xml").read_text(encoding="utf-8").splitlines()
+_ecarts_3351 = [(a, b) for a, b in zip(_livre_3351, _compte_3351) if a != b]
+ok(len(_livre_3351) == len(_compte_3351) and len(_ecarts_3351) == 1 and "Desktop 1" in _ecarts_3351[0][1],
+   "openbox : seul le nom du bureau change dans rc.xml, commentaires et mise en forme gardés (#3351)")
