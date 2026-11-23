@@ -232,6 +232,10 @@ def apply(kind,value):
         targets=[p for p in props if p.endswith("/last-image")]
         if not targets: raise ValueError(_t("Le service de fond d’écran n’est pas initialisé"))
         for prop in targets: query("xfce4-desktop",prop,value,"string")
+        # Fond Aurore animé (#3079) : repris en revenant à Aurore, arrêté
+        # sur un autre fond ; rien n'est lancé s'il est désactivé.
+        if shutil.which("winlux-fond-anime"):
+            subprocess.run(["winlux-fond-anime","ensure"],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10,check=False)
     elif kind in ("taskbar-style","search"):
         # Barre des tâches (#703) : réglage du compte dans taskbar.conf, lu par
         # winlux-tray (recherche) et winlux-control align-* (ordre, séparateurs).

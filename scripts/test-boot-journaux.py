@@ -144,27 +144,32 @@ if usable:
         for name in ("xscreensaver-command", "xset"):
             fake = tmp / "bin" / name
             fake.write_text(f'#!/bin/sh\necho "{name} $*" >>"{log}"\ntest "$*" = q && echo "  DPMS is Enabled"\nexit 0\n'); fake.chmod(0o755)
-        (tmp / "bin/winlux-update").write_text(f'#!/bin/sh\ntest "$1" = --busy && test -e "{tmp / "busy"}"\n')
-        (tmp / "bin/winlux-update").chmod(0o755)
+        # Installation simulée sans root (#3291) : verrou POSIX d'APT posé sur
+        # le lock de dpkg d'une racine de test, lu par update_busy comme /proc/locks.
+        dpkg = tmp / "racine/var/lib/dpkg"
+        dpkg.mkdir(parents=True); (dpkg / "lock").touch(); (tmp / "racine/proc").mkdir()
+        busy = tmp / "racine/proc/locks"
+        busy_line = f"1: POSIX  ADVISORY  WRITE 4242 08:02:{(dpkg / 'lock').stat().st_ino} 0 EOF"
         env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", WINLUX_POWER_INHIBIT_DIR=str(tmp / "inhibit"),
-                   XDG_RUNTIME_DIR=str(tmp), WINLUX_UPDATE_WATCH_SECONDS="1")
+                   XDG_RUNTIME_DIR=str(tmp), WINLUX_UPDATE_WATCH_SECONDS="1", WINLUX_UPDATE_ROOT=str(tmp / "racine"))
         script = f'''
 {sys.executable} -B {ROOT / "scripts/winlux-screensaver-inhibit.py"} &
 for i in $(seq 1 50); do gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus -m org.freedesktop.DBus.NameHasOwner org.freedesktop.ScreenSaver 2>/dev/null | grep -q true && break; sleep 0.1; done
 {sys.executable} -B -c "$CLIENT"
 sleep 1
 echo "après départ du client : [$(ls {tmp / "inhibit"})]"
-touch {tmp / "busy"}
+echo "$BUSY_LINE" > {busy}
 {sys.executable} -B {ROOT / "scripts/winlux-screensaver-inhibit.py"} watch-updates &
 sleep 3
 echo "installation : [$(ls {tmp / "inhibit"})]"
-rm {tmp / "busy"}
+: > {busy}
 sleep 3
 echo "installation finie : [$(ls {tmp / "inhibit"})]"
 kill %2 2>/dev/null
 '''
         # Client resté sur le bus (comme un navigateur pendant la vidéo) : la
         # demande tient ; il part : elle tombe d'elle-même.
+        env["BUSY_LINE"] = busy_line
         env["CLIENT"] = f"""
 import os
 from gi.repository import Gio, GLib
