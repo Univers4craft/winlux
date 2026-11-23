@@ -119,6 +119,8 @@ cp "$root/scripts/winlux-backup.sh" "$stage/usr/bin/winlux-backup"
 cp "$root/scripts/winlux-sessions.sh" "$stage/usr/bin/winlux-sessions"
 cp "$root/scripts/winlux-remote-config.sh" "$stage/usr/bin/winlux-remote-config"
 cp "$root/target/release/winlux-remote" "$stage/usr/bin/winlux-remote"
+cp "$root/target/release/winlux-fond-anime" "$stage/usr/bin/winlux-fond-anime"
+chmod 755 "$stage/usr/bin/winlux-fond-anime"
 chmod 755 "$stage/usr/bin/winlux-backup" "$stage/usr/bin/winlux-sessions" "$stage/usr/bin/winlux-remote-config" "$stage/usr/bin/winlux-remote"
 # Partage de dossiers (Samba si présent) et transfert des réglages par fichier.
 cp "$root/scripts/winlux-share.sh" "$stage/usr/bin/winlux-share"
@@ -221,6 +223,7 @@ cp "$root"/assets/avatars/avatar-*.svg "$stage/usr/share/winlux/avatars/"
 mkdir -p "$stage/usr/share/winlux/brand" "$stage/usr/share/winlux/wallpapers"
 cp "$root"/assets/brand/winlux-logo*.svg "$root"/assets/brand/winlux-logo-*.png "$stage/usr/share/winlux/brand/"
 cp "$root"/assets/wallpapers/winlux-prisme-*.png "$stage/usr/share/winlux/wallpapers/"
+cp "$root/assets/wallpapers/winlux-prisme-aurore.etoiles" "$stage/usr/share/winlux/wallpapers/"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stage/usr/share/winlux/grub-theme"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell et
@@ -341,6 +344,7 @@ zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-gen
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 copy_shared_libraries "$root/target/release/winlux-remote"
+copy_shared_libraries "$root/target/release/winlux-fond-anime"
 sh "$root/scripts/copy-audio-libraries.sh" "$stage"
 sh "$root/scripts/stage-media.sh" "$stage" "$root"
 copy_shared_libraries /usr/bin/Xvfb
