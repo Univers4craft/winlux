@@ -189,7 +189,10 @@ with tempfile.TemporaryDirectory() as temporary:
     (sub / "Programme.lnk").write_bytes(b"x")
     assert catalogue.watched_inputs() != after, "un raccourci ajouté dans un sous-dossier doit relancer le catalogue"
     calls = {"refresh": 0, "icons": 0, "ticks": 0}
-    saved = catalogue.refresh, catalogue.window_icons, catalogue.time.sleep
+    saved = catalogue.refresh, catalogue.window_icons, catalogue.time.sleep, catalogue.ClientListWatch
+    # Sans serveur X (comme dans ce test), le démon retombe sur le sondage (#3198).
+    def sans_x(): raise OSError("No X display")
+    catalogue.ClientListWatch = sans_x
     class Stop(Exception): pass
     def tick(_seconds):
         calls["ticks"] += 1
@@ -203,7 +206,7 @@ with tempfile.TemporaryDirectory() as temporary:
     catalogue.time.sleep = tick
     try: catalogue.watch(full_pass=3600)
     except Stop: pass
-    finally: catalogue.refresh, catalogue.window_icons, catalogue.time.sleep = saved
+    finally: catalogue.refresh, catalogue.window_icons, catalogue.time.sleep, catalogue.ClientListWatch = saved
     assert calls["icons"] == 4, calls
     calls["refresh"] = len(passes.read_text())
     assert calls["refresh"] == 2, f"refresh au démarrage puis une fois après le changement, pas à chaque tour : {calls}"

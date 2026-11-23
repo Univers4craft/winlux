@@ -1806,22 +1806,13 @@ pub unsafe extern "win64" fn set_window_pos(
         restack_child(hwnd, _insert_after);
     }
 
-    let mut visibility_changed = false;
-    if flags & SWP_SHOWWINDOW != 0 {
-        visibility_changed = !gui::set_visible(hwnd, true);
-        let map = !empty_top_level(hwnd);
-        with_backend(|backend| backend.show_window(hwnd, map));
-        if map {
-            sync_frame(hwnd);
-        }
+    let visibility_changed = if flags & SWP_SHOWWINDOW != 0 {
+        set_visibility(hwnd, true)
     } else if flags & SWP_HIDEWINDOW != 0 {
-        visibility_changed = gui::set_visible(hwnd, false);
-        with_backend(|backend| backend.show_window(hwnd, false));
-    }
-
-    if visibility_changed {
-        publish_shared(hwnd);
-    }
+        set_visibility(hwnd, false)
+    } else {
+        false
+    };
 
     if flags & SWP_FRAMECHANGED != 0 {
         frame_changed(hwnd, rect, flags);
@@ -2669,13 +2660,33 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
     }
 }
 
+/// Montre ou cache la fenêtre sans message ni activation, comme
+/// SWP_SHOWWINDOW et SWP_HIDEWINDOW.
+/// Rend vrai si la visibilité a changé.
+fn set_visibility(hwnd: usize, show: bool) -> bool {
+    let was = gui::set_visible(hwnd, show);
+    if show {
+        let map = !empty_top_level(hwnd);
+        with_backend(|backend| backend.show_window(hwnd, map));
+        if map {
+            sync_frame(hwnd);
+        }
+    } else {
+        with_backend(|backend| backend.show_window(hwnd, false));
+    }
+    if was != show {
+        publish_shared(hwnd);
+    }
+    was != show
+}
+
 unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
         GWL_STYLE => {
-            if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+            let style = value as u32;
+            if gui::set_window_style(hwnd, style).is_some_and(|o| o != style) {
                 publish_shared(hwnd);
-                let style = value as u32;
                 if style & WS_CHILD == 0 {
                     with_backend(|b| {
                         b.set_resizable(hwnd, !fixed_size_frame(style));
@@ -2683,6 +2694,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
                         b.set_caption_buttons(hwnd, minimize, maximize);
                     });
                 }
+            }
+            // WS_VISIBLE posé ou ôté : IsWindowVisible suit le style (Learn,
+            // « IsWindowVisible », #3247).
+            let show = style & 0x1000_0000 != 0; // WS_VISIBLE
+            if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
+                set_visibility(hwnd, show);
             }
         }
         GWL_EXSTYLE => {
@@ -5055,8 +5072,25 @@ pub extern "win64" fn reply_message(_result: isize) -> i32 {
     1
 }
 
+/// `InSendMessage` : vrai pendant le traitement d'un message envoyé par un
+/// autre fil (Learn, InSendMessage).
 pub extern "win64" fn in_send_message() -> i32 {
-    0
+    gui::in_sent_message() as i32
+}
+
+/// `InSendMessageEx` (#3104) : ISMEX_NOSEND (0) hors d'un message envoyé
+/// par un autre fil, ISMEX_SEND (1) pendant (Learn, InSendMessageEx).
+/// **Inférence nommée** : nos envois inter-fils viennent tous de
+/// SendMessage et attendent la réponse ; ISMEX_NOTIFY, ISMEX_CALLBACK et
+/// ISMEX_REPLIED ne sont pas encore distingués.
+pub extern "win64" fn in_send_message_ex(_reserved: usize) -> u32 {
+    const ISMEX_NOSEND: u32 = 0;
+    const ISMEX_SEND: u32 = 1;
+    if gui::in_sent_message() {
+        ISMEX_SEND
+    } else {
+        ISMEX_NOSEND
+    }
 }
 
 /// `WaitMessage` : dort jusqu'à ce qu'un message, un WM_PAINT ou un
@@ -5655,6 +5689,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterWindowMessageW"=>fn register_window_message_w,
         "GetMessagePos"=>fn get_message_pos, "GetMessageTime"=>fn get_message_time,
         "ReplyMessage"=>fn reply_message, "InSendMessage"=>fn in_send_message,
+        "InSendMessageEx"=>fn in_send_message_ex,
         "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,
@@ -6356,6 +6391,71 @@ mod tests {
                 "exécutée sur le fil de la fenêtre"
             );
             destroy_window(hwnd);
+        }
+    }
+
+    /// InSendMessage et InSendMessageEx : ISMEX_SEND pendant un message
+    /// envoyé par un autre fil, ISMEX_NOSEND sinon (Learn, #3104).
+    #[test]
+    fn in_send_message_ex_distingue_l_envoi_d_un_autre_fil_3104() {
+        use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+        static VU: AtomicI64 = AtomicI64::new(-1);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == 0x0400 + 0x3104 {
+                let ex = in_send_message_ex(0) as i64;
+                let simple = in_send_message() as i64;
+                VU.store(ex * 10 + simple, Ordering::SeqCst);
+                return 1;
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let ex =
+            crate::dlls::lookup("user32", "InSendMessageEx").expect("InSendMessageEx exportée");
+        assert_eq!(ex, in_send_message_ex as *const () as usize);
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_long_ptr_w(hwnd, GWL_WNDPROC, proc_ as *const () as isize);
+            send_message_w(hwnd, 0x0400 + 0x3104, 0, 0);
+            let meme_fil = VU.swap(-1, Ordering::SeqCst);
+            static FINI: AtomicBool = AtomicBool::new(false);
+            let autre = std::thread::spawn(move || {
+                let r = send_message_w(hwnd, 0x0400 + 0x3104, 0, 0);
+                FINI.store(true, Ordering::SeqCst);
+                r
+            });
+            let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let mut m: Msg = std::mem::zeroed();
+            while !FINI.load(Ordering::SeqCst) && std::time::Instant::now() < limite {
+                peek_message_w(&mut m, 0, 0, 0, 0);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(autre.join().unwrap(), 1);
+            let autre_fil = VU.load(Ordering::SeqCst);
+            let apres = (in_send_message_ex(0), in_send_message());
+            destroy_window(hwnd);
+            eprintln!(
+                "      même fil (Ex, simple) = {:?}, autre fil = {:?}, après = {apres:?}",
+                (meme_fil / 10, meme_fil % 10),
+                (autre_fil / 10, autre_fil % 10)
+            );
+            assert_eq!(meme_fil, 0, "même fil : ISMEX_NOSEND, FALSE");
+            assert_eq!(autre_fil, 11, "autre fil : ISMEX_SEND, TRUE");
+            assert_eq!(apres, (0, 0));
         }
     }
 
