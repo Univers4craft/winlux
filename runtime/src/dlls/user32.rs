@@ -813,6 +813,7 @@ unsafe fn click_activate(m: &Msg) {
 
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
+        gui::deliver_sent();
         gui::pump_backend();
         super::chromium_win32::deliver_win_events();
         super::ws2_32::pump_async();
@@ -904,6 +905,7 @@ pub unsafe extern "win64" fn peek_message_a(
 }
 
 unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
+    gui::deliver_sent();
     gui::pump_backend();
     super::chromium_win32::deliver_win_events();
     super::ws2_32::pump_async();
@@ -1213,10 +1215,35 @@ unsafe fn send_message(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
     if gui::wnd_proc_of(hwnd).is_none() && gui::foreign_window(hwnd).is_some() {
         return send_to_foreign(hwnd, message, wparam, lparam);
     }
-    match gui::wnd_proc_of(hwnd) {
-        Some(wp) => gui::call_wndproc(wp, hwnd, message, wparam, lparam),
-        None => gui::def_window_proc(hwnd, message, wparam, lparam),
+    let Some(wp) = gui::wnd_proc_of(hwnd) else {
+        return gui::def_window_proc(hwnd, message, wparam, lparam);
+    };
+    // Fenêtre d'un autre fil : Windows bascule sur le fil qui l'a créée et y
+    // appelle la procédure (Learn, SendMessage). L'appeler ici faisait
+    // tourner la procédure sur deux fils à la fois : le fil de Notepad++ qui
+    // relit ses onglets (TCM_GETITEMW) croisait le fil principal, qui lisait
+    // alors un objet nul ou libéré (#2885).
+    let me = std::thread::current().id();
+    if let Some(owner) = gui::window_owner(hwnd).filter(|o| *o != me) {
+        let wide = super::controls::current_charset();
+        let job: Box<dyn FnOnce() -> isize + Send> = Box::new(move || {
+            // SAFETY : mêmes arguments que l'appel direct, sur le fil
+            // propriétaire ; la procédure est relue, elle a pu changer.
+            let call = || match gui::wnd_proc_of(hwnd) {
+                Some(wp) => unsafe { gui::call_wndproc(wp, hwnd, message, wparam, lparam) },
+                None => 0,
+            };
+            match wide {
+                Some(w) => super::controls::with_charset(w, call),
+                None => call(),
+            }
+        });
+        return match gui::send_to_owner(owner, job) {
+            Ok(r) => r,
+            Err(job) => job(),
+        };
     }
+    gui::call_wndproc(wp, hwnd, message, wparam, lparam)
 }
 
 /// Message pour la fenêtre d'un autre processus (#2046) : seule la lecture
@@ -6212,6 +6239,71 @@ mod tests {
                 1
             );
             assert_eq!(i32::from_le_bytes(lf[..4].try_into().unwrap()), -12);
+        }
+    }
+
+    /// SendMessage vers la fenêtre d'un autre fil : la procédure s'exécute
+    /// sur le fil qui a créé la fenêtre, quand il relève ses messages, et
+    /// l'expéditeur reçoit sa valeur (Learn, SendMessage, #2885).
+    #[test]
+    fn send_message_execute_sur_le_fil_de_la_fenetre() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+        static FIL: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == 0x0400 + 0x2885 {
+                *FIL.lock().unwrap() = Some(std::thread::current().id());
+                return w as isize + 1;
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_long_ptr_w(hwnd, GWL_WNDPROC, proc_ as *const () as isize);
+            // Même fil : appel immédiat.
+            assert_eq!(send_message_w(hwnd, 0x0400 + 0x2885, 1, 0), 2);
+            let ici = std::thread::current().id();
+            assert_eq!(*FIL.lock().unwrap(), Some(ici));
+            *FIL.lock().unwrap() = None;
+
+            static FINI: AtomicBool = AtomicBool::new(false);
+            let autre = std::thread::spawn(move || {
+                let r = send_message_w(hwnd, 0x0400 + 0x2885, 41, 0);
+                FINI.store(true, Ordering::SeqCst);
+                r
+            });
+            // Tant que ce fil ne relève pas ses messages, rien ne s'exécute.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert_eq!(*FIL.lock().unwrap(), None, "pas sur le fil expéditeur");
+            assert!(!FINI.load(Ordering::SeqCst), "l'expéditeur attend");
+            let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let mut m: Msg = std::mem::zeroed();
+            while !FINI.load(Ordering::SeqCst) && std::time::Instant::now() < limite {
+                peek_message_w(&mut m, 0, 0, 0, 0);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(autre.join().unwrap(), 42);
+            assert_eq!(
+                *FIL.lock().unwrap(),
+                Some(ici),
+                "exécutée sur le fil de la fenêtre"
+            );
+            destroy_window(hwnd);
         }
     }
 

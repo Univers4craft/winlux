@@ -371,7 +371,7 @@ wait_desktop() {
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &
             fi
             # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
-            if test -f "/run/winlux/browser-pending-$(id -u)"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
+            if test -f "/run/winlux/browser-pending-$uid"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
             # Mise à jour disponible ou redémarrage requis (#881) : une notification
             # par avis du moteur ; Python ne démarre que si l'avis a changé.
             if test -f /run/winlux/update-notice && test -x /usr/bin/winlux-update-page &&

@@ -495,6 +495,94 @@ pub struct Queue {
     /// Descripteur d'éveil (`eventfd`) : signalé à chaque dépôt pour sortir
     /// un `GetMessage` bloqué dans `poll` sur la connexion X11.
     wake: WakeFd,
+    /// Messages envoyés (SendMessage) par d'autres fils aux fenêtres de ce
+    /// fil, en attente d'être traités par lui (#2885).
+    sent: Mutex<VecDeque<Arc<Sent>>>,
+}
+
+/// Envoi d'un message à la fenêtre d'un autre fil : la procédure s'exécute
+/// sur le fil qui a créé la fenêtre, l'expéditeur attend le résultat
+/// (Learn, SendMessage, #2885).
+pub struct Sent {
+    job: Mutex<Option<SentJob>>,
+    result: Mutex<Option<isize>>,
+    done: Condvar,
+}
+
+type SentJob = Box<dyn FnOnce() -> isize + Send>;
+
+/// Délai au-delà duquel un fil propriétaire qui ne relève jamais ses
+/// messages est contourné : l'expéditeur appelle alors la procédure lui-même,
+/// comme avant #2885, plutôt que de rester bloqué pour toujours.
+const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
+/// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
+/// les attentes de messages et l'attente d'un SendMessage inter-fils.
+pub fn deliver_sent() {
+    let Some(q) = lock(queues()).get(&std::thread::current().id()).cloned() else {
+        return;
+    };
+    loop {
+        let next = lock(&q.sent).pop_front();
+        let Some(sent) = next else {
+            return;
+        };
+        let job = lock(&sent.job).take();
+        if let Some(job) = job {
+            let r = job();
+            *lock(&sent.result) = Some(r);
+            sent.done.notify_all();
+        }
+    }
+}
+
+/// SendMessage vers une fenêtre du fil `owner` depuis un autre fil : `job`
+/// (l'appel de la procédure) est confié au fil propriétaire et le résultat
+/// rendu. Pendant l'attente, l'expéditeur traite les messages qu'on lui
+/// envoie, comme sous Windows, pour que deux fils qui s'envoient des
+/// messages ne se bloquent pas. `Err(job)` : le fil propriétaire n'a pas
+/// relevé ses messages à temps ; l'appelant exécute `job` lui-même.
+pub fn send_to_owner(owner: ThreadId, job: SentJob) -> Result<isize, SentJob> {
+    let q = queue_for(owner);
+    let sent = Arc::new(Sent {
+        job: Mutex::new(Some(job)),
+        result: Mutex::new(None),
+        done: Condvar::new(),
+    });
+    lock(&q.sent).push_back(sent.clone());
+    q.changed.notify_all();
+    q.wake.signal();
+    let start = std::time::Instant::now();
+    loop {
+        {
+            let result = lock(&sent.result);
+            if let Some(r) = *result {
+                return Ok(r);
+            }
+            let (result, _) = sent
+                .done
+                .wait_timeout(result, std::time::Duration::from_millis(1))
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(r) = *result {
+                return Ok(r);
+            }
+        }
+        deliver_sent();
+        if start.elapsed() >= SENT_GIVE_UP {
+            // Pas encore pris par le propriétaire : l'expéditeur le reprend.
+            // Déjà pris : il est en cours, on attend sa fin.
+            if let Some(job) = lock(&sent.job).take() {
+                lock(&q.sent).retain(|s| !Arc::ptr_eq(s, &sent));
+                crate::log_warn!(
+                    "fenetres",
+                    "SendMessage inter-fils : le fil propriétaire n'a pas relevé ses messages en {} s, appel direct (#2885)",
+                    SENT_GIVE_UP.as_secs()
+                );
+                return Err(job);
+            }
+        }
+    }
 }
 
 /// `eventfd` non bloquant servant d'éveil à une file de messages.
@@ -537,6 +625,7 @@ fn new_queue() -> Arc<Queue> {
         items: Mutex::new(VecDeque::new()),
         changed: Condvar::new(),
         wake: WakeFd::new(),
+        sent: Mutex::new(VecDeque::new()),
     })
 }
 
@@ -3479,7 +3568,25 @@ pub trait GuiBackend: Send {
 
 struct HeadlessBackend;
 
+#[cfg(test)]
+thread_local! {
+    /// Cadre de gestionnaire simulé pour les tests du fil courant : sans
+    /// affichage, aucun gestionnaire ne pose de cadre.
+    pub static TEST_FRAME: std::cell::Cell<Option<[i32; 4]>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(not(test))]
 impl GuiBackend for HeadlessBackend {}
+
+#[cfg(test)]
+impl GuiBackend for HeadlessBackend {
+    fn frame_extents(&mut self, _hwnd: usize) -> Option<[i32; 4]> {
+        TEST_FRAME.with(|f| f.get())
+    }
+    fn frame_for_kind(&mut self, _kind: u8) -> Option<[i32; 4]> {
+        TEST_FRAME.with(|f| f.get())
+    }
+}
 
 /// Construit le backend : X11 si `DISPLAY` est présent et qu'on n'a pas forcé
 /// `WINLUX_GUI=headless`; sinon headless. Retombe sur headless si la connexion
@@ -4207,6 +4314,7 @@ pub fn backend_is_interactive() -> bool {
 }
 
 pub fn wait_backend(timeout_ms: u32) -> bool {
+    deliver_sent();
     let fd = {
         let mut b = lock(backend());
         let Some(fd) = b.event_fd() else {
@@ -4220,8 +4328,13 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     // Le verrou du backend est relâché : les autres threads peuvent peindre
     // pendant que celui-ci dort sur la connexion X11 et sur son éveil.
     let q = current_queue();
+    if !lock(&q.sent).is_empty() {
+        deliver_sent();
+        return true;
+    }
     poll_fds(&[fd, q.wake.0], timeout_ms);
     q.wake.drain();
+    deliver_sent();
     true
 }
 
@@ -5545,9 +5658,10 @@ pub fn enum_top_level_windows() -> Vec<usize> {
 /// Fenêtres de premier niveau de **tous** les processus du compte, du
 /// sommet vers le fond (EnumWindows, GetWindow, FindWindow, #2046), sans
 /// les fenêtres message-only. L'ordre est celui du gestionnaire de fenêtres
-/// (`_NET_CLIENT_LIST_STACKING`) ; viennent ensuite les fenêtres qu'il ne
-/// gère pas (cachées) : celles de ce processus dans son ordre Z, puis celles
-/// des autres, la plus récente d'abord.
+/// (`_NET_CLIENT_LIST_STACKING`), sous nos fenêtres surgissantes visibles
+/// qu'il ne gère pas (override-redirect, #3110) ; viennent ensuite les
+/// fenêtres qu'il ne gère pas (cachées) : celles de ce processus dans son
+/// ordre Z, puis celles des autres, la plus récente d'abord.
 pub fn all_top_level_windows() -> Vec<usize> {
     let own: Vec<usize> = enum_top_level_windows()
         .into_iter()
@@ -5560,15 +5674,24 @@ pub fn all_top_level_windows() -> Vec<usize> {
         stacking = b.client_stacking();
         own_tops = own.iter().map(|&h| b.native_top_window(h)).collect();
     });
-    merge_z_order(&stacking, &own, &own_tops, &foreign)
+    let own_shown: Vec<bool> = own.iter().map(|&h| is_window_visible(h)).collect();
+    merge_z_order(&stacking, &own, &own_tops, &own_shown, &foreign)
 }
 
 /// Fusion de l'ordre Z (voir `all_top_level_windows`). `stacking` va du
-/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`.
+/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`,
+/// `own_shown[i]` dit si elle est visible.
+///
+/// Une fenêtre à nous visible mais absente de la pile du gestionnaire est
+/// une fenêtre surgissante override-redirect (menu, liste déroulante) :
+/// affichée au-dessus des fenêtres gérées, elle passe en tête. Classée
+/// après elles, WindowFromPoint rendait la fenêtre principale pour un point
+/// du menu de Qt, qui livrait le clic à la mauvaise fenêtre (#3110).
 fn merge_z_order(
     stacking: &[u64],
     own: &[usize],
     own_tops: &[Option<u64>],
+    own_shown: &[bool],
     foreign: &[super::gui_shared::Listed],
 ) -> Vec<usize> {
     let rank: HashMap<u64, usize> = stacking
@@ -5577,8 +5700,9 @@ fn merge_z_order(
         .filter(|(_, &x)| x != 0)
         .map(|(i, &x)| (x, i))
         .collect();
-    // Clé : (0, sommet d'abord) pour les fenêtres gérées, (1, ordre) pour
-    // les nôtres non gérées, (2, HWND décroissant) pour les autres.
+    // Clé : (0, ordre) pour les nôtres visibles non gérées (surgissantes),
+    // (1, sommet d'abord) pour les fenêtres gérées, (2, ordre) pour les
+    // nôtres cachées, (3, HWND décroissant) pour les autres.
     let mut keyed: Vec<((u8, usize), usize)> = Vec::with_capacity(own.len() + foreign.len());
     for (i, &h) in own.iter().enumerate() {
         let key = match own_tops
@@ -5587,16 +5711,17 @@ fn merge_z_order(
             .flatten()
             .and_then(|x| rank.get(&x))
         {
-            Some(&r) => (0, usize::MAX - r),
-            None => (1, i),
+            Some(&r) => (1, usize::MAX - r),
+            None if own_shown.get(i).copied().unwrap_or(false) => (0, i),
+            None => (2, i),
         };
         keyed.push((key, h));
     }
     for l in foreign {
         let top = if l.f.top != 0 { l.f.top } else { l.f.xid };
         let key = match rank.get(&top) {
-            Some(&r) => (0, usize::MAX - r),
-            None => (2, usize::MAX - l.hwnd),
+            Some(&r) => (1, usize::MAX - r),
+            None => (3, usize::MAX - l.hwnd),
         };
         keyed.push((key, l.hwnd));
     }
@@ -7569,14 +7694,32 @@ mod tests_survol {
             listed(0x5_0002, 0),
             listed(0x5_0003, 0x77),
         ];
+        let hidden = [false; 4];
         assert_eq!(
-            merge_z_order(&stacking, &own, &own_tops, &foreign),
+            merge_z_order(&stacking, &own, &own_tops, &hidden, &foreign),
             vec![0x4_0002, 0x5_0001, 0x4_0001, 0x4_0003, 0x4_0004, 0x5_0003, 0x5_0002]
         );
         // Sans serveur X : notre ordre, puis les autres.
         assert_eq!(
-            merge_z_order(&[], &own[..2], &[None, None], &foreign[..1]),
+            merge_z_order(&[], &own[..2], &[None, None], &hidden[..2], &foreign[..1]),
             vec![0x4_0001, 0x4_0002, 0x5_0001]
+        );
+    }
+
+    /// #3110 : un menu override-redirect visible (absent de la pile du
+    /// gestionnaire) passe au-dessus de la fenêtre principale gérée ; une
+    /// fenêtre cachée non gérée reste dessous.
+    #[test]
+    fn menu_surgissant_visible_au_dessus_des_fenetres_gerees() {
+        use super::merge_z_order;
+        let stacking = [0x10, 0x11];
+        // Principale gérée, menu visible non géré, fenêtre cachée.
+        let own = [0x4_0001, 0x4_0002, 0x4_0003];
+        let own_tops = [Some(0x11), None, None];
+        let shown = [true, true, false];
+        assert_eq!(
+            merge_z_order(&stacking, &own, &own_tops, &shown, &[]),
+            vec![0x4_0002, 0x4_0001, 0x4_0003]
         );
     }
 
