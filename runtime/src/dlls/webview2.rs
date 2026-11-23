@@ -15,7 +15,7 @@
 //! l'environnement), par une fenêtre cachée et son WndProc, comme les
 //! rappels de WebView2 arrivent dans la boucle de messages.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -389,8 +389,52 @@ extern "win64" fn com_release(this: usize) -> u32 {
         left
     }
 }
-extern "win64" fn not_implemented() -> i32 {
+/// Entrée non servie : rend E_NOTIMPL et le dit une fois par famille et
+/// par rang, pour qu'un relevé nomme l'entrée qu'un programme appelle
+/// (#3395). Une instance par rang : le premier argument de toute méthode
+/// est l'objet, qui porte sa famille.
+extern "win64" fn not_implemented<const SLOT: usize>(this: usize) -> i32 {
+    let family = if this == 0 {
+        None
+    } else {
+        // SAFETY : ces tables ne servent que des objets `Com` de ce module.
+        Some(unsafe { (*(this as *const Com)).family })
+    };
+    static SEEN: OnceLock<Mutex<HashSet<(Option<u8>, usize)>>> = OnceLock::new();
+    let first = super::lock(SEEN.get_or_init(|| Mutex::new(HashSet::new())))
+        .insert((family.map(|f| f as u8), SLOT));
+    if first {
+        crate::log_warn!(
+            "webview2",
+            "{:?} : entrée {} (rang après IUnknown) non servie, E_NOTIMPL ({}:{})",
+            family,
+            SLOT - 3,
+            file!(),
+            line!()
+        );
+    }
+    #[cfg(test)]
+    super::lock(&NOT_IMPLEMENTED_CALLS).push((family, SLOT - 3));
     E_NOTIMPL
+}
+
+#[cfg(test)]
+static NOT_IMPLEMENTED_CALLS: Mutex<Vec<(Option<Family>, usize)>> = Mutex::new(Vec::new());
+
+macro_rules! not_implemented_table {
+    ($($slot:literal)*) => {
+        [$(not_implemented::<$slot> as NotImplemented),*]
+    };
+}
+
+/// Une entrée E_NOTIMPL distincte par rang de table virtuelle.
+type NotImplemented = extern "win64" fn(usize) -> i32;
+static NOT_IMPLEMENTED: [NotImplemented; WEBVIEW_SLOTS] = not_implemented_table!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134);
+
+/// Vrai si l'adresse est une entrée non servie.
+#[cfg(test)]
+fn is_not_implemented(addr: usize) -> bool {
+    NOT_IMPLEMENTED.iter().any(|&f| f as usize == addr)
 }
 
 /// Méthodes `add_X` de chaque famille (rang après IUnknown ; `remove_X`
@@ -461,7 +505,11 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::CookieList => (COOKIE_LIST_SLOTS, cookie_list_methods()),
         Family::DevToolsReceiver => (DEVTOOLS_RECEIVER_SLOTS, Vec::new()),
     };
-    let mut v = vec![not_implemented as *const () as usize; slots];
+    assert!(slots <= NOT_IMPLEMENTED.len());
+    let mut v: Vec<usize> = NOT_IMPLEMENTED[..slots]
+        .iter()
+        .map(|&f| f as usize)
+        .collect();
     v[0] = query_interface as *const () as usize;
     v[1] = com_add_ref as *const () as usize;
     v[2] = com_release as *const () as usize;
@@ -3354,7 +3402,6 @@ mod tests {
     /// l'inscription rend un jeton que la désinscription accepte.
     #[test]
     fn inscriptions_aux_evenements_acceptees_2547() {
-        let stub = not_implemented as *const () as usize;
         for (family, slots) in [
             (Family::WebView, WEBVIEW_SLOTS),
             (Family::Controller, CONTROLLER_SLOTS),
@@ -3363,8 +3410,12 @@ mod tests {
             let v = vtable(family);
             for &add in event_slots(family) {
                 assert!(3 + add + 1 < slots);
-                assert_ne!(v[3 + add], stub, "add_ au rang {add}");
-                assert_ne!(v[3 + add + 1], stub, "remove_ au rang {}", add + 1);
+                assert!(!is_not_implemented(v[3 + add]), "add_ au rang {add}");
+                assert!(
+                    !is_not_implemented(v[3 + add + 1]),
+                    "remove_ au rang {}",
+                    add + 1
+                );
             }
         }
         // ICoreWebView2Environment5 : add_BrowserProcessExited (rang 9).
@@ -3536,9 +3587,8 @@ mod tests {
     #[test]
     fn reglages_de_vue_3_a_9_2601() {
         let set = vtable(Family::Settings);
-        let stub = not_implemented as *const () as usize;
         for m in 20..36 {
-            assert_ne!(set[3 + m], stub, "méthode {m}");
+            assert!(!is_not_implemented(set[3 + m]), "méthode {m}");
         }
         let obj = new_com(Family::Settings, None, None, Args::default());
         let get = |m: usize| -> u32 {
@@ -4408,5 +4458,43 @@ mod tests {
             E_POINTER
         );
         com_release(obj);
+    }
+
+    /// #3395 : une entrée non servie rend E_NOTIMPL et nomme sa famille et
+    /// son rang ; chaque rang a sa propre entrée.
+    #[test]
+    fn entree_non_servie_nommee_3395() {
+        let env_vt = vtable(Family::Environment);
+        // ICoreWebView2Environment11::get_FailureReportFolderPath (rang 20).
+        assert!(is_not_implemented(env_vt[3 + 20]));
+        assert_ne!(env_vt[3 + 20], env_vt[3 + 21]);
+        let env = Arc::new(Env {
+            dispatcher: 0,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: String::new(),
+            profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
+        });
+        let obj = new_com(Family::Environment, Some(env), None, Args::default());
+        let f: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32 =
+            unsafe { std::mem::transmute(env_vt[3 + 20]) };
+        let mut p: *mut u16 = std::ptr::null_mut();
+        assert_eq!(unsafe { f(obj, &mut p) }, E_NOTIMPL);
+        assert!(p.is_null());
+        assert!(
+            super::super::lock(&NOT_IMPLEMENTED_CALLS).contains(&(Some(Family::Environment), 20))
+        );
+        com_release(obj);
+        // Aucune famille ne dépasse la table des entrées non servies.
+        for slots in [
+            WEBVIEW_SLOTS,
+            CONTROLLER_SLOTS,
+            ENVIRONMENT_SLOTS,
+            SETTINGS_SLOTS,
+            PROFILE_SLOTS,
+        ] {
+            assert!(slots <= NOT_IMPLEMENTED.len());
+        }
     }
 }
