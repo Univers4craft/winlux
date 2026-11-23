@@ -321,7 +321,9 @@ class SaverDpms:
 
 
 def update_busy(root="/"):
-    """Même réponse que `winlux-update --busy`, sans lancer de programme
+    """Même réponse que `winlux-update --busy` (branche du moteur APT, à garder
+    synchronisée : scripts/test-veille-repos.py rejoue cette branche du shell
+    sur les mêmes cas et échoue si les deux réponses divergent), sans lancer de programme
     (#3291 : 30 ms de CPU et une dizaine de processus toutes les 15 s).
     Installation en cours : drapeau de root /run/winlux/update-inhibit dont le
     processus vit, ou verrou POSIX d'APT/dpkg posé (/proc/locks)."""
@@ -329,8 +331,8 @@ def update_busy(root="/"):
     try:
         info = os.lstat(flag)
         if stat.S_ISREG(info.st_mode) and info.st_uid == 0:
-            pid = flag.read_text(errors="replace").split("\n", 1)[0].strip()
-            if pid.isdigit() and int(pid) != 0 and Path(root, "proc", pid).is_dir():
+            pid = flag.read_text(errors="replace").rstrip("\n")   # comme $(cat …)
+            if pid.isascii() and pid.isdigit() and pid != "0" and Path(root, "proc", pid).is_dir():
                 return True
     except OSError:
         pass
