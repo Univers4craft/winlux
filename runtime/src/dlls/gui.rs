@@ -4109,9 +4109,7 @@ pub fn pump_backend() {
         // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
         // la boîte Tonalité y laissait un geste à moitié fait, et la piste
         // générée n'était plus jamais redessinée (#1120).
-        let mouse = (0x0200..=0x020E).contains(&e.message)
-            || (0x00A0..=0x00AD).contains(&e.message)
-            || (0x0245..=0x024A).contains(&e.message);
+        let mouse = is_mouse_message(e.message);
         // Souris sur une autre fenêtre (hors molette, livrée à la fenêtre
         // qui a le focus), ou sortie de la fenêtre signalée par le backend.
         if e.message == WM_MOUSELEAVE {
@@ -4190,7 +4188,13 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: if geometry { BACKEND_GEOMETRY } else { promoted },
+            l_private: if geometry {
+                BACKEND_GEOMETRY
+            } else if promoted == 0 && (mouse || (0x0100..=0x0109).contains(&e.message)) {
+                BACKEND_INPUT
+            } else {
+                promoted
+            },
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -4455,6 +4459,17 @@ const SYSTEM_PAINT: u32 = 0x5750;
 /// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
 /// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
 pub const BACKEND_GEOMETRY: u32 = 0x5751;
+/// `l_private` d'un message clavier ou souris venu du serveur X, et non
+/// posté par un programme : GetCurrentInputMessageSource le rattache à son
+/// appareil (#1932).
+pub const BACKEND_INPUT: u32 = 0x5752;
+
+/// Messages souris de la zone client et du cadre, et WM_POINTER*.
+pub fn is_mouse_message(message: u32) -> bool {
+    (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message)
+}
 /// Message interne du backend : le cadre du gestionnaire autour d'une
 /// fenêtre a changé (lParam : gauche, droite, haut, bas sur 16 bits). Jamais
 /// distribué au programme (#2984).
