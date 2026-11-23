@@ -473,7 +473,19 @@ while kill -0 "$wm_pid" 2>/dev/null; do
                 kill -USR1 "$compositor_pid" 2>/dev/null || true
             ) </dev/null >/dev/null 2>&1 &
         fi
-        while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do sleep 1; done
+        # Attente sans « sleep 1 » à chaque seconde (#3297) : avec un piège
+        # sur SIGCHLD, « wait » rend la main dès qu'un enfant se termine, le
+        # bureau ou le gestionnaire de fenêtres (POSIX, wait : un signal piégé
+        # interrompt l'attente). Un enfant qui finirait entre le test et le
+        # wait est rattrapé par un réveil toutes les 10 s (un sleep, pas dix).
+        trap : CHLD
+        ticker=
+        while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do
+            kill -0 "$ticker" 2>/dev/null || { sleep 10 & ticker=$!; }
+            wait "$desktop_pid" 2>/dev/null
+        done
+        trap - CHLD
+        kill "$ticker" 2>/dev/null || true
         kill "$desktop_pid" 2>/dev/null || true
         wait "$desktop_pid" 2>/dev/null || true
     else
