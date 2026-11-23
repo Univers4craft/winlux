@@ -471,16 +471,10 @@ pub fn shadowed_exports() -> Vec<String> {
 struct Builtin {
     name: &'static str,
     exports: Exports,
-    /// HMODULE fixé (page « MZ » seule), ou 0 : image PE minimale
-    /// construite à la demande (`builtin_handle`, voir `pe_image`).
+    /// HMODULE fixé, ou 0 : image PE minimale construite à la demande
+    /// (`builtin_handle`, voir `pe_image`). Plus aucune DLL n'a de page
+    /// « MZ » seule (#3337).
     handle: usize,
-}
-
-fn fake_module() -> usize {
-    let page = Box::leak(Box::new([0u8; 4096]));
-    page[0] = b'M';
-    page[1] = b'Z';
-    page.as_ptr() as usize
 }
 
 fn builtins() -> &'static Vec<Builtin> {
@@ -723,19 +717,19 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "normaliz",
                 exports: normaliz::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Tablette graphique WinTab (#1199).
             Builtin {
                 name: "wintab32",
                 exports: wintab32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
             Builtin {
                 name: "mshwgst",
                 exports: mshwgst::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "shell32",
@@ -907,17 +901,17 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dpnet",
                 exports: dpnet::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dpnaddr",
                 exports: dpnet::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "msacm32",
                 exports: msacm32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "quartz",
@@ -1012,7 +1006,7 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "webview2loader",
                 exports: webview2::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "winusb",
@@ -1109,93 +1103,93 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "authz",
                 exports: sysdlls::authz_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "avicap32",
                 exports: sysdlls::avicap32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "credui",
                 exports: sysdlls::credui_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "evr",
                 exports: sysdlls::evr_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ktmw32",
                 exports: sysdlls::ktmw32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "sfc",
                 exports: sysdlls::sfc_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "loadperf",
                 exports: sysdlls::loadperf_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "rasapi32",
                 exports: sysdlls::rasapi32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ntdsapi",
                 exports: sysdlls::ntdsapi_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "odbc32",
                 exports: odbc32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "activeds",
                 exports: activeds_aclui::activeds_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "aclui",
                 exports: activeds_aclui::aclui_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "webservices",
                 exports: webservices::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "wevtapi",
                 exports: wevtapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "rstrtmgr",
                 exports: rstrtmgr::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Contrat sans DLL hôte documentée : le module porte son nom (Refs #2902).
             Builtin {
                 name: "api-ms-win-security-isolatedcontainer-l1-1-0",
                 exports: isolatedcontainer::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "gamemode",
                 exports: gamemode::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "sensapi",
@@ -2356,10 +2350,41 @@ pub fn kernel32_surface() -> Vec<&'static str> {
 }
 
 /// HMODULE distinct de KernelBase.dll et des API-sets api-ms-win-core-* :
-/// mêmes fonctions que kernel32, plus celles de `KERNELBASE_ONLY`.
+/// mêmes fonctions que kernel32, plus celles de `KERNELBASE_ONLY`. C'est
+/// une vraie image PE dont la table d'exports porte exactement ce que GetProcAddress rend
+/// sur ce module (`kernel32_proc(…, true)`). Avant #3337 c'était une page
+/// « MZ » sans en-tête NT : un programme qui lisait l'image (PEImage de
+/// Chromium, rapports de plantage) prenait l'en-tête DOS pour l'en-tête NT.
 pub fn kernelbase_handle() -> usize {
     static H: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *H.get_or_init(fake_module)
+    *H.get_or_init(|| pe_image::build("kernelbase", &kernelbase_exports(), KERNELBASE_SLOT))
+}
+
+/// Case d'adresse fixe de l'image KernelBase : la dernière, jamais prise par
+/// une DLL intégrée (bien moins de `SLOTS`).
+const KERNELBASE_SLOT: usize = 0xFFF;
+
+/// Table d'exports de KernelBase : les noms de kernel32 que GetProcAddress
+/// y rend, plus ceux qu'elle tient d'advapi32 et de ntdll.
+fn kernelbase_exports() -> Exports {
+    let k32 = &builtins()
+        .iter()
+        .find(|b| b.name == "kernel32")
+        .expect("kernel32 intégrée")
+        .exports;
+    let candidates = k32
+        .keys()
+        .copied()
+        .chain(KERNELBASE_FROM_ADVAPI32.iter().copied())
+        .chain(KERNEL32_REGISTRY.iter().copied())
+        .chain(KERNEL32_FROM_NTDLL.iter().copied());
+    let mut e = Exports::new();
+    for name in candidates {
+        if let Some(a) = kernel32_proc(name, true) {
+            e.insert(name, a);
+        }
+    }
+    e
 }
 
 /// Le nom désigne-t-il KernelBase ou un API-set du noyau (et non kernel32) ?
