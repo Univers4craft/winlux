@@ -1724,6 +1724,7 @@ pub(crate) fn code_stub(code: &[u8], unwind: &[u8]) -> usize {
             return 0;
         }
         rtl_add_function_table(page as usize + 0x60, 1, page as u64);
+        super::pe_image::register_runtime_code(page as usize, code.len());
         page as usize
     }
 }
