@@ -179,7 +179,10 @@ gtk_scale() {
     dpi=$(awk -v s="$1" -v f="$factor" 'BEGIN { printf "%d", 96 * s / f + 0.5 }')
     current=$(/usr/bin/xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || true)
     previous=$(cat "$marker" 2>/dev/null || true)
-    if test -n "$current" && test "$current" != "${previous#*:}"; then return 0; fi
+    # Réglage manuel : une valeur différente de celle que nous avons posée.
+    # Sans marqueur, 96 est la valeur par défaut de xsettings, pas un choix (#3437).
+    if test -n "$current" && test "$current" != "${previous#*:}" &&
+        { test -n "$previous" || test "$current" != 96; }; then return 0; fi
     test "$previous" = "$factor:$dpi" && test "$current" = "$dpi" && return 0
     for setting in "/Gdk/WindowScalingFactor:$factor" "/Xft/DPI:$dpi"; do
         /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -s "${setting##*:}" 2>/dev/null ||
