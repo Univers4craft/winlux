@@ -1866,7 +1866,12 @@ class Daemon:
                         pruned = today
             except Exception as error:  # le service ne doit jamais s'arrêter
                 self.log(f"erreur : {error!r}")
-            time.sleep(1)
+            # Aucun compte surveillé, aucun écran de blocage, aucun compte gelé
+            # ni écran laissé à fermer : rien à faire avant la relecture des
+            # réglages, toutes les 10 s comme avant. Un compte qu'on vient de
+            # surveiller est donc pris dans le même délai (Gain #3316).
+            idle = not self.configs and not self.screens and not self.frozen and not self.orphans
+            time.sleep(max(1.0, last_reload + 10 - time.monotonic()) if idle else 1)
 
 
 # ── Supervision ─────────────────────────────────────────────────────────────
@@ -1905,6 +1910,33 @@ def supervise(command, log, rounds=None, sleep=time.sleep, stable=60):
         log(f"service arrêté (code {code}), relancé dans {delay} s")
         sleep(delay)
     return 0
+
+
+def supervise_log(text):
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), "supervision :", text, flush=True)
+
+
+def lean_supervise():
+    """La supervision tourne à vie : elle n'a besoin que de supervise(). Ce
+    processus a compilé tout le contrôle parental (≈ 24 Mo) ; il se remplace,
+    même pid, par un interpréteur qui ne charge que supervise() (Gain #3316)."""
+    command = [sys.executable, "-B", SELF, "daemon"]
+    try:
+        import inspect
+        source = "\n".join([
+            "import signal, subprocess, sys, time",
+            f"SUPERVISE_DELAYS = {SUPERVISE_DELAYS!r}",
+            inspect.getsource(supervise),
+            inspect.getsource(supervise_log),
+            "sys.exit(supervise(sys.argv[1:], supervise_log))",
+        ])
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, [sys.executable, "-I", "-S", "-B", "-c", source, *command])
+    except (OSError, TypeError) as error:
+        # Le contrôle parental ne doit jamais rester sans supervision.
+        supervise_log(f"supervision allégée impossible ({error}) : supervision complète")
+    return supervise(command, supervise_log)
 
 
 # ── Commandes ───────────────────────────────────────────────────────────────
@@ -1971,9 +2003,7 @@ def main(argv):
                 print("winlux-parental supervise doit tourner en root", file=sys.stderr)
                 return 1
 
-            def log(text):
-                print(time.strftime("%Y-%m-%d %H:%M:%S"), "supervision :", text, flush=True)
-            return supervise([sys.executable, "-B", SELF, "daemon"], log)
+            return lean_supervise()
         if command == "status" and not rest:
             user = peer()
             state = state_of(user)

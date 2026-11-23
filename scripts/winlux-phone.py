@@ -860,12 +860,18 @@ class Daemon:
                 spawn([sys.executable, os.path.abspath(__file__), "pair-dialog", link.id])
                 self.publish()
         else:
-            if link.id in self.devices:
-                self.unpair(link.id, tell=False)
-            pending = self.pending.pop(link.id, None)
+            # Demandes en cours effacées AVANT la dissociation (#3158) :
+            # unpair publie l'état « dissocié », et un « Associer » cliqué à
+            # cet instant posait une demande que la fin de ce traitement
+            # effaçait aussitôt ; l'acceptation du téléphone devenait alors
+            # une nouvelle demande d'appairage.
+            with self.lock:
+                pending = self.pending.pop(link.id, None)
+                self.requested.pop(link.id, None)
             if pending:
                 self.desktop.close(pending.get("notification", 0))
-            self.requested.pop(link.id, None)
+            if link.id in self.devices:
+                self.unpair(link.id, tell=False)
             self.publish()
 
     def expire_loop(self):

@@ -116,6 +116,14 @@ def x(*args):
     return subprocess.run(list(args), env=env, capture_output=True, text=True, timeout=10).stdout
 
 
+def mouse_to(x_, y_):
+    """Comme une vraie souris : le dernier pas passe par un périphérique (XTest),
+    pas par un saut du pointeur (XWarpPointer) qu'aucune souris ne produit.
+    L'ancrage se réveille sur ces mouvements (#3279)."""
+    x("xdotool", "mousemove", str(int(x_) - 1), str(int(y_)))
+    x("xdotool", "mousemove_relative", "--", "1", "0")
+
+
 def wait(condition, seconds=8):
     end = time.time() + seconds
     while time.time() < end:
@@ -227,7 +235,7 @@ try:
     x("xprop", "-id", one, "-f", "_NET_WM_ICON_GEOMETRY", "32c", "-set", "_NET_WM_ICON_GEOMETRY", "100,720,150,40")
     start(sys.executable, "-B", str(HERE / "winlux-snap.py"), "watch")
     time.sleep(1.2)
-    x("xdotool", "mousemove", "170", "740")
+    mouse_to("170", "740")
 
     def group_windows():
         return [w for w in x("xdotool", "search", "--onlyvisible", "--name", "^" + snap["_t"]("Groupe d’ancrage") + "$").split()
@@ -242,12 +250,12 @@ try:
     left_, top_, width_, height_ = frame(card)
     assert top_ + height_ <= 720 - 40, f"vignette au-dessus du bouton et de son infobulle, {frame(card)}"
     # Aller sur la vignette puis revenir au bouton : toujours une seule vignette (#697).
-    x("xdotool", "mousemove", str(left_ + width_ // 2), str(top_ + height_ // 2))
+    mouse_to(str(left_ + width_ // 2), str(top_ + height_ // 2))
     time.sleep(0.6)
-    x("xdotool", "mousemove", "170", "740")
+    mouse_to("170", "740")
     time.sleep(snap["HOVER_DELAY"] + 1.2)
     assert len(group_windows()) == 1, f"une seule vignette à la fois (#697), {group_windows()}"
-    x("xdotool", "mousemove", str(left_ + width_ // 4), str(top_ + height_ // 2))
+    mouse_to(str(left_ + width_ // 4), str(top_ + height_ // 2))
     time.sleep(0.3)
     x("xdotool", "click", "1")
     assert wait(lambda: not hidden(one) and not hidden(two)), "clic : les deux fenêtres du groupe reviennent"
@@ -272,9 +280,9 @@ try:
     assert snap["get_prop"](two, "_WINLUX_SNAP_GROUP"), "regroupées"
     x("wmctrl", "-i", "-r", two, "-b", "add,maximized_vert,maximized_horz")
     assert wait(lambda: snap["is_maximized"](two)), "agrandie par openbox"
-    x("xdotool", "mousemove", "600", "300")
+    mouse_to("600", "300")
     time.sleep(0.8)
-    x("xdotool", "mousemove", "170", "740")
+    mouse_to("170", "740")
     assert not wait(group_window, snap["HOVER_DELAY"] + 1.5), "agrandie par openbox : plus de vignette de groupe (#696)"
     assert subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, "agrandie par openbox : groupe défait (#696)"
     assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP"), "agrandie par openbox : plus de groupe sur la fenêtre (#696)"
@@ -303,9 +311,9 @@ try:
     for window, zone in ((one, "quarter:tl"), (two, "quarter:tr")):
         assert subprocess.run(TOOL + ["place", zone, window], env=env, timeout=10).returncode == 0
     snap["form_group"]([one, two])
-    x("xdotool", "mousemove", "600", "300")
+    mouse_to("600", "300")
     time.sleep(0.8)
-    x("xdotool", "mousemove", "170", "740")
+    mouse_to("170", "740")
     card = wait(group_window)
     assert card, "groupe de deux quarts : vignette attendue"
     from gi.repository import Gdk, Gtk  # noqa: F401 (Gtk ouvre l'affichage)
