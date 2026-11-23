@@ -1803,22 +1803,13 @@ pub unsafe extern "win64" fn set_window_pos(
         restack_child(hwnd, _insert_after);
     }
 
-    let mut visibility_changed = false;
-    if flags & SWP_SHOWWINDOW != 0 {
-        visibility_changed = !gui::set_visible(hwnd, true);
-        let map = !empty_top_level(hwnd);
-        with_backend(|backend| backend.show_window(hwnd, map));
-        if map {
-            sync_frame(hwnd);
-        }
+    let visibility_changed = if flags & SWP_SHOWWINDOW != 0 {
+        set_visibility(hwnd, true)
     } else if flags & SWP_HIDEWINDOW != 0 {
-        visibility_changed = gui::set_visible(hwnd, false);
-        with_backend(|backend| backend.show_window(hwnd, false));
-    }
-
-    if visibility_changed {
-        publish_shared(hwnd);
-    }
+        set_visibility(hwnd, false)
+    } else {
+        false
+    };
 
     if flags & SWP_FRAMECHANGED != 0 {
         frame_changed(hwnd, rect, flags);
@@ -2647,16 +2638,42 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
     }
 }
 
+/// Montre ou cache la fenêtre sans message ni activation, comme
+/// SWP_SHOWWINDOW et SWP_HIDEWINDOW.
+/// Rend vrai si la visibilité a changé.
+fn set_visibility(hwnd: usize, show: bool) -> bool {
+    let was = gui::set_visible(hwnd, show);
+    if show {
+        let map = !empty_top_level(hwnd);
+        with_backend(|backend| backend.show_window(hwnd, map));
+        if map {
+            sync_frame(hwnd);
+        }
+    } else {
+        with_backend(|backend| backend.show_window(hwnd, false));
+    }
+    if was != show {
+        publish_shared(hwnd);
+    }
+    was != show
+}
+
 unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
         GWL_STYLE => {
-            if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+            let style = value as u32;
+            if gui::set_window_style(hwnd, style).is_some_and(|o| o != style) {
                 publish_shared(hwnd);
-                let style = value as u32;
                 if style & WS_CHILD == 0 {
                     with_backend(|b| b.set_resizable(hwnd, !fixed_size_frame(style)));
                 }
+            }
+            // WS_VISIBLE posé ou ôté : IsWindowVisible suit le style (Learn,
+            // « IsWindowVisible », #3247).
+            let show = style & 0x1000_0000 != 0; // WS_VISIBLE
+            if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
+                set_visibility(hwnd, show);
             }
         }
         GWL_EXSTYLE => {
