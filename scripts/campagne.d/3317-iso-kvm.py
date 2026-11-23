@@ -1,0 +1,12 @@
+# #3317 : le test QEMU de l'ISO live prend KVM quand le runner l'offre
+# en bios ; uefi (OVMF muet sous KVM une passe sur deux) et uefi32 (#3199)
+# restent en TCG.
+_t_3317 = (SCRIPTS / "test-live-iso-qemu.sh").read_text(encoding="utf-8")
+ok('-accel "$accel"' in _t_3317 and "test -w /dev/kvm" in _t_3317 and 'test "$mode" = bios && test -r /dev/kvm' in _t_3317,
+   "Test QEMU de l'ISO : KVM en bios si disponible, uefi et uefi32 en TCG (#3317)")
+_g_3317 = (SCRIPTS / "test-terminal-guest.sh").read_text(encoding="utf-8")
+ok("WINLUX_LIVE_TERMINAL_TIME=$label" in _g_3317,
+   "Test live : durée de chaque terminal sur le port série (#3317)")
+_r_3317 = (SCRIPTS.parent / ".github/workflows/release.yml").read_text(encoding="utf-8")
+ok("- scripts/test-live-iso-qemu.sh" in _r_3317 and "- scripts/test-terminal-guest.sh" in _r_3317,
+   "Release relancée quand le test QEMU de l'ISO ou le test terminal change (#3317)")

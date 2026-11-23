@@ -25,7 +25,12 @@ check() {
     label=$1
     shift
     status=0
+    read -r t0 _ < /proc/uptime
     timeout 60 "$@" >> /tmp/winlux-terminal.log 2>&1 || status=$?
+    read -r t1 _ < /proc/uptime
+    # Durée de chaque terminal sur le port série (#3317) : dit si le budget
+    # QEMU part dans ces 2 × 60 s accordées.
+    echo "WINLUX_LIVE_TERMINAL_TIME=$label:$(( ${t1%.*} - ${t0%.*} ))s (uptime ${t1%.*} s)"
     if ! grep -qx OK "$result" 2>/dev/null; then
         echo "WINLUX_LIVE_TERMINAL_FAILED=$label (code $status)"
         tail -n 20 /tmp/winlux-terminal.log
