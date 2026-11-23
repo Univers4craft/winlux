@@ -1705,24 +1705,6 @@ pub fn daemon() -> ! {
             continue;
         }
         let new_stamp = config_stamp();
-        // Les sockets en écoute se lisent dans /proc/net pour presque rien ;
-        // leurs propriétaires demandent un readlink de chaque fd de chaque
-        // processus. Ce parcours ne se refait que si une socket en écoute
-        // est apparue ou a disparu, et au plus tard toutes les minutes
-        // (#3266 : 1,87 % d'un cœur au repos, deux parcours toutes les 2 s).
-        // Une socket qui s'ouvre ou se ferme, ou un processus qui en tient
-        // une et qui fait exec ou se termine, relance le parcours au tour
-        // même : les règles par programme suivent aussi vite qu'avant.
-        let key = listening_inodes();
-        let rescan = needs_rescan(&key, listen_key.as_ref(), tick) || owners_changed(&owners);
-        listen_key = Some(key);
-        let new_apps = if rescan {
-            let (found, holders) = listening_programs_and_owners();
-            owners = holders;
-            found
-        } else {
-            apps.clone()
-        };
         let reload = new_stamp != stamp;
         if reload {
             cfg = Config::load();
@@ -1732,6 +1714,28 @@ pub fn daemon() -> ! {
             .rules
             .iter()
             .any(|r| r.dir == Dir::In && !r.program.is_empty());
+        // Les sockets en écoute se lisent dans /proc/net pour presque rien ;
+        // leurs propriétaires demandent un readlink de chaque fd de chaque
+        // processus (#3266 : 1,87 % d'un cœur au repos, deux parcours toutes
+        // les 2 s). Sans règle d'entrée par programme, ce parcours ne se
+        // refait que si une socket en écoute apparaît ou disparaît, si un
+        // processus qui en tient une fait exec ou se termine, et au plus tard
+        // toutes les minutes. Avec une telle règle, il se refait à chaque
+        // tour comme avant : une socket cédée par SCM_RIGHTS à un autre
+        // programme ne doit pas échapper à sa règle (#3280).
+        let key = listening_inodes();
+        let rescan = program_rules
+            || reload
+            || needs_rescan(&key, listen_key.as_ref(), tick)
+            || owners_changed(&owners);
+        listen_key = Some(key);
+        let new_apps = if rescan {
+            let (found, holders) = listening_programs_and_owners();
+            owners = holders;
+            found
+        } else {
+            apps.clone()
+        };
         if reload || (program_rules && new_apps != apps) {
             let applied = apply(&cfg, &new_apps).is_ok();
             if applied && reload && cgroups_available() {
@@ -1755,10 +1759,10 @@ pub fn daemon() -> ! {
 }
 
 /// Parcours complet des propriétaires de sockets au plus tard toutes les
-/// `RESCAN_TICKS` secondes, même sans changement vu : seule une socket en
-/// écoute passée par SCM_RIGHTS à un autre programme, qui la garde sous le
-/// même inode pendant que le premier la tient encore, n'est vue qu'ici
-/// (choix nommé : une minute au pire pour ce seul cas).
+/// `RESCAN_TICKS` secondes, même sans changement vu. Sans règle d'entrée
+/// par programme, seule une socket en écoute passée par SCM_RIGHTS à un
+/// autre programme n'est vue qu'ici, pour la page « Ports ouverts » et
+/// l'invite d'un nouveau programme en écoute : une minute au pire (#3280).
 const RESCAN_TICKS: u64 = 60;
 
 /// Inodes de toutes les sockets en écoute (boucle locale comprise, pour la
