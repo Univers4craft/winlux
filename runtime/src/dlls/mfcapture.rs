@@ -1835,6 +1835,30 @@ impl Core {
             return (MF_E_INVALIDREQUEST, READERF_ERROR, 0, std::ptr::null_mut());
         }
         if s.stream.is_none() {
+            // Caméra jamais décidée : la question part sur un fil à part et
+            // le lecteur rend un trou dans le flux (STREAMTICK, sans
+            // échantillon), comme le micro rend du silence (#1882) ; le fil
+            // de l'application n'attend pas la fenêtre (#3099). Après
+            // « Autoriser », la lecture suivante ouvre la caméra ; un refus
+            // reste l'erreur d'avant.
+            match crate::permissions::allowed_without_waiting(
+                crate::permissions::Capability::Camera,
+            ) {
+                None => {
+                    drop(s);
+                    std::thread::sleep(Duration::from_millis(100));
+                    return (S_OK, READERF_STREAMTICK, 0, std::ptr::null_mut());
+                }
+                Some(false) => {
+                    return (
+                        MF_E_VIDEO_DEVICE_INVALIDATED,
+                        READERF_ERROR,
+                        0,
+                        std::ptr::null_mut(),
+                    );
+                }
+                Some(true) => {}
+            }
             s.stream = v4l2::Stream::open(&self.camera.path, s.mode);
             if s.stream.is_none() {
                 return (

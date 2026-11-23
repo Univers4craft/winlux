@@ -8,6 +8,7 @@ Une session de concentration active « Ne pas déranger » pendant sa durée.
 
     winlux-alarms                    ouvre l'Horloge
     winlux-alarms daemon             surveille alarmes et minuteurs (avec la session)
+    winlux-alarms ring TITRE TEXTE ID             fenêtre d'une sonnerie (lancée par le démon)
     winlux-alarms add-alarm HH:MM [JOURS] [NOM]   JOURS : 0123456 (lundi = 0) ou « - »
     winlux-alarms add-timer SECONDES [NOM]        démarre un minuteur
     winlux-alarms focus MINUTES                   démarre une session de concentration
@@ -306,7 +307,53 @@ def play_once():
         return None
 
 
+def spawn_ring(title, text, alarm_id=None):
+    """Fenêtre de sonnerie dans son propre processus : le démon reste sans GTK."""
+    try:
+        return subprocess.Popen([sys.executable, "-B", os.path.abspath(__file__), "ring", title, text or "", alarm_id or ""],
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as error:
+        print(f"winlux-alarms : sonnerie impossible : {error}", file=sys.stderr, flush=True)
+        return None
+
+
+def due_rings(data, moment, stamp):
+    """Sonneries à lancer maintenant (titre, texte, identifiant d'alarme)."""
+    rings = [(alarm.get("label") or _t("Alarme"), alarm["time"], alarm["id"]) for alarm in due_alarms(data, moment)]
+    rings += [(_t("Minuteur terminé"), timer.get("label") or duration(timer["seconds"]), None) for timer in due_timers(data, stamp)]
+    if focus_due(data, stamp): rings.append((_t("Session de concentration terminée"), "", None))
+    return rings
+
+
+def next_wait(data, moment, stamp, period=2.0):
+    """Secondes avant le prochain relevé : 2 s au plus (le fichier peut changer),
+    moins quand une échéance tombe avant, pour sonner à l'heure dite."""
+    due = [timer["end"] for timer in data["timers"] if timer.get("end") is not None]
+    if data["focus"].get("end"): due.append(data["focus"]["end"])
+    for alarm in data["alarms"]:
+        ring_at = next_ring(alarm, moment)
+        if ring_at is not None: due.append(ring_at.timestamp())
+    wait = min([period] + [when - stamp for when in due])
+    return min(period, max(0.01, wait))
+
+
 def run_daemon():
+    # Le démon tourne toute la session : il ne charge pas GTK (environ 17 Mo
+    # de mémoire privée). Une sonnerie ouvre sa fenêtre dans un processus à
+    # part (« ring »), qui se termine avec elle.
+    while True:
+        data = load()
+        rings = due_rings(data, now(), time.time())
+        for title, text, alarm_id in rings: spawn_ring(title, text, alarm_id)
+        if rings: save(data)
+        try:
+            os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        time.sleep(next_wait(data, now(), time.time()))
+
+
+def run_ring(title, text, alarm_id):
     import gi
     gi.require_version("Gtk", "3.0")
     from gi.repository import GLib, Gtk
@@ -344,6 +391,7 @@ def run_daemon():
             state["player"] = "stopped"
             window.destroy()
             if window in rings: rings.remove(window)
+            if not rings: Gtk.main_quit()
 
         def snooze():
             data = load()
@@ -375,25 +423,7 @@ def run_daemon():
         window.show_all()
         window.present()
 
-    def tick():
-        data = load()
-        moment = now()
-        stamp = time.time()
-        changed = False
-        for alarm in due_alarms(data, moment):
-            changed = True
-            ring(alarm.get("label") or _t("Alarme"), alarm["time"], alarm["id"])
-        for timer in due_timers(data, stamp):
-            changed = True
-            ring(_t("Minuteur terminé"), timer.get("label") or duration(timer["seconds"]))
-        if focus_due(data, stamp):
-            changed = True
-            ring(_t("Session de concentration terminée"), "")
-        if changed: save(data)
-        return True
-
-    tick()
-    GLib.timeout_add(2000, tick)
+    ring(title, text, alarm_id or None)
     Gtk.main()
     return 0
 
@@ -786,6 +816,7 @@ def main(argv):
     command = argv[1] if len(argv) > 1 else "app"
     if command == "app": return run_app()
     if command == "daemon": return run_daemon()
+    if command == "ring" and len(argv) == 5: return run_ring(argv[2], argv[3], argv[4])
     data = load()
     if command == "add-alarm" and len(argv) >= 3 and parse_clock(argv[2]):
         days = [int(c) for c in argv[3] if c in "0123456"] if len(argv) > 3 and argv[3] != "-" else []

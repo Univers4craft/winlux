@@ -16,6 +16,14 @@
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH:/usr/games:/usr/local/games"
 uid=$(id -u)
+# Demande de relevé d'état (#3126), propre au compte : /run/winlux est
+# collant, seul ce compte peut écrire dans control-<uid> (créé par
+# winlux-control). Les fenêtres qui lisent control.txt en continu la touchent.
+control_demand="/run/winlux/control-$uid/demande"
+# En root : dans /run (à root), jamais dans /run/winlux collant.
+if test "$uid" = 0; then control_demand=/run/winlux-control-demande; fi
+WINLUX_CONTROL_DEMAND=$control_demand
+export WINLUX_CONTROL_DEMAND
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
 if ! mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || ! test -w "$XDG_RUNTIME_DIR"; then
     XDG_RUNTIME_DIR=$(mktemp -d "/tmp/winlux-runtime-$uid.XXXXXX")
@@ -86,11 +94,14 @@ if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$
 
 # Gestionnaire de fenêtres lancé tout de suite : il démarre pendant le son
 # et le service de fichiers, attendu seulement avant la barre des tâches.
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
 rc="$HOME/.config/openbox/rc.xml"
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
 if test -f "$rc"; then
-    /usr/bin/openbox --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
 else
-    /usr/bin/openbox --sm-disable >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable >"$logs/window-manager.log" 2>&1 &
 fi
 wm_pid=$!
 pids="$pids $wm_pid"
@@ -365,7 +376,7 @@ wait_desktop() {
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &
             fi
             # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
-            if test -f "/run/winlux/browser-pending-$(id -u)"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
+            if test -f "/run/winlux/browser-pending-$uid"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
             # Mise à jour disponible ou redémarrage requis (#881) : une notification
             # par avis du moteur ; Python ne démarre que si l'avis a changé.
             if test -f /run/winlux/update-notice && test -x /usr/bin/winlux-update-page &&
@@ -377,11 +388,23 @@ wait_desktop() {
     ) </dev/null >/dev/null 2>&1 &
     pids="$pids $!"
     if test "$primary" = 1; then
-        # État publié pour les Paramètres et la barre des tâches.
+        # État publié pour les Paramètres (#3126) : un relevé à l'ouverture
+        # de session, puis seulement quand une fenêtre qui le lit le demande
+        # en touchant $WINLUX_CONTROL_DEMAND (Paramètres ouverts, bureau PE).
+        # Bureau immobile : aucun programme lancé hormis le sleep, et plus de
+        # « xrandr --query » qui resondait les écrans toutes les 3 s. Les
+        # actions de winlux-control refont leur propre relevé complet.
         (
+            served="$control_demand-servie"
+            WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
+            # Dossier du compte (créé par winlux-control) : jamais celui d'un autre.
+            if test "$uid" = 0 || test -O "${control_demand%/*}"; then : >"$served" 2>/dev/null || true; fi
             while :; do
-                WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
                 sleep 3
+                test "$control_demand" -nt "$served" || continue
+                test "$uid" = 0 || test -O "${control_demand%/*}" || continue
+                : >"$served" 2>/dev/null || true
+                WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
             done
         ) </dev/null >/dev/null 2>&1 &
         pids="$pids $!"

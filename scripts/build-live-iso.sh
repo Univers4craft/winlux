@@ -142,6 +142,16 @@ cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeu
 cp "$root/integration/store-windows-valides.json" "$stage/usr/share/winlux/store-windows-valides.json"
 install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
 install -D -m 755 "$root/scripts/winlux-squirrel-update.py" "$stage/usr/lib/winlux/winlux-squirrel-update"
+# Openbox de Winlux (#3064) : boutons Réduire et Agrandir selon le style Win32.
+# Construit ici depuis la source Ubuntu vérifiée, sauf binaire fourni par
+# WINLUX_OPENBOX. Jamais dans /usr/bin, qui reste à Ubuntu.
+openbox_bin=${WINLUX_OPENBOX:-}
+if test -z "$openbox_bin"; then
+    sh "$root/scripts/build-openbox.sh" "$root/build/openbox"
+    openbox_bin=$root/build/openbox/openbox
+fi
+install -D -m 755 "$openbox_bin" "$stage/usr/lib/winlux/openbox/openbox"
+install -D -m 755 "$root/scripts/winlux-openbox.sh" "$stage/usr/lib/winlux/winlux-openbox"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
@@ -240,7 +250,7 @@ chmod 755 \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait taches_compte chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
+for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait fil_etranger taches_compte chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc palette_suite libelle_vide_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -1263,10 +1273,18 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
     # Session du compte : son bureau publie lui-même l'état et suit les écrans.
     if test -z "$desktop_user"; then
+    # Relevé à l'ouverture, puis seulement à la demande d'une fenêtre qui
+    # le lit (Paramètres, bureau PE) : un bureau immobile ne lance plus
+    # rien toutes les 3 s (#3126). Fichiers dans /run (à root), jamais dans
+    # /run/winlux collant où un compte pourrait poser un lien.
     (
+        DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
+        : >/run/winlux-control-demande-servie 2>/dev/null || true
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-            DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
             /bin/busybox sleep 3
+            test /run/winlux-control-demande -nt /run/winlux-control-demande-servie || continue
+            : >/run/winlux-control-demande-servie 2>/dev/null || true
+            DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
         done
     ) &
     # Écrans : branchement à chaud, capot et taille de la fenêtre VM (QEMU
@@ -1571,7 +1589,10 @@ fi
 set winlux_root=
 search --no-floppy --label WINLUX_ROOT --set=winlux_root
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
-    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4 $winlux_efi_args
+    # Diagnostic de #3199 (panique rare en UEFI 32 bits) : carte mémoire EFI et
+    # journal du noyau complets, sur cette seule entrée, celle que la CI démarre.
+    # À retirer d'un bloc une fois le diagnostic fini.
+    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=7 efi=debug $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 function winlux_live {
