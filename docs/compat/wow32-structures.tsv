@@ -243,6 +243,7 @@ oleaut32_picture.rs	Picture	a-verifier	objet COM du lot C (#1511), vtable x64 ; 
 oleaut32_record.rs	RecordInfo	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 oleaut32_typelib.rs	InfoObj	x86	ITypeInfo vu par un programme x86 par le mandataire ITYPEINFO de wow32/com.rs ; TYPEATTR et FUNCDESC traduits par wow32/com_typeinfo.rs (#2796) ; ICreateTypeInfo2 reste x64 (CreateTypeLib2 refusé si wow32 actif)
 oleaut32_typelib.rs	LibObj	x86	ITypeLib vu par un programme x86 par le mandataire ITYPELIB de wow32/com.rs (LoadRegTypeLib, #2796 ; TLIBATTR sans pointeur, même disposition) ; ICreateTypeLib2 reste x64 (CreateTypeLib2 refusé si wow32 actif)
+quartz.rs	DevEnum	interne	objet COM ICreateDevEnum (#3296), x64 seulement : le programme ne lit que sa table, et sans mandataire x86 dans wow32/com.rs l'interface est refusée à un programme 32 bits (#2428)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 rtti.rs	StdException	interne	std::bad_typeid lancée par __RTtypeid en x64 seulement (x86 : avertissement, rien n'est lancé)
