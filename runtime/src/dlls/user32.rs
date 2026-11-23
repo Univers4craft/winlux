@@ -5102,7 +5102,10 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
     let start = std::time::Instant::now();
+    // Inscrite avant toute lecture : un signal postérieur réveille le fil.
+    let mut objects = crate::dlls::kernel32::ObjectWait::new(&hs);
     loop {
+        objects.arm();
         // 1. Les objets. Une socket associée par WSAEventSelect rend son
         //    événement prêt : PuTTY attend ainsi le réseau (avant, on
         //    répondait toujours « un message attend » et il tournait à vide).
@@ -5139,6 +5142,7 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
         //    Les rappels SetWinEventHook en attente sont appelés pendant
         //    l'attente, comme sous Windows.
+        gui::deliver_sent();
         if wake_mask != 0 {
             super::chromium_win32::deliver_win_events();
         }
@@ -5155,11 +5159,40 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         } else {
             timeout - elapsed
         };
-        // Tranches courtes : les objets et les sockets n'ont pas de
-        // descripteur commun avec la connexion X11.
-        let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
-        if !gui::wait_backend(slice) {
-            std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+        // 4. Le sommeil (#3170) : dans poll(2), jusqu'au signal d'un objet,
+        //    à l'arrivée d'un message (connexion X11, éveil de la file) ou
+        //    au prochain minuteur. Borne de sûreté de 500 ms, comme
+        //    GetMessage ; 10 ms pour les sockets WSAAsyncSelect sondées.
+        //    En headless, sans descripteur de messages, tranches de 10 ms.
+        let wake = if wake_mask != 0 {
+            gui::message_wake_fds()
+        } else {
+            Some(([-1, -1], false))
+        };
+        match wake {
+            Some((_, true)) => continue,
+            Some((fds, false)) => {
+                let cap = if super::ws2_32::async_active() {
+                    10
+                } else {
+                    500
+                };
+                let timer = if wake_mask != 0 {
+                    gui::next_timer_ms(0).unwrap_or(cap)
+                } else {
+                    cap
+                };
+                objects.block(&fds, left.min(timer).min(cap));
+                if wake_mask != 0 {
+                    gui::drain_queue_wake();
+                }
+            }
+            None => {
+                let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
+                if !gui::wait_backend(slice) {
+                    std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+                }
+            }
         }
     }
 }
