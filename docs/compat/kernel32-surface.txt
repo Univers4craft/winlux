@@ -12,6 +12,7 @@ AddVectoredContinueHandler
 AddVectoredExceptionHandler
 AllocConsole
 AllocateUserPhysicalPages
+AppPolicyGetThreadInitializationType
 AreFileApisANSI
 AssignProcessToJobObject
 AttachConsole
@@ -685,6 +686,8 @@ QueryDosDeviceW
 QueryFullProcessImageNameA
 QueryFullProcessImageNameW
 QueryInformationJobObject
+QueryInterruptTime
+QueryInterruptTimePrecise
 QueryMemoryResourceNotification
 QueryPerformanceCounter
 QueryPerformanceFrequency

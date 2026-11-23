@@ -5,13 +5,23 @@ unset WINLUX_DESKTOP_DEMO
 # Demande du choix du navigateur propre au compte (#2243), lue par Paramètres PE.
 WINLUX_BROWSER_CHOOSER="Z:\\run\\winlux\\browser-chooser-$(id -u)"
 export WINLUX_BROWSER_CHOOSER
+# Demande de relevé d'état du compte (#3126) : le bureau et les Paramètres PE
+# la réécrivent tant qu'ils affichent l'état (en root : dans /run, pas dans
+# /run/winlux collant).
+if test "$(id -u)" = 0; then WINLUX_CONTROL_DEMAND_PE='Z:\run\winlux-control-demande'
+else WINLUX_CONTROL_DEMAND_PE="Z:\\run\\winlux\\control-$(id -u)\\demande"; fi
+export WINLUX_CONTROL_DEMAND_PE
 # Runtime : celui de WINLUX_RUNTIME quand il est posé (passes « par
 # chemin » avec un binaire frais), comme winlux-open ; sinon l'installé (#2987).
 runtime=${WINLUX_RUNTIME:-/usr/bin/winlux}
 
 # Chemin passé à l'Explorateur. xdg-open et GIO donnent parfois une URI
 # (file:///home/damien/T%C3%A9l%C3%A9chargements) : on la décode (accents,
-# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b.
+# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b. Un chemin
+# du lecteur C: (le dossier personnel, ou WINLUX_DRIVE_C / WINLUX_HOME comme
+# dans le runtime) devient C:\… : l'Explorateur l'affiche alors comme quand
+# on y arrive par le volet de gauche, « Dossier personnel (C:) › Documents »,
+# et non « Système Linux (Z:) › home › damien › Documents » (#3025).
 shell_path() {
     value=$1
     case "$value" in
@@ -27,6 +37,16 @@ if b"\0" in path:
     sys.exit(1)
 sys.stdout.buffer.write(path)
 ' "$value") || return 1 ;;
+    esac
+    drive_c=${WINLUX_DRIVE_C:-${WINLUX_HOME:-${HOME:-}}}
+    drive_c=${drive_c%/}
+    case "$drive_c" in
+        /?*)
+            case "$value" in
+                "$drive_c"|"$drive_c"/*)
+                    printf 'C:\\%s' "${value#"$drive_c"}" | sed 's@/@\\@g; s@^C:\\\\@C:\\@'
+                    return ;;
+            esac ;;
     esac
     case "$value" in
         /*) printf 'Z:%s' "$value" | sed 's@/@\\@g' ;;
@@ -51,7 +71,13 @@ case "${1:-explorer}" in
             esac
             export WINLUX_SETTINGS_PAGE=$2
         fi
-        if test "$1" = explorer && test -n "${2:-}"; then
+        # « Extraire tout… » du clic droit du Bureau : l'Explorateur s'ouvre
+        # sur le dossier de l'archive et l'extrait dans un nouveau dossier.
+        if test "$1" = explorer && test "${2:-}" = --extraire; then
+            test -n "${3:-}" || exit 2
+            WINLUX_SHELL_EXTRACT=$(shell_path "$3") || exit 2
+            export WINLUX_SHELL_EXTRACT
+        elif test "$1" = explorer && test -n "${2:-}"; then
             WINLUX_SHELL_PATH=$(shell_path "$2") || exit 2
             export WINLUX_SHELL_PATH
         fi

@@ -468,6 +468,10 @@ class Start(Gtk.Application):
         # calculé en arrière-plan à chaque ouverture (#685).
         self.open_category = None
         self.side_generation = 0
+        # Catalogue des applications : relu seulement quand GIO signale un
+        # lanceur ajouté, retiré ou modifié (#3121), plus à chaque ouverture.
+        self.apps_stale = True
+        self.app_monitor = None
         self.side_data = None
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
@@ -498,16 +502,17 @@ class Start(Gtk.Application):
         # dernière ouverture : relues à chaque ouverture.
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): pass
-        # Services de la session livrés avec une entrée de menu par leur paquet.
-        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
-                     if listed(app) and app.get_id() not in SESSION_SERVICES}
+        if self.apps_stale or not hasattr(self, "apps"): self.load_apps()
         changed = auto_pin(self.state, self.apps)
         changed |= note_new_apps(self.state, self.apps, time.time())
         if changed: self.save()
         self.all_apps = False
         self.open_category = None
-        self.search.set_text("")
-        self.render()
+        # La liste est construite une seule fois, par place() plus bas : vider
+        # une recherche restée tapée ne la reconstruit pas, et un render() ici
+        # était refait aussitôt par place(), pour rien (#3217).
+        with self.search.handler_block(self.search_changed):
+            self.search.set_text("")
         # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
         # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
         # premier appui et se trouvait en partie dessous.
@@ -541,10 +546,38 @@ class Start(Gtk.Application):
         affichage des widgets (styles, tailles, fenêtre X). Laissé au
         premier appui, il en coûtait 36 à 52 ms contre 4 à 11 ensuite, et ce
         premier appui préchargé n'était pas deux fois plus rapide qu'un
-        lancement à froid (#2834)."""
+        lancement à froid (#2834). Le catalogue des applications aussi."""
         self.window.get_child().show_all()
         self.window.realize()
         self.window.get_preferred_size()
+        self.load_apps()
+
+    def load_apps(self):
+        """Lit le catalogue des applications (Gio.AppInfo.get_all : 13 à 19 ms
+        médiane, jusqu'à 39 ms, sur le PC de damien, à chaque ouverture
+        jusqu'ici, #3121). Relu ensuite seulement sur le signal « changed »
+        de Gio.AppInfoMonitor : lanceur installé, retiré ou modifié."""
+        if self.app_monitor is None:
+            # Le moniteur ne signale rien tant que get_all n'a pas été appelé
+            # une fois : créé juste avant la première lecture.
+            self.app_monitor = Gio.AppInfoMonitor.get()
+            self.app_monitor.connect("changed", self.apps_changed)
+        self.apps_stale = False
+        # Services de la session livrés avec une entrée de menu par leur paquet.
+        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
+                     if listed(app) and app.get_id() not in SESSION_SERVICES}
+        # Textes repliés préparés au repos, après l'affichage : la première
+        # frappe ne les calcule plus.
+        GLib.idle_add(warm_index, list(self.apps.values()))
+        return False
+
+    def apps_changed(self, _monitor):
+        """Catalogue changé : relu au repos si le menu est caché, pour que
+        l'ouverture suivante n'ait rien à relire ; sinon à la prochaine
+        ouverture (la liste affichée ne bouge pas sous le pointeur)."""
+        self.apps_stale = True
+        if not (self.window and self.window.get_visible()):
+            GLib.idle_add(lambda: self.load_apps() if self.apps_stale else False)
 
     def workarea(self):
         display = self.window.get_display()
@@ -668,7 +701,7 @@ class Start(Gtk.Application):
         self.body = body
         self.left.pack_start(body, True, True, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
-        self.search.connect("search-changed", lambda *_: self.render())
+        self.search_changed = self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         search_row = Gtk.Box(spacing=8)
         search_row.pack_start(self.search, True, True, 0)
@@ -830,10 +863,11 @@ class Start(Gtk.Application):
         self.scroll_top()
 
     def first_result(self, *_):
-        # Même ordre que la liste : applications, Paramètres, fichiers.
+        # Même ordre que la liste : Meilleur résultat, applications, Paramètres, fichiers.
         query=fold(self.search.get_text().strip())
         found=settings_for(query) if query else []
-        if self.results:self.launch(self.results[0])
+        if page_first(self.results, found, query):self.open_setting(found[0][1])
+        elif self.results:self.launch(self.results[0])
         elif found:self.open_setting(found[0][1])
         elif self.file_results:self.open_file(self.file_results[0])
 
@@ -924,6 +958,9 @@ class Start(Gtk.Application):
         if not self.window or not hasattr(self, "apps"): return
         for widget in self.content.get_children(): widget.destroy()
         query = fold(self.search.get_text().strip())
+        # Recherche changée : le parcours de fichiers en cours s'arrête avant
+        # le calcul des résultats, au lieu de lui disputer le verrou de Python.
+        if query != self.file_query: self.file_generation += 1
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
@@ -946,12 +983,29 @@ class Start(Gtk.Application):
             pages = settings_for(query) if query else []
             if query and query != self.file_query:
                 self.file_query = query
-                self.file_generation += 1
                 self.file_results = []
+                # Parcours par tranches de FILE_SLICE_MS sur la boucle
+                # principale, en priorité « au repos » : une frappe attend au
+                # plus une tranche, et la suivante arrête le parcours périmé.
+                # Dans un fil, il disputait le verrou de Python à l'affichage
+                # (#3049).
                 if len(query) >= 2:
-                    threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
+                    GLib.idle_add(self.file_slice, self.find_files(query, self.file_generation))
+            # Une page des Paramètres mieux classée que la première application
+            # devient le Meilleur résultat : « écran » donne la page Écran avant
+            # « Copier le texte de l'écran » (#3018).
+            if page_first(self.results, pages, query):
+                heading = Gtk.Label(label=_t("Meilleur résultat"), xalign=0, margin_top=10)
+                heading.get_style_context().add_class("heading")
+                self.content.pack_start(heading, False, False, 0)
+                label, page = pages[0]
+                button = self.result_button(label, "preferences-system", _t("Paramètres · ") + label)
+                on_click(button, lambda target=page: self.open_setting(target))
+                self.content.pack_start(button, False, False, 0)
+                pages = pages[1:]
+                previous = _t("Meilleur résultat")
             for index, app in enumerate(self.results):
-                group = (_t("Meilleur résultat") if index == 0 else _t("Applications")) if query else category(app)
+                group = (_t("Meilleur résultat") if index == 0 and previous is None else _t("Applications")) if query else category(app)
                 if group != previous:
                     heading = Gtk.Label(label=group, xalign=0, margin_top=10)
                     heading.get_style_context().add_class("heading")
@@ -959,7 +1013,7 @@ class Start(Gtk.Application):
                     previous = group
                 # Homonymes (Claude pour Windows et Claude de la Boutique,
                 # #1489) : le repère « .exe » les distingue.
-                self.content.pack_start(self.app_button(app, badge=fold(app.get_display_name()) in twins), False, False, 0)
+                self.content.pack_start(self.app_button(app, badge=indexed(app.get_display_name())[0] in twins), False, False, 0)
             if pages:
                 heading = Gtk.Label(label=_t("Meilleur résultat") if not self.results else _t("Paramètres"), xalign=0, margin_top=10)
                 heading.get_style_context().add_class("heading")
@@ -1335,9 +1389,16 @@ class Start(Gtk.Application):
                 buttons=Gtk.ButtonsType.CLOSE,text=_t("Impossible d’ouvrir ce fichier"),secondary_text=str(error))
             dialog.run();dialog.destroy()
 
+    def file_slice(self, steps):
+        end = time.perf_counter() + FILE_SLICE_MS / 1000
+        for _ in steps:
+            if time.perf_counter() >= end: return True
+        return False
+
     def find_files(self, query, generation):
-        # Bounded name search in visible personal directories. Never follows
-        # directory symlinks or scans the system disks from the UI thread.
+        # Bounded name search in visible personal directories, run in slices
+        # on the main loop (file_slice). Never follows directory
+        # symlinks or scans the system disks.
         # Début de mot comme Windows (#607) : « son » trouve « Son.wav », pas
         # « application-json.png » ni « Personnalisation ». Jusqu'à 300
         # candidats, puis les 30 meilleurs : nom qui commence par la recherche,
@@ -1345,6 +1406,7 @@ class Start(Gtk.Application):
         # la liste avec le premier dossier parcouru).
         matches, visited = [], 0
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
+            yield
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
@@ -1357,16 +1419,23 @@ class Start(Gtk.Application):
                 listed = []
             for name in listed + files:
                 visited += 1
-                if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
+                if visited % 64 == 0:
+                    yield
+                    # Nouvelle frappe : arrêt sans finir le dossier en cours.
+                    if generation != self.file_generation: return
+                if not name.startswith(".") and found_in(query, name, cache=False): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
             if len(matches) >= 300 or visited >= 30000: break
-        matches = sorted(matches, key=lambda path: (rank(path.name, query), -modified(path), fold(path.name)))[:30]
-        def deliver():
-            if generation == self.file_generation:
-                self.file_results = matches
-                self.render()
-            return False
-        GLib.idle_add(deliver)
+        dates = {}
+        for index, path in enumerate(matches):
+            if index % 32 == 0:
+                yield
+                if generation != self.file_generation: return
+            dates[path] = modified(path)
+        matches = sorted(matches, key=lambda path: (rank(path.name, query, cache=False), -dates[path], fold(path.name)))[:30]
+        if generation == self.file_generation:
+            self.file_results = matches
+            self.render()
 
     def menu(self, widget, event, actions):
         if self.window.has_grab():self.window.grab_remove()
@@ -1526,10 +1595,13 @@ class Start(Gtk.Application):
 # versions devient le « Navigateur » générique (aucune marque imposée).
 RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
 
+# Durée d'une tranche du parcours des fichiers sur la boucle principale (ms).
+FILE_SLICE_MS = 3
 
-def rank(text, query):
+
+def rank(text, query, cache=True):
     """0 : le nom commence par la recherche ; 1 : un de ses mots ; 2 : ailleurs."""
-    text = fold(text)
+    text = indexed(text)[0] if cache else fold(text)
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
@@ -1544,13 +1616,18 @@ def result_order(app, query, state):
     ident = app.get_id() or ""
     when = seen.get(ident)
     when = when if isinstance(when, (int, float)) else 0
-    return (rank(app.get_display_name(), query), fold(app.get_display_name()), -when,
+    name = app.get_display_name()
+    level = rank(name, query)
+    # Milieu de mot (3) et faute de frappe (4) après toute correspondance
+    # exacte, nom ou mots-clés (#3068).
+    if level == 2 and not exact_match(app, query): level = near(query, name) or 2
+    return (level, indexed(name)[0], -when,
             ident.startswith(("winlux-pe-", "winlux-link-")), ident)
 
 
 def homonyms(apps):
     """Noms (repliés) portés par plusieurs applications de la liste."""
-    names = [fold(app.get_display_name()) for app in apps]
+    names = [indexed(app.get_display_name())[0] for app in apps]
     return {name for name in names if names.count(name) > 1}
 
 
@@ -1575,36 +1652,158 @@ def words(text):
     return re.sub(r"[^\w]+|_", " ", fold(text)).strip()
 
 
-def found_in(query, text):
+# Textes du menu (noms, mots-clés des applications, pages des Paramètres)
+# déjà repliés : chaque frappe repliait de nouveau tous les noms, ~10 ms par
+# frappe sous Xvfb pour 150 applications et 43 pages (#3040). Borné : vidé
+# au-delà de 20 000 textes. Les noms de fichiers n'y passent pas (cache=False).
+_INDEX = {}
+_QUERY = [(None, [])]
+# Milieu de mot et fautes de frappe : recherche repliée et verdict par nom,
+# pour la frappe en cours (matches puis result_order demandent les deux).
+_NEAR = [(None, [], {})]
+
+
+def indexed(text):
+    """(texte replié, ses mots, ses suites de trois mots recollées), en cache."""
+    entry = _INDEX.get(text)
+    if entry is None:
+        if len(_INDEX) > 20000: _INDEX.clear()
+        tokens = tuple(words(text).split())
+        entry = _INDEX[text] = (fold(text), tokens,
+                                tuple("".join(tokens[index:index + 3]) for index in range(len(tokens))))
+    return entry
+
+
+def warm_index(apps):
+    """Remplit le cache des textes repliés : noms et mots-clés des applications
+    (tels que matches() les compose), titres et mots-clés des Paramètres."""
+    for app in apps:
+        indexed(app.get_display_name())
+        keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
+        generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
+        indexed(" ".join(list(keywords or []) + [generic or ""]))
+    for (label, _), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
+        indexed(label); indexed(french); indexed(keywords)
+    return False
+
+
+def found_in(query, text, cache=True):
     """Chaque mot de la recherche commence un mot du texte, dans n'importe quel
     ordre ; « wifi » trouve aussi « Wi-Fi » (mots voisins recollés)."""
-    query, tokens = words(query).split(), words(text).split()
+    # La même recherche est comparée à chaque texte : repliée une seule fois.
+    # Lue et remplacée d'un bloc (tuple) : le fil de la recherche de fichiers
+    # appelle aussi found_in.
+    memo = _QUERY[0]
+    if memo[0] != query:
+        memo = (query, words(query).split())
+        _QUERY[0] = memo
+    query = memo[1]
     if not query: return False
+    if cache:
+        _, tokens, glued = indexed(text)
+    else:
+        tokens = words(text).split()
+        glued = ["".join(tokens[index:index + 3]) for index in range(len(tokens))]
     # Début de mot, comme Windows : « son » trouve Son, pas « personnalisation ».
     if all(any(token.startswith(word) for token in tokens) for word in query): return True
     joined = "".join(query)
-    return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
+    return any(part.startswith(joined) for part in glued)
+
+
+# « Paramètres » dans les quatre langues, repliés : dans une recherche de
+# plusieurs mots (« paramètres son »), ce mot désigne la catégorie et non le
+# titre de la page (#3017).
+SETTINGS_WORDS = ("parametres", "parametre", "settings", "setting", "configuracion", "ajustes", "einstellungen")
 
 
 def settings_for(query):
     """Pages des Paramètres trouvées (titre traduit, titre français et mots-clés
-    des quatre langues), les mieux classées d'abord : titre puis mots-clés."""
+    des quatre langues), les mieux classées d'abord : titre puis mots-clés.
+    Le mot « paramètres » accompagné d'autres mots nomme la catégorie : il est
+    retiré avant de chercher la page."""
+    parts = words(query).split()
+    rest = [part for part in parts
+            if not (len(part) >= 4 and any(name.startswith(part) for name in SETTINGS_WORDS))]
+    if rest and len(rest) < len(parts): query = " ".join(rest)
     found = []
     for (label, page), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
         if found_in(query, label) or found_in(query, french):
             found.append((rank(label, query), label, page))
         elif found_in(query, keywords):
             found.append((3, label, page))
-    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], fold(item[1])))]
+    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], indexed(item[1])[0]))]
 
 
-def matches(app, query):
+def page_first(apps, pages, query):
+    """Vrai si la première page des Paramètres trouvée est mieux classée que
+    la première application (rang de rank() strictement meilleur) : elle
+    devient alors le Meilleur résultat. À rang égal, l'application reste en
+    tête (« paramètres » ouvre l'application Paramètres)."""
+    if not (query and pages and apps): return False
+    return rank(pages[0][0], query) < rank(apps[0].get_display_name(), query)
+
+
+def exact_match(app, query):
     """Nom affiché, nom générique ou mot-clé du lanceur (« boutique » trouve le Store)."""
-    if not query: return True
     if found_in(query, app.get_display_name()): return True
     keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
     generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
     return found_in(query, " ".join(list(keywords or []) + [generic or ""]))
+
+
+def matches(app, query):
+    """Correspondance exacte (exact_match), sinon milieu de mot ou faute de
+    frappe dans le nom de l'application (near)."""
+    if not query: return True
+    return exact_match(app, query) or near(query, app.get_display_name()) is not None
+
+
+def one_edit(a, b):
+    """Vrai si a et b diffèrent d'au plus une lettre ajoutée, oubliée,
+    remplacée, ou de deux lettres voisines inversées."""
+    if a == b: return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1: return False
+    i = 0
+    while i < la and i < lb and a[i] == b[i]: i += 1
+    if la == lb:
+        return a[i + 1:] == b[i + 1:] or (i + 1 < la and a[i] == b[i + 1] and a[i + 1] == b[i] and a[i + 2:] == b[i + 2:])
+    return a[i:] == b[i + 1:] if la < lb else a[i + 1:] == b[i:]
+
+
+def near(query, name):
+    """Applications seulement (#3068) : 3 si chaque mot de la recherche est au
+    milieu d'un mot du nom (« pad » dans Mousepad, 3 lettres au moins), 4 s'il
+    faut en plus tolérer une faute de frappe (« outlok » → Outlook, 4 lettres
+    au moins, une lettre de différence avec les 4 premières lettres au moins
+    d'un mot), sinon None.
+    Microsoft annonce la tolérance aux fautes pour les applications sans en
+    donner la règle : les seuils sont les nôtres."""
+    memo = _NEAR[0]
+    if memo[0] != query:
+        memo = (query, words(query).split(), {})
+        _NEAR[0] = memo
+    found = memo[2].get(name, False)
+    if found is not False: return found
+    tokens = indexed(name)[1]
+    level = 3
+    for word in memo[1]:
+        size = len(word)
+        head = (word[:1], word[1:2])
+        if size >= 3 and any(word in token for token in tokens): continue
+        # Une seule lettre de différence : les deux premières lettres du mot
+        # et du début du nom en ont au moins une en commun, à la même place
+        # ou décalée d'un cran. Le filtre évite one_edit() pour presque tous.
+        # Le début du nom comparé a lui aussi 4 lettres au moins : sinon
+        # « rapp » (une lettre en trop devant « app ») trouvait toutes les
+        # « Application… ».
+        if size >= 4 and any(one_edit(word, token[:size + delta]) for token in tokens
+                             if token[:1] in head or token[1:2] in head
+                             for delta in (-1, 0, 1) if size + delta >= 4):
+            level = 4; continue
+        level = None; break
+    memo[2][name] = level
+    return level
 
 
 def auto_pin(state, apps):

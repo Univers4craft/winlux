@@ -467,6 +467,7 @@ def quick_tiles(hardware, state, in_vm):
 
 
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "winlux/notifications.json"
+CARDS_PER_PAGE = 50  # cartes construites à l'ouverture, puis à chaque bas de défilement
 DND = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/do-not-disturb"
 
 
@@ -1178,6 +1179,10 @@ class Popup(Gtk.Application):
         self.scroll.set_propagate_natural_height(True);self.scroll.set_max_content_height(340)
         self.cards=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8)
         self.scroll.add(self.cards)
+        # Tout l'historique gardé par le démon se relit (#3058) : les cartes
+        # s'ajoutent par tranches au bas du défilement, l'ouverture reste rapide.
+        self.pending=[]
+        self.scroll.connect("edge-reached",lambda _,edge:edge==Gtk.PositionType.BOTTOM and self.more_cards())
         body.pack_start(self.scroll,False,False,0)
         self.snapshot=None
         # Calendrier : panneau séparé sous les notifications, comme Windows 11.
@@ -1260,14 +1265,29 @@ class Popup(Gtk.Application):
         try:history=json.loads(text or "[]")
         except ValueError:history=[]
         if not isinstance(history,list):history=[]
+        # Centre ouvert : tout ce qu'il montre est vu, la pastille s'éteint (#3057).
+        if self.window and self.window.get_visible() and any(isinstance(item,dict) and item.get("nouvelle") for item in history):
+            try:
+                Gio.bus_get_sync(Gio.BusType.SESSION,None).call("org.freedesktop.Notifications",
+                    "/org/freedesktop/Notifications","org.winlux.Notifications","MarkSeen",
+                    None,None,Gio.DBusCallFlags.NONE,3000,None,None,None)
+            except GLib.Error:
+                pass
         for child in self.cards.get_children():self.cards.remove(child)
-        for item in reversed(history[-50:]):
-            if isinstance(item,dict):self.cards.pack_start(self.notification_card(item),False,False,0)
+        self.pending=[item for item in reversed(history) if isinstance(item,dict)]
+        self.more_cards()
         if not self.cards.get_children():
             self.cards.pack_start(self.label(_t("Aucune nouvelle notification"),"dim",xalign=0.5,margin=18),False,False,0)
         self.clear.set_visible(bool(history))
         self.clear.set_no_show_all(not history)
         self.cards.show_all()
+
+    def more_cards(self,count=CARDS_PER_PAGE):
+        """Tranche suivante de l'historique (#3058), plus récentes d'abord."""
+        batch,self.pending=self.pending[:count],self.pending[count:]
+        for item in batch:self.cards.pack_start(self.notification_card(item),False,False,0)
+        if batch:self.cards.show_all()
+        return bool(batch)
 
     def go_today(self):
         now=today();self.month=(now.tm_year,now.tm_mon);self.selected=None;self.render_month()

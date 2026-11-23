@@ -40,6 +40,8 @@ _TR = {
     'VPN : {name}': ('VPN: {name}', 'VPN: {name}', 'VPN: {name}'),
     'Point d’accès sans fil mobile activé': ('Mobile hotspot on', 'Zona con cobertura inalámbrica móvil activada', 'Mobiler Hotspot ein'),
     'Centre de notifications': ('Notification center', 'Centro de notificaciones', 'Benachrichtigungscenter'),
+    '1 nouvelle notification': ('1 new notification', '1 notificación nueva', '1 neue Benachrichtigung'),
+    '{count} nouvelles notifications': ('{count} new notifications', '{count} notificaciones nuevas', '{count} neue Benachrichtigungen'),
     'Batterie : {level} %': ('Battery: {level}%', 'Batería: {level} %', 'Akku: {level} %'),
     'Batterie : {level} % — en charge': ('Battery: {level}% — charging', 'Batería: {level} % — cargando', 'Akku: {level} % — wird geladen'),
     'Batterie : {level} % — chargée': ('Battery: {level}% — fully charged', 'Batería: {level} % — cargada', 'Akku: {level} % — vollständig geladen'),
@@ -583,11 +585,16 @@ def network_part():
 
 
 def notification_count():
-    """Notifications gardées dans le centre (pastille sur la cloche)."""
-    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "winlux/notifications.json"
+    """Notifications nouvelles, pas encore vues (pastille sur la cloche, #3057).
+
+    Comme Windows 11, la pastille compte ce qui est arrivé depuis la dernière
+    ouverture du centre ; les notifications déjà vues restent dans le centre
+    sans la rallumer. Le démon tient ce compte dans un petit fichier : la
+    barre ne relit plus tout l'historique toutes les deux secondes."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "winlux/notifications-nouvelles"
     try:
-        items = json.loads(state.read_text(encoding="utf-8"))
-        return len(items) if isinstance(items, list) else 0
+        value = state.read_text(encoding="ascii").strip()
+        return int(value) if value.isdigit() else 0
     except (OSError, ValueError):
         return 0
 
@@ -701,6 +708,8 @@ def render(kind, parent=None):
         body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
         tooltip = _t("Centre de notifications")
         if count:
+            tooltip += "\n" + (_t("1 nouvelle notification") if count == 1
+                               else _t("{count} nouvelles notifications").format(count=count))
             # Pastille du nombre de notifications, comme Windows 11 (#703).
             badge = "9+" if count > 9 else str(count)
             accent, on_accent = ("#b69cff", "#1c1a26") if DARK else ("#6a3df0", "#ffffff")
@@ -762,7 +771,296 @@ def _write_if_changed(path, text):
     temporary.replace(path)
 
 
-def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
+# ── Recalcul sur changement (#3129) ──────────────────────────────────────────
+# Au repos, le service relançait toutes les 2 à 3 s xwininfo -root -tree, un
+# xprop par greffon, xfconf-query, xdpyinfo, ip, nmcli et pactl : 8,2 % d'un
+# cœur et des centaines de requêtes X sur le vrai PC (22 novembre), barre
+# immobile. Le calcul lui-même ne change pas : il n'est refait que lorsque
+# quelque chose qu'il lit a pu changer, et au moins toutes les FALLBACK
+# secondes. Un moyen de suivi absent (pas de libX11, pas de pactl, pas de
+# nmcli) laisse le greffon concerné recalculé à chaque tour, comme avant.
+
+FALLBACK = 60          # recalcul de sûreté, même sans changement vu
+WATCH_SETTLE = 30      # barre lancée depuis moins longtemps : toujours recalculé
+
+
+class _XWatch:
+    """Une connexion X résidente qui reçoit, sans rien demander au serveur,
+    les changements de fenêtres de la barre (greffon redimensionné, icône
+    ajoutée) et de l'écran (résolution). Aucun programme lancé."""
+
+    CREATE, DESTROY, MAP, UNMAP, REPARENT, CONFIGURE, PROPERTY = 16, 17, 19, 18, 21, 22, 28
+
+    def __init__(self):
+        import ctypes
+        import ctypes.util
+        self.ok, self.version, self.ctypes = False, 0, ctypes
+        if not os.environ.get("DISPLAY"):
+            return
+        name = ctypes.util.find_library("X11")
+        if not name:
+            return
+        try:
+            x = ctypes.CDLL(name)
+        except OSError:
+            return
+        self.x = x
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x.XDefaultRootWindow.restype = ctypes.c_ulong
+        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+        x.XPending.argtypes = [ctypes.c_void_p]
+        x.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        x.XFlush.argtypes = [ctypes.c_void_p]
+        x.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+                                 ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_void_p),
+                                 ctypes.POINTER(ctypes.c_uint)]
+        x.XFree.argtypes = [ctypes.c_void_p]
+        x.XGetClassHint.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p]
+        x.XConnectionNumber.argtypes = [ctypes.c_void_p]
+        # Une fenêtre peut disparaître entre deux requêtes : l'erreur BadWindow
+        # est ignorée, au lieu du gestionnaire par défaut qui quitte le programme.
+        handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+        self._handler = handler(lambda display, event: 0)
+        x.XSetErrorHandler(self._handler)
+        self.display = x.XOpenDisplay(None)
+        if not self.display:
+            return
+        self.root = x.XDefaultRootWindow(self.display)
+        self.event = ctypes.create_string_buffer(192)
+        self.watched = set()
+        # Racine : fenêtres de premier niveau (barre relancée, écran redimensionné).
+        x.XSelectInput(self.display, self.root, (1 << 17) | (1 << 19))
+        self.ok = True
+        self.rescan()
+
+    def _children(self, window):
+        c = self.ctypes
+        root, parent, children, count = c.c_ulong(), c.c_ulong(), c.c_void_p(), c.c_uint()
+        if not self.x.XQueryTree(self.display, window, c.byref(root), c.byref(parent),
+                                 c.byref(children), c.byref(count)):
+            return []
+        found = []
+        if children.value:
+            array = c.cast(children, c.POINTER(c.c_ulong))
+            found = [array[i] for i in range(count.value)]
+            self.x.XFree(children)
+        return found
+
+    def _is_panel(self, window):
+        c = self.ctypes
+
+        class Hint(c.Structure):
+            _fields_ = [("name", c.c_char_p), ("klass", c.c_char_p)]
+        hint = Hint()
+        if not self.x.XGetClassHint(self.display, window, c.byref(hint)):
+            return False
+        name = hint.name or b""
+        # Les chaînes appartiennent à Xlib : lues ici, puis libérées.
+        for pointer in (Hint.name.offset, Hint.klass.offset):
+            value = c.c_void_p.from_buffer(hint, pointer).value
+            if value:
+                self.x.XFree(value)
+        return name == b"xfce4-panel"
+
+    def _watch_tree(self, window):
+        """Suit une fenêtre de la barre et toutes ses descendantes."""
+        stack = [window]
+        while stack:
+            current = stack.pop()
+            if current not in self.watched:
+                self.watched.add(current)
+                # StructureNotify + SubstructureNotify : taille, apparition, disparition.
+                self.x.XSelectInput(self.display, current, (1 << 17) | (1 << 19))
+            stack.extend(self._children(current))
+
+    def rescan(self):
+        """Cherche les fenêtres de la barre (au lancement, ou quand une fenêtre
+        de premier niveau apparaît) ; quelques requêtes, jamais à chaque tour."""
+        self.watched = {w for w in self.watched if w == self.root}
+        stack = list(self._children(self.root))
+        depth = {w: 1 for w in stack}
+        while stack:
+            window = stack.pop()
+            if self._is_panel(window):
+                self._watch_tree(window)
+            elif depth[window] < 3:
+                for child in self._children(window):
+                    depth[child] = depth[window] + 1
+                    stack.append(child)
+        self.x.XFlush(self.display)
+        self.version += 1
+
+    def poll(self):
+        """Lit les événements déjà arrivés (aucun aller-retour vers X)."""
+        if not self.ok:
+            return
+        c, rescan, seen = self.ctypes, False, False
+        while self.x.XPending(self.display):
+            self.x.XNextEvent(self.display, self.event)
+            kind = c.c_int.from_buffer(self.event).value
+            window = c.c_ulong.from_buffer(self.event, 40).value
+            parent = c.c_ulong.from_buffer(self.event, 32).value
+            if parent == self.root and window != self.root:
+                # Fenêtre de premier niveau (événement reçu par la racine) :
+                # seule une nouvelle fenêtre peut être une barre relancée ;
+                # les autres (déplacées, redimensionnées) ne changent rien ici.
+                rescan = rescan or kind in (self.CREATE, self.MAP, self.REPARENT)
+                continue
+            seen = True
+            if kind in (self.CREATE, self.REPARENT, self.MAP) and window not in self.watched:
+                self._watch_tree(window)
+        if rescan:
+            self.rescan()
+        elif seen:
+            self.x.XFlush(self.display)
+            self.version += 1
+
+
+class _Lines:
+    """Programme résident qui écrit une ligne par changement (pactl subscribe,
+    nmcli monitor) : son compteur avance à chaque ligne lue, sans attente."""
+
+    def __init__(self, args, keep=lambda line: True):
+        self.version, self.keep, self.process, self.buffer = 0, keep, None, b""
+        try:
+            self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                            stdin=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
+            os.set_blocking(self.process.stdout.fileno(), False)
+        except (OSError, ValueError):
+            self.process = None
+
+    @property
+    def ok(self):
+        return self.process is not None and self.process.poll() is None
+
+    def poll(self):
+        if self.process is None:
+            return
+        while True:
+            try:
+                chunk = os.read(self.process.stdout.fileno(), 65536)
+            except BlockingIOError:
+                break
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            self.buffer += chunk
+        *lines, self.buffer = self.buffer.split(b"\n")
+        if any(self.keep(line.decode(errors="replace")) for line in lines):
+            self.version += 1
+
+    def close(self):
+        if self.ok:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+
+def _default_interface():
+    """Interface de la route IPv4 par défaut, lue dans /proc (sans lancer ip)."""
+    try:
+        for line in Path("/proc/net/route").read_text().splitlines()[1:]:
+            fields = line.split()
+            if len(fields) > 7 and fields[1] == "00000000" and fields[7] == "00000000" and int(fields[3], 16) & 1:
+                return fields[0]
+    except (OSError, ValueError):
+        return None
+    return ""
+
+
+def _read(path):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return ""
+
+
+def _status_signature():
+    """Ce que montre le bouton réseau/son/batterie et qui se lit sans programme."""
+    interface = _default_interface()
+    net = (interface, _read(f"/sys/class/net/{interface}/operstate") if interface else "",
+           _read(f"/sys/class/net/{interface}/carrier") if interface else "")
+    supplies = Path(os.environ.get("WINLUX_POWER_SUPPLY", "/sys/class/power_supply"))
+    power = []
+    try:
+        for supply in sorted(supplies.iterdir()):
+            power.append((supply.name, _read(supply / "capacity"), _read(supply / "status"), _read(supply / "online")))
+    except OSError:
+        pass
+    return net, tuple(power)
+
+
+class Changes:
+    """Dit, pour chaque greffon, si son calcul peut être repris tel quel."""
+
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+        self.x = _XWatch() if enabled else None
+        # Volume, sourdine ou sortie par défaut ; pas les flux des programmes.
+        self.audio = _Lines(["pactl", "subscribe"],
+                            lambda line: re.search(r" on (sink|server|card) ", line + " ") is not None) if enabled else None
+        self.network = _Lines(["nmcli", "monitor"]) if enabled else None
+        self.last = {}
+
+    def poll(self):
+        if not self.enabled:
+            return
+        for watcher in (self.x, self.audio, self.network):
+            try:
+                watcher.poll()
+            except Exception:  # un suivi en panne : son greffon redevient recalculé à chaque tour
+                if isinstance(watcher, _Lines):
+                    watcher.close()
+                    watcher.process = None
+                else:
+                    watcher.ok = False
+
+    def key(self, kind):
+        """Empreinte des entrées du greffon ; None = rien ne permet de le suivre."""
+        if not self.enabled:
+            return None
+        settings = (_LANG, DARK, tuple(sorted(taskbar_preferences().items())))
+        if kind == "balance":
+            if not self.x.ok:
+                return None
+            # L'alignement est relu dans le fichier ; à défaut il vient de
+            # xfconf, qui ne change qu'avec la barre (événement X).
+            align = Path(os.environ.get("WINLUX_CONTROL_ROOT", "") + "/etc/winlux/preferences.conf")
+            return settings, self.x.version, _read(align)
+        if kind == "search":
+            return (settings, self.x.version) if self.x.ok else None
+        if kind == "status":
+            if not (self.audio.ok and self.network.ok):
+                return None
+            return settings, self.audio.version, self.network.version, _status_signature()
+        return None  # notifications : un fichier lu, rien à épargner
+
+    def unchanged(self, kind, now, panel_age):
+        """Vrai si le greffon n'a pas à être recalculé à ce tour."""
+        key = self.key(kind)
+        previous = self.last.get(kind)
+        if key is None or previous is None or panel_age is None or panel_age < WATCH_SETTLE:
+            return False
+        return previous[0] == key and now - previous[1] < FALLBACK
+
+    def done(self, kind, now):
+        # Empreinte relue après le calcul : un changement survenu pendant
+        # celui-ci (barre qui se réarrange) sera vu au tour suivant.
+        self.poll()
+        self.last[kind] = (self.key(kind), now)
+
+    def close(self):
+        for watcher in (self.audio, self.network):
+            if watcher is not None:
+                watcher.close()
+
+
+def serve(clock=time.monotonic, sleep=time.sleep, rounds=None, watch_changes=True):
     """Boucle du service ; s'arrête sans barre des tâches pendant 20 s."""
     import fcntl
     folder = output_directory()
@@ -782,6 +1080,7 @@ def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
     _write_if_changed(folder / "serve.pid", f"{os.getpid()}\n")
     due = {kind: 0.0 for kind in SERVED}
     missing_since = None
+    changes = Changes(enabled=watch_changes)
     while rounds is None or rounds > 0:
         if rounds is not None:
             rounds -= 1
@@ -807,12 +1106,17 @@ def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
         else:
             missing_since = None
             refresh_settings()
+            changes.poll()
+            panel_age = _seconds_since_start(panel)
             for kind, period in SERVED.items():
                 if now < due[kind]:
                     continue
                 due[kind] = now + period
+                if changes.unchanged(kind, now, panel_age) and (folder / f"out-{kind}").exists():
+                    continue
                 try:
                     line = render(kind, panel)
+                    changes.done(kind, now)
                 except Exception as error:  # un greffon en échec ne bloque pas les autres
                     _balance_log(f"service : {kind} en échec ({error!r})")
                     continue
@@ -824,6 +1128,7 @@ def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
             # qu'elle tourne encore avant de les servir.
             _write_if_changed(folder / "serve.panel", f"{panel}\n")
         sleep(1)
+    changes.close()
     try:
         (folder / "serve.pid").unlink()
     except OSError:

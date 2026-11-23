@@ -331,7 +331,7 @@ fn load(f: &FaceInfo) -> Option<Arc<sfnt::Font>> {
     sfnt::load(&f.path, f.index)
 }
 
-unsafe fn put_face(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn put_face(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -351,7 +351,7 @@ unsafe fn put_set(faces: Vec<FaceInfo>, out: *mut *mut c_void) -> i32 {
     put(out, Com::create(SET_VT.ptr(), faces))
 }
 
-unsafe fn put_ref(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn put_ref(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -2240,7 +2240,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("winlux-dwsets-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Tiny.ttf");
-        std::fs::write(&path, sfnt::tests::tiny_font()).unwrap();
+        // Écrite à côté puis renommée : un test qui lit la police pendant
+        // qu'un autre la réécrit voit toujours un fichier complet (#3241).
+        let tmp = dir.join(format!("Tiny.ttf.{:?}", std::thread::current().id()));
+        std::fs::write(&tmp, sfnt::tests::tiny_font()).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
         FaceInfo {
             family: "Winlux Tiny".into(),
             style: "Bold".into(),
