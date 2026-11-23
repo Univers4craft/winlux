@@ -276,6 +276,9 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
         while ! pgrep -x xfdesktop >/dev/null 2>&1 && test "$tries" -lt 60; do sleep 0.5; tries=$((tries + 1)); done
         sleep 2
         pkill -USR1 -x picom 2>/dev/null
+        # Fond Aurore animé (#3079), seulement s'il est activé dans Paramètres :
+        # le bureau et le compositeur sont là, la couche peut se poser.
+        if test -x /usr/bin/winlux-fond-anime; then /usr/bin/winlux-fond-anime ensure; fi
     ) >/dev/null 2>&1 &
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
