@@ -3456,7 +3456,7 @@ pub trait GuiBackend: Send {
         None
     }
     /// Cadre que le gestionnaire poserait sur une fenêtre de premier niveau
-    /// du genre `kind` (FRAME_BORDER, FRAME_NORMAL, FRAME_TOOL), en pixels
+    /// du genre `kind` (FRAME_BORDER, FRAME_NORMAL, FRAME_TOOL, FRAME_FIXED), en pixels
     /// logiques : AdjustWindowRectEx en a besoin avant que la fenêtre
     /// existe (#3016). None : pas de gestionnaire, donc pas de cadre.
     fn frame_for_kind(&mut self, _kind: u8) -> Option<[i32; 4]> {
@@ -4430,6 +4430,10 @@ pub const WM_WINLUX_FRAME: u32 = 0x5752;
 pub const FRAME_BORDER: u8 = 1;
 pub const FRAME_NORMAL: u8 = 2;
 pub const FRAME_TOOL: u8 = 3;
+/// Cadre complet d'une fenêtre que l'utilisateur ne peut pas redimensionner
+/// (barre de titre sans WS_THICKFRAME ni WS_MAXIMIZEBOX, #3011) : le
+/// gestionnaire ne lui pose pas de poignée, son bas est plus fin (#3222).
+pub const FRAME_FIXED: u8 = 4;
 
 /// Fenêtres en cours de destruction : encore dans la table (IsWindow,
 /// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous

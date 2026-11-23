@@ -3658,6 +3658,26 @@ impl X11Backend {
                 );
             }
         }
+        if kind == gui::FRAME_FIXED {
+            // Les indications que write_mwm_hints pose sur une fenêtre fixe
+            // sans Réduire ni Agrandir : fonctions sans RESIZE, cadre
+            // complet sans ces deux boutons.
+            if let Some(m) = atom(&self.conn, b"_MOTIF_WM_HINTS") {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    probe,
+                    m,
+                    m,
+                    &[
+                        1 | 2,
+                        0x04 | 0x08 | 0x10 | 0x20,
+                        0x02 | 0x04 | 0x08 | 0x10,
+                        0,
+                        0,
+                    ],
+                );
+            }
+        }
         if kind == gui::FRAME_TOOL {
             if let (Some(t), Some(v)) = (
                 atom(&self.conn, b"_NET_WM_WINDOW_TYPE"),
