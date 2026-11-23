@@ -23,6 +23,14 @@ impl<const N: usize> VTable<N> {
     pub fn ptr(&'static self) -> *const () {
         self.0.as_ptr() as *const ()
     }
+
+    /// La table, ou sa copie tracée quand `WINLUX_COMTRACE` vise
+    /// `module::interface` : chaque méthode (sauf AddRef et Release) est
+    /// notée à son retour dans le journal d'API (#3281).
+    pub fn traced(&'static self, module: &str, interface: &str) -> *const () {
+        crate::thunks::com_trace_table(self, module, interface)
+            .map_or(self.ptr(), |t| t as *const ())
+    }
 }
 
 /// GUID écrit comme dans les en-têtes Windows.

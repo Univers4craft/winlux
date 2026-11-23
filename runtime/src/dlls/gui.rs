@@ -516,6 +516,17 @@ type SentJob = Box<dyn FnOnce() -> isize + Send>;
 /// comme avant #2885, plutôt que de rester bloqué pour toujours.
 const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
 
+thread_local! {
+    /// Profondeur des messages envoyés par un autre fil en cours de
+    /// traitement sur ce fil (InSendMessage, InSendMessageEx, #3104).
+    static IN_SENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Le fil traite-t-il un message envoyé par un autre fil ?
+pub fn in_sent_message() -> bool {
+    IN_SENT.with(|d| d.get()) > 0
+}
+
 /// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
 /// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
 /// les attentes de messages et l'attente d'un SendMessage inter-fils.
@@ -530,7 +541,9 @@ pub fn deliver_sent() {
         };
         let job = lock(&sent.job).take();
         if let Some(job) = job {
+            IN_SENT.with(|d| d.set(d.get() + 1));
             let r = job();
+            IN_SENT.with(|d| d.set(d.get() - 1));
             *lock(&sent.result) = Some(r);
             sent.done.notify_all();
         }
@@ -5578,8 +5591,18 @@ fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
 
 /// Renvoie le style WS_* de la fenêtre.
+/// Style d'une fenêtre. WS_VISIBLE y suit l'état visible, comme sous
+/// Windows où ShowWindow et SetWindowPos posent et ôtent ce bit (Learn,
+/// « Window Styles », #3247).
 pub fn window_style(hwnd: usize) -> Option<u32> {
-    lock(windows()).get(&hwnd).map(|w| w.style)
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    lock(windows()).get(&hwnd).map(|w| {
+        if w.visible {
+            w.style | WS_VISIBLE
+        } else {
+            w.style & !WS_VISIBLE
+        }
+    })
 }
 
 /// Enfant transparent qui laisse voir son parent : WS_CHILD et
