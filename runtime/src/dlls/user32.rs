@@ -8038,13 +8038,25 @@ mod tests_messages {
             // processus.
             assert_ne!(get_window(gui::DESKTOP_HWND, 5), 0);
             assert_ne!(get_top_window(0), 0);
-            let mut h = get_window(top, 0);
+            // Les tests voisins créent et détruisent leurs fenêtres pendant
+            // la marche : GetWindow(GW_HWNDNEXT) sur une fenêtre détruite
+            // rend NULL, comme sous Windows (Learn, GetWindow, Remarques), et
+            // la marche s'arrête avant `top`. On la recommence, avec un
+            // plafond (#3135).
             let mut walked = Vec::new();
-            while h != 0 && walked.len() < 10_000 {
-                walked.push(h);
-                h = get_window(h, 2);
+            for _ in 0..200 {
+                let mut h = get_window(top, 0);
+                walked.clear();
+                while h != 0 && walked.len() < 10_000 {
+                    walked.push(h);
+                    h = get_window(h, 2);
+                }
+                if walked.contains(&top) {
+                    break;
+                }
+                std::thread::yield_now();
             }
-            assert!(walked.contains(&top));
+            assert!(walked.contains(&top), "{walked:x?}");
             assert_eq!(get_window(child, 2), 0);
 
             // Lecture du titre seulement.
