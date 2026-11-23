@@ -33,6 +33,8 @@ mod icons;
 mod pick;
 #[path = "explorer_home.rs"]
 mod home;
+#[path = "explorer_extract.rs"]
+mod extract;
 
 pub const CUSTOM_TITLE: bool = true;
 
@@ -1674,7 +1676,7 @@ pub unsafe fn extract_at(path: &[u8]) {
         return;
     };
     open_at(dir);
-    extract_archive(path, false, None);
+    extract::open(path);
 }
 /// Boîte Ouvrir / Enregistrer d'un programme .exe (#598) : à lire avant
 /// d'ouvrir le dossier de départ.
@@ -5324,7 +5326,8 @@ unsafe fn run_item(it: Item, geo: &Geo) {
                 if n > 0 {
                     match it {
                         Item::Mount => mount_image(&b[..n]),
-                        _ => extract_archive(&b[..n], it == Item::ExtractHere, None),
+                        Item::ExtractAll => extract::open(&b[..n]),
+                        _ => extract_archive(&b[..n], true, None),
                     }
                 }
             }
@@ -5694,11 +5697,15 @@ unsafe fn extract_archive(path: &[u8], here: bool, password: Option<&[u8]>) {
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
     let mut d = [0u16; PATH_LEN + NAME_LEN + 2];
     let mut pw = [0u16; PATH_LEN + NAME_LEN + 2];
+    let chosen = extract::CHOSEN;
     let dest = if here {
         match parent(path) {
             Some(dir) => wstr(&mut d, dir),
             None => core::ptr::null(),
         }
+    } else if chosen.len > 0 {
+        // Destination choisie dans la boîte « Extraire tout… » (#3246).
+        wstr(&mut d, chosen.get())
     } else {
         core::ptr::null()
     };
@@ -5970,7 +5977,16 @@ unsafe fn finish_job(status: u32, msg: &[u8]) {
             JobKind::Open => navigate(arg.get()),
             JobKind::ExtractAll => {
                 reload_all();
-                navigate(msg);
+                if extract::SHOW_AFTER {
+                    navigate(msg);
+                } else {
+                    notify(t4([
+                        b"Extraction termin\xE9e.",
+                        b"Extraction complete.",
+                        b"Extracci\xF3n completada.",
+                        b"Entpacken abgeschlossen.",
+                    ]));
+                }
             }
             JobKind::ExtractHere => {
                 reload_all();
@@ -6075,6 +6091,12 @@ unsafe fn finish_job(status: u32, msg: &[u8]) {
             t4([b"\xC9chec : ", b"Failed: ", b"Error: ", b"Fehler: "]),
             msg,
         ),
+    }
+    // Destination de la boîte « Extraire tout… » : gardée seulement pendant
+    // la demande de mot de passe, qui relance la même extraction (#3246).
+    if kind == JobKind::ExtractAll && !PASSWORD_OPEN {
+        extract::CHOSEN.len = 0;
+        extract::SHOW_AFTER = true;
     }
     if JOB == 0 && !COMMIT_PENDING.get().is_empty() {
         let pending = COMMIT_PENDING;
@@ -6336,6 +6358,8 @@ unsafe fn password_submit() {
 
 unsafe fn password_cancel() {
     PASSWORD_OPEN = false;
+    extract::CHOSEN.len = 0;
+    extract::SHOW_AFTER = true;
     PASSWORD.buf.fill(0);
     PASSWORD.len = 0;
 }
@@ -6477,6 +6501,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     copy::draw(g, f);
     props::draw(g, f);
     draw_password(g, f);
+    extract::draw(g, f);
     crate::sharing::draw_dialog(g, f);
     pick::draw_overlay(g, f);
     focus_zones(&geo, f);
@@ -6490,6 +6515,7 @@ unsafe fn focus_zones(geo: &Geo, f: &Frame) {
     focus_modal();
     if MENU != Menu::None
         || PASSWORD_OPEN
+        || extract::dialog_open()
         || copy::dialog_open()
         || props::dialog_open()
         || crate::sharing::dialog_open()
@@ -6600,6 +6626,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PASSWORD_OPEN {
         return password_mouse(ev, x, y, f);
+    }
+    if extract::dialog_open() {
+        return extract::mouse(ev, x, y, f);
     }
     if crate::sharing::dialog_open() {
         return crate::sharing::dialog_mouse(ev, x, y, f);
@@ -6865,7 +6894,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         let mut a = [0u8; PATH_LEN + NAME_LEN + 2];
         if let Some(src) = archive_of(pane().loc.get()) {
             a[..src.len()].copy_from_slice(src);
-            extract_archive(&a[..src.len()], false, None);
+            extract::open(&a[..src.len()]);
         }
         return true;
     }
@@ -7118,6 +7147,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     }
     if PASSWORD_OPEN {
         return password_key(vk, ch);
+    }
+    if extract::dialog_open() {
+        return extract::key(vk, ch);
     }
     if crate::sharing::dialog_open() {
         return crate::sharing::dialog_key(vk, ch);
@@ -7576,7 +7608,7 @@ unsafe fn watch_drives() -> bool {
 
 pub unsafe fn tick(_f: &Frame) -> bool {
     let refreshed = watch_folders() | watch_drives();
-    let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
+    let mut animating = refreshed || poll_job() || PASSWORD_OPEN || extract::dialog_open() || crate::thumbs::pending();
     animating |= copy::tick();
     animating |= crate::sharing::dialog_tick();
     for i in 0..NTABS {
@@ -8065,6 +8097,7 @@ pub unsafe fn regression_checks() {
     props::regression(root);
     icons::regression();
     home::regression();
+    extract::regression();
     copy::regression(root);
     copy::trash_regression(root);
     PASSWORD.len = 0;
