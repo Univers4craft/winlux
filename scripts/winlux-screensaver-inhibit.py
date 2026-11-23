@@ -48,9 +48,74 @@ XML = f'''<node><interface name="{NAME}">
 <method name="GetActiveTime"><arg type="u" direction="out"/></method>
 <method name="SetActive"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
 </interface></node>'''
+INTROSPECTABLE = "org.freedesktop.DBus.Introspectable"
 POKE_SECONDS = 50
 INHIBIT_DIR = Path(os.environ.get("WINLUX_POWER_INHIBIT_DIR", "/run/winlux/power-inhibit"))
 IDLE_EXIT_SECONDS = 600
+
+
+class BusReply:
+    """Réponse à un appel reçu par le filtre de la connexion (#3341) : mêmes
+    noms que Gio.DBusMethodInvocation, dont PyGObject garde chaque instance
+    servie par register_object (environ 2 Ko par appel, sans plafond)."""
+    __slots__ = ("connection", "message")
+
+    def __init__(self, connection, message):
+        self.connection, self.message = connection, message
+
+    def send(self, reply):
+        from gi.repository import Gio
+        if not self.message.get_flags() & Gio.DBusMessageFlags.NO_REPLY_EXPECTED:
+            self.connection.send_message(reply, Gio.DBusSendMessageFlags.NONE)
+
+    def return_value(self, value):
+        reply = self.message.new_method_reply()
+        if value is not None:
+            reply.set_body(value)
+        self.send(reply)
+
+    def return_dbus_error(self, name, text):
+        self.send(self.message.new_method_error_literal(name, text))
+
+
+def bus_filter(methods, call):
+    """Filtre de connexion qui sert les appels de NAME sur PATHS dans la boucle
+    principale (#3341) ; tout autre message suit son chemin normal.
+    methods : nom → signature d'entrée."""
+    from gi.repository import Gio, GLib
+
+    def dispatch(connection, message):
+        interface, member = message.get_interface(), message.get_member()
+        reply = BusReply(connection, message)
+        if interface is None:
+            interface = INTROSPECTABLE if member == "Introspect" else NAME
+        if interface == INTROSPECTABLE:
+            if member == "Introspect" and message.get_signature() == "":
+                reply.return_value(GLib.Variant("(s)", (XML,)))
+            else:
+                reply.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", f"Méthode inconnue : {member}")
+            return False
+        signature = methods.get(member)
+        if signature is None:
+            reply.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", f"Méthode inconnue : {interface}.{member}")
+        elif message.get_signature() != signature:
+            reply.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs",
+                                    f"Signature « {message.get_signature()} » au lieu de « {signature} »")
+        else:
+            call(connection, message.get_sender(), message.get_path(), interface, member,
+                 message.get_body() or GLib.Variant("()", ()), reply)
+        return False
+
+    def incoming(connection, message, received):
+        interface, member = message.get_interface(), message.get_member()
+        if (received and message.get_message_type() == Gio.DBusMessageType.METHOD_CALL
+                and message.get_path() in PATHS
+                and (interface in (NAME, INTROSPECTABLE)
+                     or interface is None and (member in methods or member == "Introspect"))):
+            GLib.idle_add(dispatch, connection, message, priority=GLib.PRIORITY_DEFAULT)
+            return None
+        return message
+    return incoming
 
 
 def log(message, error=False):
@@ -437,9 +502,10 @@ def main():
         return True
 
     node = Gio.DBusNodeInfo.new_for_xml(XML)
+    methods = {method.name: "".join(arg.signature for arg in method.in_args) for method in node.interfaces[0].methods}
     def acquired(connection, _name):
-        for path in PATHS:
-            connection.register_object(path, node.interfaces[0], call, None, None)
+        # Pas de register_object (#3341) : PyGObject y garde chaque invocation.
+        connection.add_filter(bus_filter(methods, call))
     Gio.bus_own_name(Gio.BusType.SESSION, NAME,
                      Gio.BusNameOwnerFlags.ALLOW_REPLACEMENT | Gio.BusNameOwnerFlags.REPLACE,
                      acquired, None, lambda *_: loop.quit())

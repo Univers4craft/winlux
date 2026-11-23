@@ -1333,6 +1333,54 @@ pub unsafe extern "win64" fn RtlFillMemory(dest: *mut u8, len: usize, fill: u8) 
     }
 }
 
+/// `RtlZeroMemory(Destination, Length)` : met `Length` octets à zéro
+/// (Learn, « RtlZeroMemory macro ») (#3349).
+pub unsafe extern "win64" fn RtlZeroMemory(dest: *mut u8, len: usize) {
+    if !dest.is_null() {
+        std::ptr::write_bytes(dest, 0, len);
+    }
+}
+
+/// `RtlSecureZeroMemory(ptr, cnt)` : comme RtlZeroMemory, sans que
+/// l'écriture puisse être retirée par l'optimiseur ; rend `ptr` (Learn,
+/// « RtlSecureZeroMemory function ») (#3349).
+pub unsafe extern "win64" fn RtlSecureZeroMemory(dest: *mut u8, len: usize) -> *mut u8 {
+    if !dest.is_null() {
+        for i in 0..len {
+            std::ptr::write_volatile(dest.add(i), 0);
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+    dest
+}
+
+/// `RtlCopyMemory(Destination, Source, Length)` (Learn, « RtlCopyMemory
+/// macro ») : les zones ne doivent pas se chevaucher ; une copie qui
+/// tolère le chevauchement reste correcte dans ce cas (#3349).
+pub unsafe extern "win64" fn RtlCopyMemory(dest: *mut u8, src: *const u8, len: usize) {
+    if len != 0 && !dest.is_null() && !src.is_null() {
+        std::ptr::copy(src, dest, len);
+    }
+}
+
+/// `RtlMoveMemory(Destination, Source, Length)` : copie qui accepte des
+/// zones qui se chevauchent (Learn, « RtlMoveMemory function ») (#3349).
+pub unsafe extern "win64" fn RtlMoveMemory(dest: *mut u8, src: *const u8, len: usize) {
+    if len != 0 && !dest.is_null() && !src.is_null() {
+        std::ptr::copy(src, dest, len);
+    }
+}
+
+/// `RtlCompareMemory(Source1, Source2, Length)` : nombre d'octets égaux
+/// depuis le début, jusqu'à la première différence ; `Length` si tout est
+/// égal (Learn, « RtlCompareMemory function ») (#3349).
+pub unsafe extern "win64" fn RtlCompareMemory(a: *const u8, b: *const u8, len: usize) -> usize {
+    if len == 0 || a.is_null() || b.is_null() {
+        return 0;
+    }
+    (0..len).take_while(|&i| *a.add(i) == *b.add(i)).count()
+}
+
 /// `RtlExitUserProcess(code)`.
 pub extern "win64" fn RtlExitUserProcess(code: u32) -> ! {
     crate::dlls::kernel32::flush_and_exit(code as i32)
@@ -1446,6 +1494,11 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "RtlWakeAddressAll" => fn WakeByAddressAll,
         "DbgBreakPoint" => fn DebugBreak,
         "RtlFillMemory" => fn RtlFillMemory,
+        "RtlZeroMemory" => fn RtlZeroMemory,
+        "RtlSecureZeroMemory" => fn RtlSecureZeroMemory,
+        "RtlCopyMemory" => fn RtlCopyMemory,
+        "RtlMoveMemory" => fn RtlMoveMemory,
+        "RtlCompareMemory" => fn RtlCompareMemory,
         "RtlExitUserProcess" => fn RtlExitUserProcess,
         "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
         "NtQuerySecurityObject" => fn nt_not_supported,
@@ -1457,6 +1510,50 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod fils_windows_tests {
+    /// #3349 : les cinq Rtl*Memory que kernel32 exporte se résolvent par
+    /// GetProcAddress et font ce que dit Learn.
+    #[test]
+    fn rtl_memoire_sur_kernel32_3349() {
+        for n in [
+            "RtlZeroMemory",
+            "RtlSecureZeroMemory",
+            "RtlCopyMemory",
+            "RtlMoveMemory",
+            "RtlCompareMemory",
+        ] {
+            assert!(crate::dlls::kernel32_proc(n, false).is_some(), "{n}");
+        }
+        let mut z = [7u8; 8];
+        unsafe { super::RtlZeroMemory(z.as_mut_ptr(), 5) };
+        assert_eq!(z, [0, 0, 0, 0, 0, 7, 7, 7]);
+        let mut s = [9u8; 4];
+        let p = s.as_mut_ptr();
+        assert_eq!(unsafe { super::RtlSecureZeroMemory(p, 4) }, p);
+        assert_eq!(s, [0; 4]);
+        let src = [1u8, 2, 3, 4];
+        let mut d = [0u8; 4];
+        unsafe { super::RtlCopyMemory(d.as_mut_ptr(), src.as_ptr(), 4) };
+        assert_eq!(d, src);
+        let mut m = [1u8, 2, 3, 4, 5, 6];
+        let mp = m.as_mut_ptr();
+        unsafe { super::RtlMoveMemory(mp.add(2), mp, 4) };
+        assert_eq!(m, [1, 2, 1, 2, 3, 4]);
+        let a = [1u8, 2, 3, 4];
+        let b = [1u8, 2, 9, 4];
+        assert_eq!(
+            unsafe { super::RtlCompareMemory(a.as_ptr(), b.as_ptr(), 4) },
+            2
+        );
+        assert_eq!(
+            unsafe { super::RtlCompareMemory(a.as_ptr(), a.as_ptr(), 4) },
+            4
+        );
+        assert_eq!(
+            unsafe { super::RtlCompareMemory(a.as_ptr(), b.as_ptr(), 0) },
+            0
+        );
+    }
+
     /// Un thread de la réserve (RegisterWaitForSingleObject,
     /// QueueUserWorkItem, minuteries) rend son TEB en finissant (#1361).
     #[test]

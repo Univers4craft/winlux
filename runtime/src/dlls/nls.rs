@@ -1899,6 +1899,240 @@ pub fn compare(a: &[u16], b: &[u16], flags: u32) -> std::cmp::Ordering {
     sort_key(a, flags).cmp(&sort_key(b, flags))
 }
 
+/// Clé de tri en octets de LCMapString (#3257) : la même clé que
+/// [`compare`], écrite pour que memcmp sur deux clés donne l'ordre de
+/// CompareString. Chaque caractère tient sur trois octets (son point de
+/// code plus 0x20000, donc jamais 0 ni 1), 0x01 clôt un élément et chaque
+/// niveau (lettres, accents, casse), 0x00 termine la clé.
+pub fn sort_key_bytes(s: &[u16], flags: u32) -> Vec<u8> {
+    fn push(out: &mut Vec<u8>, c: char) {
+        let v = c as u32 + 0x2_0000;
+        out.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+    }
+    let (primary, accents, cases) = sort_key(s, flags);
+    let mut out = Vec::with_capacity(s.len() * 8 + 4);
+    for p in &primary {
+        p.chars().for_each(|c| push(&mut out, c));
+        out.push(1);
+    }
+    out.push(1);
+    accents.iter().for_each(|&c| push(&mut out, c));
+    out.push(1);
+    out.extend(cases.iter().map(|&upper| if upper { 3 } else { 2 }));
+    out.push(1);
+    out.push(0);
+    out
+}
+
+pub const LCMAP_LOWERCASE: u32 = 0x100;
+pub const LCMAP_UPPERCASE: u32 = 0x200;
+pub const LCMAP_TITLECASE: u32 = 0x300;
+pub const LCMAP_SORTKEY: u32 = 0x400;
+pub const LCMAP_BYTEREV: u32 = 0x800;
+pub const LCMAP_HIRAGANA: u32 = 0x10_0000;
+pub const LCMAP_KATAKANA: u32 = 0x20_0000;
+pub const LCMAP_HALFWIDTH: u32 = 0x40_0000;
+pub const LCMAP_FULLWIDTH: u32 = 0x80_0000;
+pub const LCMAP_LINGUISTIC_CASING: u32 = 0x100_0000;
+const NORM_IGNORESYMBOLS: u32 = 0x4;
+/// Drapeaux de LCMapString qui transforment le texte.
+const LCMAP_TEXT: u32 = LCMAP_TITLECASE
+    | LCMAP_HIRAGANA
+    | LCMAP_KATAKANA
+    | LCMAP_HALFWIDTH
+    | LCMAP_FULLWIDTH
+    | LCMAP_LINGUISTIC_CASING;
+/// « can be used alone, with one another, or with the LCMAP_SORTKEY
+/// and/or LCMAP_BYTEREV flags » (Learn, LCMapStringEx).
+const LCMAP_NORM_ALONE: u32 = NORM_IGNORENONSPACE | NORM_IGNORESYMBOLS;
+/// « used only with the LCMAP_SORTKEY flag » (Learn, LCMapStringEx) :
+/// NORM_IGNORECASE, SORT_DIGITSASNUMBERS, LINGUISTIC_IGNORECASE,
+/// LINGUISTIC_IGNOREDIACRITIC, SORT_STRINGSORT, NORM_IGNOREKANATYPE,
+/// NORM_IGNOREWIDTH, NORM_LINGUISTIC_CASING.
+const LCMAP_SORT_ONLY: u32 = NORM_IGNORECASE
+    | 0x8
+    | LINGUISTIC_IGNORECASE
+    | LINGUISTIC_IGNOREDIACRITIC
+    | 0x1000
+    | 0x1_0000
+    | NORM_IGNOREWIDTH
+    | 0x800_0000;
+
+/// Résultat de LCMapString : texte (compté en caractères) ou clé de tri
+/// (comptée en octets).
+#[derive(Debug, PartialEq)]
+pub enum LcMapped {
+    Text(Vec<u16>),
+    Key(Vec<u8>),
+}
+
+/// Vérifie les drapeaux de LCMapString selon les règles de combinaison de
+/// Learn ; `Err(1004)` (ERROR_INVALID_FLAGS) sinon. Ne sont pas servis, et
+/// refusés plutôt que rendus intacts : LCMAP_SIMPLIFIED_CHINESE,
+/// LCMAP_TRADITIONAL_CHINESE (il faudrait leurs tables), LCMAP_HASH et
+/// LCMAP_SORTHANDLE.
+fn lcmap_flags_ok(flags: u32) -> bool {
+    let known = LCMAP_TEXT | LCMAP_SORTKEY | LCMAP_BYTEREV | LCMAP_NORM_ALONE | LCMAP_SORT_ONLY;
+    if flags & !known != 0 {
+        return false;
+    }
+    if flags & LCMAP_SORTKEY != 0 {
+        // Sans LCMAP_SORTKEY la fonction transforme le texte ; avec, seuls
+        // BYTEREV et les NORM_* s'y ajoutent (inférence : Learn ne liste
+        // pas d'autre combinaison avec la clé de tri).
+        return flags & LCMAP_TEXT == 0;
+    }
+    if flags & LCMAP_SORT_ONLY != 0 {
+        return false;
+    }
+    if flags & LCMAP_NORM_ALONE != 0 && flags & LCMAP_TEXT != 0 {
+        return false;
+    }
+    let both = |a: u32, b: u32| flags & a != 0 && flags & b != 0;
+    if both(LCMAP_HIRAGANA, LCMAP_KATAKANA) || both(LCMAP_HALFWIDTH, LCMAP_FULLWIDTH) {
+        return false;
+    }
+    // « Valid only with LCMAP_LOWERCASE or LCMAP_UPPERCASE. »
+    !(flags & LCMAP_LINGUISTIC_CASING != 0 && flags & LCMAP_TITLECASE == 0)
+}
+
+/// Correspondance de casse simple, un caractère pour un caractère : une
+/// correspondance qui en produirait plusieurs (ß → SS) laisse le caractère
+/// tel quel, si bien que la longueur ne change jamais.
+fn simple_case(c: char, upper: bool) -> char {
+    let mut it: Box<dyn Iterator<Item = char>> = if upper {
+        Box::new(c.to_uppercase())
+    } else {
+        Box::new(c.to_lowercase())
+    };
+    match (it.next(), it.next()) {
+        (Some(m), None) => m,
+        _ => c,
+    }
+}
+
+fn is_nonspacing(c: char) -> bool {
+    matches!(c as u32, 0x300..=0x36F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
+}
+
+/// Un caractère après les transformations de texte demandées.
+fn lcmap_char(c: char, flags: u32, word_start: bool) -> char {
+    let mut c = match flags & LCMAP_TITLECASE {
+        LCMAP_LOWERCASE => simple_case(c, false),
+        LCMAP_UPPERCASE => simple_case(c, true),
+        // Titre : première lettre de chaque mot en majuscule, les autres
+        // en minuscule (inférence sur « first letter of each major word »).
+        LCMAP_TITLECASE => simple_case(c, word_start),
+        _ => c,
+    };
+    let v = c as u32;
+    if flags & LCMAP_KATAKANA != 0 && matches!(v, 0x3041..=0x3096 | 0x309D | 0x309E) {
+        c = char::from_u32(v + 0x60).unwrap_or(c);
+    } else if flags & LCMAP_HIRAGANA != 0 && matches!(v, 0x30A1..=0x30F6 | 0x30FD | 0x30FE) {
+        c = char::from_u32(v - 0x60).unwrap_or(c);
+    }
+    // Largeur : ASCII et espace seulement ; les katakanas demi-largeur, dont
+    // la correspondance change la longueur, ne sont pas servis.
+    let v = c as u32;
+    if flags & LCMAP_FULLWIDTH != 0 {
+        c = match v {
+            0x20 => '\u{3000}',
+            0x21..=0x7E => char::from_u32(v + 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+    } else if flags & LCMAP_HALFWIDTH != 0 {
+        c = match v {
+            0x3000 => ' ',
+            0xFF01..=0xFF5E => char::from_u32(v - 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+    }
+    c
+}
+
+/// LCMapString (#3257) : transformation de `src` selon `flags`, ou
+/// `Err(code d'erreur)`. Les demi-codets isolés traversent intacts.
+pub fn lc_map(flags: u32, src: &[u16]) -> Result<LcMapped, u32> {
+    if !lcmap_flags_ok(flags) {
+        return Err(1004);
+    }
+    if flags & LCMAP_SORTKEY != 0 {
+        // La taille peut compter le zéro final : il n'entre pas dans la clé.
+        let end = src.iter().position(|&u| u == 0).unwrap_or(src.len());
+        let text: Vec<u16> = if flags & LCMAP_NORM_ALONE != 0 {
+            drop_ignored(&src[..end], flags)
+        } else {
+            src[..end].to_vec()
+        };
+        let mut key = sort_key_bytes(&text, flags);
+        if flags & LCMAP_BYTEREV != 0 {
+            // « only reverses an even number of bytes »
+            key.as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .for_each(|p| p.swap(0, 1));
+        }
+        return Ok(LcMapped::Key(key));
+    }
+    let mut out = if flags & LCMAP_NORM_ALONE != 0 {
+        drop_ignored(src, flags)
+    } else {
+        let mut out = Vec::with_capacity(src.len());
+        let mut word_start = true;
+        for unit in char::decode_utf16(src.iter().copied()) {
+            match unit {
+                Ok(c) => {
+                    let m = lcmap_char(c, flags, word_start);
+                    let mut buf = [0u16; 2];
+                    out.extend_from_slice(m.encode_utf16(&mut buf));
+                    word_start = !(c.is_alphanumeric() || c == '\'' || is_nonspacing(c));
+                }
+                Err(e) => {
+                    out.push(e.unpaired_surrogate());
+                    word_start = true;
+                }
+            }
+        }
+        out
+    };
+    if flags & LCMAP_BYTEREV != 0 {
+        out.iter_mut().for_each(|u| *u = u.swap_bytes());
+    }
+    Ok(LcMapped::Text(out))
+}
+
+/// NORM_IGNORENONSPACE / NORM_IGNORESYMBOLS hors clé de tri : retire les
+/// diacritiques (é → e, marques combinantes) et les symboles et la
+/// ponctuation (inférence : l'espace compte parmi ces derniers). Le zéro
+/// final éventuel reste.
+fn drop_ignored(src: &[u16], flags: u32) -> Vec<u16> {
+    let mut out = Vec::with_capacity(src.len());
+    for unit in char::decode_utf16(src.iter().copied()) {
+        let c = match unit {
+            Ok(c) => c,
+            Err(e) => {
+                out.push(e.unpaired_surrogate());
+                continue;
+            }
+        };
+        let c = if flags & NORM_IGNORENONSPACE != 0 {
+            if is_nonspacing(c) {
+                continue;
+            }
+            strip_accent(c)
+        } else {
+            c
+        };
+        if flags & NORM_IGNORESYMBOLS != 0 && c != '\0' && !c.is_alphanumeric() && !is_nonspacing(c)
+        {
+            continue;
+        }
+        let mut buf = [0u16; 2];
+        out.extend_from_slice(c.encode_utf16(&mut buf));
+    }
+    out
+}
+
 pub unsafe extern "win64" fn compare_string_ex(
     name: *const u16,
     flags: u32,
@@ -2532,6 +2766,190 @@ mod tests {
                 is_nls_defined_string(1, 0, std::ptr::null_mut(), bad.as_ptr(), 1),
                 0
             );
+        }
+    }
+
+    /// #3257 : LCMapStringW suit Learn (LCMapStringEx) : drapeaux, taille,
+    /// tampon trop petit, clé de tri en octets, longueur conservée.
+    #[test]
+    fn lcmapstring_suit_learn_3257() {
+        use crate::dlls::kernel32::lc_map_string_w as map;
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        let _teb = crate::process::test_teb();
+        let err = crate::process::last_error;
+        unsafe {
+            let src = w("Bonjour ÉTÉ straße");
+            let mut out = [0u16; 64];
+            // Minuscules et majuscules, longueur conservée (ß reste ß).
+            let n = map(
+                0x400,
+                0x200,
+                src.as_ptr(),
+                src.len() as i32,
+                out.as_mut_ptr(),
+                64,
+            );
+            assert_eq!(
+                String::from_utf16_lossy(&out[..n as usize]),
+                "BONJOUR ÉTÉ STRAßE"
+            );
+            let n = map(
+                0x400,
+                0x100,
+                src.as_ptr(),
+                src.len() as i32,
+                out.as_mut_ptr(),
+                64,
+            );
+            assert_eq!(
+                String::from_utf16_lossy(&out[..n as usize]),
+                "bonjour été straße"
+            );
+            // Titre.
+            let n = map(
+                0x400,
+                0x300,
+                src.as_ptr(),
+                src.len() as i32,
+                out.as_mut_ptr(),
+                64,
+            );
+            assert_eq!(
+                String::from_utf16_lossy(&out[..n as usize]),
+                "Bonjour Été Straße"
+            );
+            // Taille demandée, puis tampon trop petit : 0 et 122, rien de tronqué.
+            assert_eq!(
+                map(
+                    0x400,
+                    0x200,
+                    src.as_ptr(),
+                    src.len() as i32,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                src.len() as i32
+            );
+            let mut petit = [0x55u16; 4];
+            assert_eq!(
+                map(
+                    0x400,
+                    0x200,
+                    src.as_ptr(),
+                    src.len() as i32,
+                    petit.as_mut_ptr(),
+                    4
+                ),
+                0
+            );
+            assert_eq!(err(), 122);
+            // Chaîne terminée : le zéro est compté et écrit.
+            let z = w("ab\0");
+            assert_eq!(map(0x400, 0x200, z.as_ptr(), -1, out.as_mut_ptr(), 64), 3);
+            assert_eq!(&out[..3], &w("AB\0")[..]);
+            // Paramètres invalides : 87 ; drapeaux invalides : 1004.
+            assert_eq!(map(0x400, 0x200, src.as_ptr(), 0, out.as_mut_ptr(), 64), 0);
+            assert_eq!(err(), 87);
+            assert_eq!(map(0x400, 0x200, src.as_ptr(), 3, out.as_mut_ptr(), -1), 0);
+            assert_eq!(err(), 87);
+            for bad in [
+                0x100 | 0x400,
+                0x10_0000 | 0x20_0000,
+                0x40_0000 | 0x80_0000,
+                0x100_0000,
+                0x1,
+                0x200_0000,
+                0x4_0000,
+            ] {
+                assert_eq!(
+                    map(0x400, bad, src.as_ptr(), 3, out.as_mut_ptr(), 64),
+                    0,
+                    "{bad:#x}"
+                );
+                assert_eq!(err(), 1004, "{bad:#x}");
+            }
+            // Demi-codet isolé intact.
+            let iso = [0x61u16, 0xD800, 0x62];
+            assert_eq!(map(0x400, 0x200, iso.as_ptr(), 3, out.as_mut_ptr(), 64), 3);
+            assert_eq!(&out[..3], &[0x41, 0xD800, 0x42]);
+            // Octets inversés, kana, largeur.
+            let ab = w("ab");
+            assert_eq!(map(0x400, 0x800, ab.as_ptr(), 2, out.as_mut_ptr(), 64), 2);
+            assert_eq!(&out[..2], &[0x6100, 0x6200]);
+            let kana = w("かカ");
+            map(0x400, 0x20_0000, kana.as_ptr(), 2, out.as_mut_ptr(), 64);
+            assert_eq!(String::from_utf16_lossy(&out[..2]), "カカ");
+            map(0x400, 0x10_0000, kana.as_ptr(), 2, out.as_mut_ptr(), 64);
+            assert_eq!(String::from_utf16_lossy(&out[..2]), "かか");
+            let a1 = w("A 1");
+            map(0x400, 0x80_0000, a1.as_ptr(), 3, out.as_mut_ptr(), 64);
+            assert_eq!(String::from_utf16_lossy(&out[..3]), "Ａ\u{3000}１");
+            // Sans symboles ni diacritiques.
+            let p = w("é-t,é");
+            let n = map(0x400, 0x6, p.as_ptr(), p.len() as i32, out.as_mut_ptr(), 64);
+            assert_eq!(String::from_utf16_lossy(&out[..n as usize]), "ete");
+            // Clé de tri : octets, terminée par 0, même ordre que CompareString.
+            let key = |s: &str, f: u32| {
+                let v = w(s);
+                let n = map(
+                    0x400,
+                    0x400 | f,
+                    v.as_ptr(),
+                    v.len() as i32,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let mut k = vec![0u8; n as usize];
+                assert_eq!(
+                    map(
+                        0x400,
+                        0x400 | f,
+                        v.as_ptr(),
+                        v.len() as i32,
+                        k.as_mut_ptr() as *mut u16,
+                        n
+                    ),
+                    n
+                );
+                assert_eq!(k.last(), Some(&0));
+                k
+            };
+            let mots = [
+                "b", "a", "Ab", "ab", "été", "ete", "Ete", "abc", "ab-c", "zz", "é",
+            ];
+            for x in mots {
+                for y in mots {
+                    for f in [0, 1, 2] {
+                        let (a, b) = (w(x), w(y));
+                        assert_eq!(
+                            key(x, f).cmp(&key(y, f)),
+                            compare(&a, &b, f),
+                            "{x} / {y} / {f}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(key("abc", 0), {
+                let z = w("abc\0");
+                let mut k = vec![0u8; 64];
+                let n = map(0x400, 0x400, z.as_ptr(), -1, k.as_mut_ptr() as *mut u16, 64);
+                k.truncate(n as usize);
+                k
+            });
+            // Clé trop longue pour le tampon (compté en octets) : 122.
+            let mut k = [0u16; 2];
+            assert_eq!(
+                map(
+                    0x400,
+                    0x400,
+                    src.as_ptr(),
+                    src.len() as i32,
+                    k.as_mut_ptr(),
+                    4
+                ),
+                0
+            );
+            assert_eq!(err(), 122);
         }
     }
 }

@@ -209,7 +209,11 @@ try:
     left, top, width, _ = frame(window)
     found = None
     for dx in range(30, 140, 6):
-        x("xdotool", "mousemove", str(left + width - dx), str(top + 14))
+        # Comme une vraie souris : le dernier pas passe par un périphérique
+        # (XTest), pas par un saut du pointeur (XWarpPointer) qu'aucune souris
+        # ne produit. L'ancrage se réveille sur ces mouvements (#3279).
+        x("xdotool", "mousemove", str(left + width - dx - 1), str(top + 14))
+        x("xdotool", "mousemove_relative", "--", "1", "0")
         time.sleep(0.15)
         if snap["hovered_maximize"](snap["_X"](), 1):
             found = dx

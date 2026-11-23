@@ -248,6 +248,7 @@ pub mod quartz;
 pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
+pub mod tactile;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
 pub mod mdi;
 pub mod msvcp140_2;
@@ -625,6 +626,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     // Stylet : API WM_POINTER et GetMessageExtraInfo (#1199).
                     e.extend(pointer::user32_exports());
+                    // Toucher, injection, source des messages, gestes (#1932).
+                    e.extend(tactile::user32_exports());
                     // Lot D du relevé (#1512) : seulement les noms absents.
                     for (name, addr) in user32_releve::user32_exports() {
                         e.entry(name).or_insert(addr);
@@ -1439,6 +1442,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             });
         }
+        add_ntdll_crt(&mut all);
         all
     });
     // ntdll et kernel32 tout de suite, comme avant le Gain #3050 : le bac à
@@ -1587,6 +1591,25 @@ fn add_psapi(all: &mut Vec<Builtin>) {
         exports,
         handle: 0,
     });
+}
+
+/// La CRT que ntdll exporte sous Windows (`ntdll::CRT_REEXPORTS`) entre dans
+/// la table de ntdll quand notre msvcrt la sert : `lookup("ntdll", …)` la
+/// trouvait déjà par repli, la table de l'image non (#3389). Appelé une fois
+/// toutes les DLL complétées, pour reprendre exactement ce que le repli rend.
+fn add_ntdll_crt(all: &mut [Builtin]) {
+    let Some(crt) = all.iter().find(|b| b.name == "msvcrt") else {
+        return;
+    };
+    let found: Vec<(&'static str, usize)> = ntdll::CRT_REEXPORTS
+        .iter()
+        .filter_map(|&n| crt.exports.get(n).map(|&a| (n, a)))
+        .collect();
+    if let Some(nt) = all.iter_mut().find(|b| b.name == "ntdll") {
+        for (n, a) in found {
+            nt.exports.entry(n).or_insert(a);
+        }
+    }
 }
 
 /// Fonctions de base (win32_basics) : elles complètent chaque DLL sans

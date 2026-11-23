@@ -127,16 +127,29 @@ pub fn is_squirrel_update(assembly: &[u8]) -> bool {
 /// étant le dossier d'Update.exe. Ne revient qu'en cas d'échec.
 pub fn exec_squirrel_update(exe: &Path) -> std::io::Error {
     use std::os::unix::process::CommandExt;
+    squirrel_update_command(exe, std::env::args_os().skip(2)).exec()
+}
+
+/// Commande de `exec_squirrel_update`. Le script relance l'application par
+/// `WINLUX_BIN` : on lui donne le runtime qui sert Update.exe, sinon
+/// l'application tournerait sous /usr/bin/winlux quel que soit le runtime
+/// demandé (#3321), comme le ferait CreateProcess depuis ce runtime.
+fn squirrel_update_command(
+    exe: &Path,
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> std::process::Command {
     let tool = std::env::var_os("WINLUX_SQUIRREL_UPDATE")
         .unwrap_or_else(|| "/usr/lib/winlux/winlux-squirrel-update".into());
     let root = std::fs::canonicalize(exe)
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| Path::new(".").to_path_buf());
-    std::process::Command::new(tool)
-        .arg(root)
-        .args(std::env::args_os().skip(2))
-        .exec()
+    let mut cmd = std::process::Command::new(tool);
+    cmd.arg(root).args(args);
+    if let Ok(me) = std::env::current_exe() {
+        cmd.env("WINLUX_BIN", me);
+    }
+    cmd
 }
 
 #[cfg(test)]
@@ -159,6 +172,19 @@ mod tests {
         bytes[clr..clr + 4].copy_from_slice(&0x2000u32.to_le_bytes());
         bytes[clr + 4..clr + 8].copy_from_slice(&0x48u32.to_le_bytes());
         bytes
+    }
+
+    /// #3321 : l'application relancée par Update.exe garde le runtime
+    /// courant, même si WINLUX_BIN désigne un autre binaire.
+    #[test]
+    fn update_exe_relance_par_le_runtime_courant_3321() {
+        let me = std::env::current_exe().unwrap();
+        let cmd = squirrel_update_command(Path::new("/nulle/part/Update.exe"), Vec::new());
+        let bin = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "WINLUX_BIN")
+            .and_then(|(_, v)| v);
+        assert_eq!(bin, Some(me.as_os_str()));
     }
 
     #[test]

@@ -7263,6 +7263,12 @@ unsafe fn create_process_common(
     cmd.env_remove(crate::dlls::inherit::ENV);
     cmd.env_remove(crate::process::SUSPENDED_ENV);
     cmd.env_remove(crate::loader::SAME_BASE_ENV);
+    // Seul le processus créé par le gestionnaire de services est le service :
+    // ce qu'il lance est un processus ordinaire, qui pose ses propres
+    // questions d'autorisation et que service_process ne doit pas prendre
+    // pour le service (#3385). Avec un bloc d'environnement,
+    // linux_plumbing_env l'écartait déjà ; sans bloc, l'enfant en héritait.
+    cmd.env_remove("WINLUX_SERVICE_NAME");
     if let Some(b) = same_base.as_ref() {
         cmd.env(crate::loader::SAME_BASE_ENV, b);
     }
@@ -9944,6 +9950,106 @@ mod tests_code_enfant {
         assert_eq!(linux_exit_status(0xFFFF_FFFF) & 0xFF, 255);
     }
 
+    const ENFANT_SERVICE: &str = "WINLUX_TEST_ENFANT_SERVICE_3385";
+
+    /// #3385 : un programme lancé par CreateProcess (lpEnvironment NULL)
+    /// depuis un service n'hérite pas du nom du service. Le binaire de test
+    /// est relancé comme un service (WINLUX_SERVICE_NAME posé sur sa seule
+    /// commande, comme spawn_service) : rien n'est changé dans
+    /// l'environnement de ce processus.
+    #[test]
+    fn enfant_d_un_service_sans_nom_de_service() {
+        let name = format!("WinluxTest{}", std::process::id());
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::kernel32::tests_code_enfant::service_qui_lance_un_enfant",
+                "--test-threads=1",
+                "--include-ignored",
+                "--nocapture",
+            ])
+            .env(ENFANT_SERVICE, "1")
+            .env("WINLUX_SERVICE_NAME", &name)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        println!("{text}");
+        assert!(text.contains("1 passed"), "service simulé : {text}");
+    }
+
+    /// Service simulé de `enfant_d_un_service_sans_nom_de_service`.
+    #[test]
+    #[ignore = "lancé comme processus enfant"]
+    fn service_qui_lance_un_enfant() {
+        if std::env::var_os(ENFANT_SERVICE).is_none() {
+            return;
+        }
+        let name = std::env::var("WINLUX_SERVICE_NAME").unwrap();
+        // L'enfant reste vivant 2 s, le temps que service_process parcoure
+        // /proc, puis sort en 3 s'il voit le nom du service.
+        let app = std::ffi::CString::new("/bin/sh").unwrap();
+        let line = std::ffi::CString::new(
+            "sh -c \"sleep 2; test -z \\\"$WINLUX_SERVICE_NAME\\\" || exit 3\"",
+        )
+        .unwrap();
+        let startup = StartupInfoA {
+            cb: std::mem::size_of::<StartupInfoA>() as u32,
+            reserved: std::ptr::null_mut(),
+            desktop: std::ptr::null_mut(),
+            title: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+            x_size: 0,
+            y_size: 0,
+            x_chars: 0,
+            y_chars: 0,
+            fill_attribute: 0,
+            flags: 0,
+            show_window: 0,
+            reserved2_size: 0,
+            reserved2: std::ptr::null_mut(),
+            std_input: 0,
+            std_output: 0,
+            std_error: 0,
+        };
+        let mut info = ProcessInformation {
+            process: 0,
+            thread: 0,
+            process_id: 0,
+            thread_id: 0,
+        };
+        let ok = unsafe {
+            create_process_a(
+                app.as_ptr() as *const u8,
+                line.as_ptr() as *const u8,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            )
+        };
+        assert_eq!(ok, 1);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Le service est ce processus, que service_process écarte : l'enfant
+        // vivant ne doit pas être pris pour lui.
+        let found =
+            crate::dlls::advapi32_services::service_process(std::path::Path::new("/proc"), &name);
+        println!("service_process({name}) depuis le service : {found:?}");
+        assert_eq!(found, None, "l'enfant est pris pour le service");
+        assert_eq!(wait_for_single_object(info.process, 10_000), 0);
+        let mut code = 0;
+        assert_eq!(unsafe { get_exit_code_process(info.process, &mut code) }, 1);
+        println!("code de l'enfant : {code}");
+        assert_eq!(code, 0, "l'enfant a hérité de WINLUX_SERVICE_NAME");
+        close_handle(info.thread);
+        close_handle(info.process);
+    }
+
     const ENFANT_SORTIE: &str = "WINLUX_TEST_ENFANT_SORTIE_2758";
 
     /// Processus enfant de `exitprocess_0x80131500_vu_comme_un_echec`.
@@ -11216,7 +11322,7 @@ pub(crate) fn run_apcs() -> bool {
 }
 /// Attente alertable : APC en attente → elles tournent et on rend
 /// WAIT_IO_COMPLETION (0xC0) ; sinon `wait(tranche)` jusqu'au délai.
-fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
+pub(crate) fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
     const WAIT_IO_COMPLETION: u32 = 0xC0;
     const WAIT_TIMEOUT: u32 = 258;
     if run_apcs() {
@@ -11862,6 +11968,11 @@ pub unsafe extern "win64" fn get_string_type_w(
 }
 
 // --- LCMapStringA/W (basic) ---
+/// LCMapStringW (#3257), selon Learn (LCMapStringEx) : `src_count` ne
+/// vaut jamais 0 (négatif : chaîne terminée, zéro compris dans le
+/// résultat) ; `dst_count` 0 demande la taille ; un tampon trop petit
+/// rend 0 et ERROR_INSUFFICIENT_BUFFER sans rien tronquer ; une clé de
+/// tri (LCMAP_SORTKEY) est un tableau d'octets compté en octets.
 pub unsafe extern "win64" fn lc_map_string_w(
     _locale: u32,
     flags: u32,
@@ -11870,7 +11981,7 @@ pub unsafe extern "win64" fn lc_map_string_w(
     dst: *mut u16,
     dst_count: i32,
 ) -> i32 {
-    if src.is_null() {
+    if src.is_null() || src_count == 0 || dst_count < 0 || (dst.is_null() && dst_count != 0) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -11879,25 +11990,63 @@ pub unsafe extern "win64" fn lc_map_string_w(
     } else {
         src_count as usize
     };
-    let s = String::from_utf16_lossy(std::slice::from_raw_parts(src, n));
-    let transformed = if flags & 0x100 != 0 {
-        s.to_lowercase()
+    let source = std::slice::from_raw_parts(src, n);
+    let r = lc_map_into(flags, source, dst, dst_count);
+    if lcmap_diag() {
+        let hex = |u: &[u16]| {
+            u.iter()
+                .take(8)
+                .map(|u| format!("{u:04x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let out = if r > 0 && flags & super::nls::LCMAP_SORTKEY == 0 && !dst.is_null() {
+            hex(std::slice::from_raw_parts(dst, r as usize))
+        } else {
+            String::new()
+        };
+        crate::thunks::api_note(&format!(
+            "winlux[lcmap] {} drapeaux {flags:#x} source [{}] ({n}) taille {dst_count} = {r} [{out}] erreur {}",
+            libc::syscall(libc::SYS_gettid),
+            hex(source),
+            crate::process::last_error()
+        ));
     }
-    // LCMAP_LOWERCASE
-    else if flags & 0x200 != 0 {
-        s.to_uppercase()
-    }
-    // LCMAP_UPPERCASE
-    else {
-        s
+    r
+}
+
+/// Diagnostic `WINLUX_DIAG_LCMAP=1` (#3219), sous `WINLUX_APITRACE` : une
+/// ligne `winlux[lcmap]` par appel de LCMapStringW/Ex dans le journal
+/// d'API, avec les 8 premiers caractères source et rendus en hexadécimal
+/// et la taille du tampon, que la trace des retours ne montre pas.
+fn lcmap_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("WINLUX_DIAG_LCMAP").is_ok_and(|v| !v.is_empty() && v != "0"))
+}
+
+unsafe fn lc_map_into(flags: u32, source: &[u16], dst: *mut u16, dst_count: i32) -> i32 {
+    let (bytes, units) = match super::nls::lc_map(flags, source) {
+        Ok(super::nls::LcMapped::Key(k)) => (k, None),
+        Ok(super::nls::LcMapped::Text(t)) => (Vec::new(), Some(t)),
+        Err(e) => {
+            crate::process::set_last_error(e);
+            return 0;
+        }
     };
-    let w: Vec<u16> = transformed.encode_utf16().collect();
-    if dst.is_null() || dst_count == 0 {
-        return w.len() as i32;
+    let len = units.as_ref().map_or(bytes.len(), |t| t.len());
+    if dst_count == 0 {
+        return len as i32;
     }
-    let copy = w.len().min(dst_count as usize);
-    std::ptr::copy_nonoverlapping(w.as_ptr(), dst, copy);
-    copy as i32
+    if len > dst_count as usize {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    // Copie tolérant le chevauchement : Learn admet src == dst pour la casse.
+    match units {
+        Some(t) => std::ptr::copy(t.as_ptr(), dst, len),
+        None => std::ptr::copy(bytes.as_ptr(), dst as *mut u8, len),
+    }
+    len as i32
 }
 
 // ---------- API supplémentaires pour Electron / Chromium ----------

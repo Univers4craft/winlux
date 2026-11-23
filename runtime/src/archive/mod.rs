@@ -158,6 +158,21 @@ impl Format {
 // ---------- Extraction ----------
 
 fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Progress) -> Res<()> {
+    let r = external_tool_extract(archive, dest, pw, progress);
+    // L'outil crée les liens lui-même : ceux qui sortent du dossier sont
+    // retirés, même après un échec partiel (#3325).
+    if dest.is_dir() {
+        remove_escaping_links(dest)?;
+    }
+    r
+}
+
+fn external_tool_extract(
+    archive: &Path,
+    dest: &Path,
+    pw: Option<&str>,
+    progress: &Progress,
+) -> Res<()> {
     std::fs::create_dir_all(dest)?;
     let pw_arg = |prefix: &str| format!("{prefix}{}", pw.unwrap_or(""));
     if let Some(sz) = tools::sevenzip() {
@@ -264,7 +279,12 @@ pub fn extract_to(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Prog
                 out.flush()?;
                 Ok(())
             } else {
-                tar::extract(BufReader::new(gz), dest, &dummy)
+                // tar s'arrête aux blocs nuls de fin : on lit la suite jusqu'au
+                // bout pour que gzip contrôle sa somme CRC et sa taille (#3324).
+                let mut rd = BufReader::new(gz);
+                tar::extract(&mut rd, dest, &dummy)?;
+                std::io::copy(&mut rd, &mut std::io::sink())?;
+                Ok(())
             }
         }
         Format::TarBz2
@@ -284,7 +304,14 @@ pub fn extract_to(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Prog
                     .map_err(ArcError::from)
                     .and_then(|_| w.flush().map_err(ArcError::from))
             } else {
-                tar::extract(BufReader::new(out), dest, &dummy)
+                // Lire jusqu'au bout : l'outil contrôle sa somme à la fin du
+                // flux, après les blocs nuls de tar (#3324).
+                let mut rd = BufReader::new(out);
+                tar::extract(&mut rd, dest, &dummy).and_then(|()| {
+                    std::io::copy(&mut rd, &mut std::io::sink())
+                        .map(|_| ())
+                        .map_err(ArcError::from)
+                })
             };
             let _ = feeder.join();
             let st = child.wait()?;
@@ -1010,6 +1037,90 @@ mod tests {
                 .as_deref(),
             Some("Bonjour")
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Données pseudo-aléatoires (incompressibles) reproductibles.
+    fn bruit(n: usize) -> Vec<u8> {
+        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
+    }
+
+    /// Un .tar.gz abîmé au milieu ne s'extrait pas « avec succès » : la
+    /// somme CRC de fin de gzip est contrôlée même quand tar s'arrête avant.
+    #[test]
+    fn tar_gz_abime_refuse() {
+        let d = tmp("targz-abime");
+        let src = d.join("dossier");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("gros.bin"), bruit(300_000)).unwrap();
+        let arc = d.join("a.tar.gz");
+        create(&arc, &[src], None, &Progress::default()).unwrap();
+        let mut b = std::fs::read(&arc).unwrap();
+        let mid = b.len() / 2;
+        b[mid] ^= 0xFF;
+        std::fs::write(&arc, &b).unwrap();
+        let r = extract_to(&arc, &d.join("out"), None, &Progress::default());
+        eprintln!(
+            "tar.gz abîmé à l'octet {mid} : {:?}",
+            r.as_ref().map_err(|e| e.to_string())
+        );
+        assert!(r.is_err(), "archive abîmée extraite sans erreur");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Les liens d'une archive extraite par un outil externe (7z, RAR…)
+    /// ne mènent pas hors du dossier d'extraction, comme pour ZIP et TAR.
+    #[test]
+    fn liens_sortants_outil_externe_retires() {
+        if tools::bsdtar().is_none() {
+            eprintln!("bsdtar absent : test sauté");
+            return;
+        }
+        let d = tmp("7z-liens");
+        let src = d.join("src");
+        std::fs::create_dir_all(src.join("sous")).unwrap();
+        std::fs::write(src.join("f.txt"), "f").unwrap();
+        for (t, n) in [
+            ("/etc", "absolu"),
+            ("../../..", "remonte"),
+            ("sous", "dedans"),
+            ("f.txt", "fichier"),
+        ] {
+            std::os::unix::fs::symlink(t, src.join(n)).unwrap();
+        }
+        let arc = d.join("l.7z");
+        let mut c = tools::archiver(&tools::bsdtar().unwrap());
+        c.arg("--format")
+            .arg("7zip")
+            .arg("-cf")
+            .arg(&arc)
+            .arg("-C")
+            .arg(&src)
+            .arg(".");
+        assert!(c.status().unwrap().success());
+        let out = d.join("out");
+        extract_to(&arc, &out, None, &Progress::default()).unwrap();
+        let liens: Vec<_> = walk(&out)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.meta.file_type().is_symlink())
+            .map(|e| (e.rel.clone(), std::fs::read_link(out.join(&e.rel)).unwrap()))
+            .collect();
+        eprintln!("liens après extraction : {liens:?}");
+        assert!(
+            liens.iter().all(|(r, _)| !util::link_escapes(&out, r)),
+            "lien sortant gardé"
+        );
+        assert_eq!(liens.len(), 2, "les liens internes restent");
+        assert_eq!(std::fs::read_to_string(out.join("f.txt")).unwrap(), "f");
         let _ = std::fs::remove_dir_all(&d);
     }
 

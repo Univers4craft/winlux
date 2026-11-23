@@ -190,3 +190,41 @@ fn raccourci_windows_avec_linkinfo() {
     });
     assert_eq!(parse_link(&ours).unwrap().target, "C:\\a\\b.exe");
 }
+
+/// #3294 : CoGetClassObject(CLSID_ShellLink, IID_IClassFactory) rend une
+/// fabrique dont CreateInstance donne un IShellLinkW, comme CoCreateInstance.
+#[test]
+fn fabrique_shelllink_par_cogetclassobject_3294() {
+    const IID_ICLASSFACTORY: Guid = guid(1, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
+    unsafe {
+        let mut cf: *mut c_void = std::ptr::null_mut();
+        let hr = crate::dlls::ole32::co_get_class_object(
+            &CLSID_SHELL_LINK,
+            1, // CLSCTX_INPROC_SERVER
+            std::ptr::null_mut(),
+            &IID_ICLASSFACTORY,
+            &mut cf,
+        );
+        assert_eq!(hr, S_OK);
+        assert!(!cf.is_null());
+        let vt = *(cf as *const *const usize);
+        type Create = unsafe extern "win64" fn(
+            *mut c_void,
+            *mut c_void,
+            *const Guid,
+            *mut *mut c_void,
+        ) -> i32;
+        type Rel = unsafe extern "win64" fn(*mut c_void) -> u32;
+        let create: Create = std::mem::transmute(*vt.add(3));
+        let mut link: *mut c_void = std::ptr::null_mut();
+        assert_eq!(
+            create(cf, std::ptr::null_mut(), &IID_ISHELL_LINK_W, &mut link),
+            S_OK
+        );
+        assert!(!link.is_null());
+        let rel_link: Rel = std::mem::transmute(*(*(link as *const *const usize)).add(2));
+        rel_link(link);
+        let rel_cf: Rel = std::mem::transmute(*vt.add(2));
+        rel_cf(cf);
+    }
+}

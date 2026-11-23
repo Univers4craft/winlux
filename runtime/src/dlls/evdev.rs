@@ -391,6 +391,83 @@ pub fn event_paths() -> Vec<PathBuf> {
     paths.into_iter().map(|(_, p)| p).collect()
 }
 
+/// Interrupteur « mode tablette » du noyau (`SW_TABLET_MODE`, linux/input-event-codes.h).
+const SW_TABLET_MODE: u32 = 0x01;
+/// `EVIOCGSW(len)` : état courant des interrupteurs, sans lire la file.
+const fn eviocgsw(len: u32) -> u64 {
+    ioc_read(0x1b, len)
+}
+
+/// Vrai si le masque `capabilities/sw` de sysfs (mots hexadécimaux, le
+/// dernier portant les bits de poids faible) annonce `SW_TABLET_MODE`.
+pub fn sw_caps_has_tablet_mode(caps: &str) -> bool {
+    caps.split_whitespace()
+        .last()
+        .and_then(|word| u64::from_str_radix(word, 16).ok())
+        .is_some_and(|bits| bits & (1 << SW_TABLET_MODE) != 0)
+}
+
+/// Dossier sysfs des périphériques d'entrée ; `WINLUX_INPUT_SYSFS` pour les tests.
+fn input_sysfs() -> PathBuf {
+    std::env::var_os("WINLUX_INPUT_SYSFS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/sys/class/input"))
+}
+
+/// État de l'interrupteur mode tablette : `None` si aucun périphérique ne
+/// l'annonce ou s'il est illisible, sinon `Some(actif)`. Même source que
+/// `winlux-rotation.py` (`tablet_mode()`).
+pub fn tablet_mode() -> Option<bool> {
+    let mut found = None;
+    for path in event_paths() {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let caps = std::fs::read_to_string(input_sysfs().join(name).join("device/capabilities/sw"))
+            .unwrap_or_default();
+        if !sw_caps_has_tablet_mode(&caps) {
+            continue;
+        }
+        let Some((fd, _)) = open_fd(&path) else {
+            continue;
+        };
+        let mut state = [0u8; 8];
+        let read = unsafe {
+            libc::ioctl(
+                fd.as_raw_fd(),
+                eviocgsw(state.len() as u32) as _,
+                state.as_mut_ptr(),
+            )
+        };
+        if read < 0 {
+            continue;
+        }
+        if state[0] & (1 << SW_TABLET_MODE) != 0 {
+            return Some(true);
+        }
+        found = Some(false);
+    }
+    found
+}
+
+/// Valeur de `GetSystemMetrics(SM_CONVERTIBLESLATEMODE)` : 0 seulement si
+/// l'interrupteur mode tablette est actif. Relue au plus toutes les 500 ms :
+/// un programme peut appeler GetSystemMetrics à chaque dessin.
+pub fn slate_mode_metric() -> i32 {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, i32)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((when, value)) = *cache {
+        if when.elapsed() < Duration::from_millis(500) {
+            return value;
+        }
+    }
+    let value = i32::from(tablet_mode() != Some(true));
+    *cache = Some((Instant::now(), value));
+    value
+}
+
 /// Tous les contrôleurs de jeu branchés.
 pub fn scan() -> Vec<Device> {
     event_paths()
@@ -408,6 +485,16 @@ pub fn positional_face_buttons(vendor: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupteur_mode_tablette_lu_dans_le_masque_sysfs_1933() {
+        assert!(sw_caps_has_tablet_mode("2"));
+        assert!(sw_caps_has_tablet_mode("0 3"));
+        assert!(!sw_caps_has_tablet_mode("1"));
+        assert!(!sw_caps_has_tablet_mode("2 0"));
+        assert!(!sw_caps_has_tablet_mode(""));
+        assert!(!sw_caps_has_tablet_mode("zz"));
+    }
 
     #[test]
     fn classe_manettes_joysticks_volants_et_ecarte_les_souris() {

@@ -25,7 +25,12 @@ pub struct JournalEntry {
 struct JournalState {
     ring: VecDeque<JournalEntry>,
     last_flush_ms: u64,
+    /// Ouvert au premier vidage qui a une ligne à écrire, jamais avant : un
+    /// processus qui n'écrit rien ne laisse aucun fichier vide (#3322).
     file: Option<std::fs::File>,
+    /// Chemin préparé à l'initialisation, pour qu'un vidage depuis le
+    /// gestionnaire de plantage ouvre le fichier sans allouer.
+    path: Option<std::ffi::CString>,
 }
 
 static JOURNAL: Mutex<Option<JournalState>> = Mutex::new(None);
@@ -45,22 +50,46 @@ fn journal_path() -> std::path::PathBuf {
     std::path::PathBuf::from(format!("/tmp/winlux-journal-{pid}.log"))
 }
 
-fn init_journal() {
-    let path = journal_path();
+fn new_journal_state(path: &std::path::Path) -> JournalState {
+    use std::os::unix::ffi::OsStrExt;
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok();
-    let mut guard = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(JournalState {
+    JournalState {
         ring: VecDeque::with_capacity(JOURNAL_RING_CAP),
         last_flush_ms: now_ms(),
-        file,
-    });
+        file: None,
+        path: std::ffi::CString::new(path.as_os_str().as_bytes()).ok(),
+    }
+}
+
+fn init_journal() {
+    let state = new_journal_state(&journal_path());
+    let mut guard = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(state);
+}
+
+/// Ouvre le journal au moment d'y écrire la première ligne. `libc::open` sur
+/// un chemin déjà converti : utilisable depuis le gestionnaire de plantage.
+fn open_journal_file(state: &mut JournalState) -> bool {
+    use std::os::unix::io::FromRawFd;
+    if state.file.is_none() {
+        let Some(path) = state.path.as_ref() else {
+            return false;
+        };
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_CLOEXEC,
+                0o666 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return false;
+        }
+        state.file = Some(unsafe { std::fs::File::from_raw_fd(fd) });
+    }
+    true
 }
 
 pub fn journal(level: &str, component: &str, msg: &str) {
@@ -88,6 +117,13 @@ pub fn journal(level: &str, component: &str, msg: &str) {
 }
 
 fn flush_locked(state: &mut JournalState) {
+    if state.ring.is_empty() {
+        state.last_flush_ms = now_ms();
+        return;
+    }
+    if !open_journal_file(state) {
+        return;
+    }
     let file = match state.file.as_mut() {
         Some(f) => f,
         None => return,
@@ -637,4 +673,42 @@ pub fn init() {
     init_journal();
     install_crash_handler();
     journal("info", "quality", "quality module initialized");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entree(state: &mut JournalState, msg: &str) {
+        state.ring.push_back(JournalEntry {
+            timestamp_ms: 1,
+            level: "info".into(),
+            component: "test".into(),
+            message: msg.into(),
+        });
+    }
+
+    #[test]
+    fn journal_par_processus_cree_seulement_a_la_premiere_ecriture_3322() {
+        let dir = std::env::temp_dir().join(format!("winlux-quality-3322-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("journal.log");
+        let mut state = new_journal_state(&path);
+        // Initialisé, puis vidé sans rien à écrire : aucun fichier (#3322).
+        assert!(!path.exists(), "fichier créé dès l'initialisation");
+        flush_locked(&mut state);
+        assert!(!path.exists(), "fichier vide créé par un vidage sans ligne");
+        // Une ligne à écrire : le fichier naît avec elle.
+        entree(&mut state, "premiere");
+        flush_locked(&mut state);
+        let texte = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(texte, "1 [info] test: premiere\n");
+        // Les vidages suivants ajoutent au même fichier.
+        entree(&mut state, "seconde");
+        flush_locked(&mut state);
+        let texte = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(texte.lines().count(), 2);
+        assert!(state.ring.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
