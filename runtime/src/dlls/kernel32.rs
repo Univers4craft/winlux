@@ -11216,7 +11216,7 @@ pub(crate) fn run_apcs() -> bool {
 }
 /// Attente alertable : APC en attente → elles tournent et on rend
 /// WAIT_IO_COMPLETION (0xC0) ; sinon `wait(tranche)` jusqu'au délai.
-fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
+pub(crate) fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
     const WAIT_IO_COMPLETION: u32 = 0xC0;
     const WAIT_TIMEOUT: u32 = 258;
     if run_apcs() {
@@ -11862,6 +11862,11 @@ pub unsafe extern "win64" fn get_string_type_w(
 }
 
 // --- LCMapStringA/W (basic) ---
+/// LCMapStringW (#3257), selon Learn (LCMapStringEx) : `src_count` ne
+/// vaut jamais 0 (négatif : chaîne terminée, zéro compris dans le
+/// résultat) ; `dst_count` 0 demande la taille ; un tampon trop petit
+/// rend 0 et ERROR_INSUFFICIENT_BUFFER sans rien tronquer ; une clé de
+/// tri (LCMAP_SORTKEY) est un tableau d'octets compté en octets.
 pub unsafe extern "win64" fn lc_map_string_w(
     _locale: u32,
     flags: u32,
@@ -11870,7 +11875,7 @@ pub unsafe extern "win64" fn lc_map_string_w(
     dst: *mut u16,
     dst_count: i32,
 ) -> i32 {
-    if src.is_null() {
+    if src.is_null() || src_count == 0 || dst_count < 0 || (dst.is_null() && dst_count != 0) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -11879,25 +11884,63 @@ pub unsafe extern "win64" fn lc_map_string_w(
     } else {
         src_count as usize
     };
-    let s = String::from_utf16_lossy(std::slice::from_raw_parts(src, n));
-    let transformed = if flags & 0x100 != 0 {
-        s.to_lowercase()
+    let source = std::slice::from_raw_parts(src, n);
+    let r = lc_map_into(flags, source, dst, dst_count);
+    if lcmap_diag() {
+        let hex = |u: &[u16]| {
+            u.iter()
+                .take(8)
+                .map(|u| format!("{u:04x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let out = if r > 0 && flags & super::nls::LCMAP_SORTKEY == 0 && !dst.is_null() {
+            hex(std::slice::from_raw_parts(dst, r as usize))
+        } else {
+            String::new()
+        };
+        crate::thunks::api_note(&format!(
+            "winlux[lcmap] {} drapeaux {flags:#x} source [{}] ({n}) taille {dst_count} = {r} [{out}] erreur {}",
+            libc::syscall(libc::SYS_gettid),
+            hex(source),
+            crate::process::last_error()
+        ));
     }
-    // LCMAP_LOWERCASE
-    else if flags & 0x200 != 0 {
-        s.to_uppercase()
-    }
-    // LCMAP_UPPERCASE
-    else {
-        s
+    r
+}
+
+/// Diagnostic `WINLUX_DIAG_LCMAP=1` (#3219), sous `WINLUX_APITRACE` : une
+/// ligne `winlux[lcmap]` par appel de LCMapStringW/Ex dans le journal
+/// d'API, avec les 8 premiers caractères source et rendus en hexadécimal
+/// et la taille du tampon, que la trace des retours ne montre pas.
+fn lcmap_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("WINLUX_DIAG_LCMAP").is_ok_and(|v| !v.is_empty() && v != "0"))
+}
+
+unsafe fn lc_map_into(flags: u32, source: &[u16], dst: *mut u16, dst_count: i32) -> i32 {
+    let (bytes, units) = match super::nls::lc_map(flags, source) {
+        Ok(super::nls::LcMapped::Key(k)) => (k, None),
+        Ok(super::nls::LcMapped::Text(t)) => (Vec::new(), Some(t)),
+        Err(e) => {
+            crate::process::set_last_error(e);
+            return 0;
+        }
     };
-    let w: Vec<u16> = transformed.encode_utf16().collect();
-    if dst.is_null() || dst_count == 0 {
-        return w.len() as i32;
+    let len = units.as_ref().map_or(bytes.len(), |t| t.len());
+    if dst_count == 0 {
+        return len as i32;
     }
-    let copy = w.len().min(dst_count as usize);
-    std::ptr::copy_nonoverlapping(w.as_ptr(), dst, copy);
-    copy as i32
+    if len > dst_count as usize {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    // Copie tolérant le chevauchement : Learn admet src == dst pour la casse.
+    match units {
+        Some(t) => std::ptr::copy(t.as_ptr(), dst, len),
+        None => std::ptr::copy(bytes.as_ptr(), dst as *mut u8, len),
+    }
+    len as i32
 }
 
 // ---------- API supplémentaires pour Electron / Chromium ----------

@@ -171,8 +171,12 @@ pub fn signal(event: usize) {
 /// DllGetClassObject) : `create(riid, out)`.
 pub type Creator = unsafe fn(*const Guid, *mut *mut c_void) -> i32;
 
-struct Factory {
-    create: Creator,
+/// `create(clsid, riid, out)` : créateur qui a besoin de sa classe (#3294).
+pub type ClsidCreator = unsafe fn(&Guid, *const Guid, *mut *mut c_void) -> i32;
+
+enum Factory {
+    Plain(Creator),
+    ByClsid(Guid, ClsidCreator),
 }
 
 unsafe extern "win64" fn cf_qi(
@@ -212,7 +216,10 @@ unsafe extern "win64" fn cf_create(
     if !outer.is_null() {
         return CLASS_E_NOAGGREGATION;
     }
-    (Com::get(this).create)(riid, out)
+    match Com::get(this) {
+        Factory::Plain(create) => create(riid, out),
+        Factory::ByClsid(clsid, create) => create(clsid, riid, out),
+    }
 }
 unsafe extern "win64" fn cf_lock(_this: *mut Com<Factory>, _lock: i32) -> i32 {
     S_OK
@@ -257,11 +264,37 @@ pub unsafe fn create_builtin(
 /// # Safety
 /// `riid` et `out` doivent être valides.
 pub unsafe fn class_object(clsid: &Guid, riid: *const Guid, out: *mut *mut c_void) -> Option<i32> {
-    let create = builtin_creator(clsid)?;
-    let f = Com::create(CF_VT.ptr(), Factory { create });
+    Some(factory(builtin_creator(clsid)?, riid, out))
+}
+
+/// Fabrique de classes (IClassFactory) autour de `create`, demandée sous
+/// `riid`.
+///
+/// # Safety
+/// `riid` et `out` doivent être valides.
+pub unsafe fn factory(create: Creator, riid: *const Guid, out: *mut *mut c_void) -> i32 {
+    serve_factory(Factory::Plain(create), riid, out)
+}
+
+/// Fabrique de classes dont CreateInstance appelle `create(clsid, …)` :
+/// sert les classes intégrées d'ole32 par CoGetClassObject (#3294).
+///
+/// # Safety
+/// `riid` et `out` doivent être valides.
+pub unsafe fn factory_for_clsid(
+    clsid: Guid,
+    create: ClsidCreator,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    serve_factory(Factory::ByClsid(clsid, create), riid, out)
+}
+
+unsafe fn serve_factory(inner: Factory, riid: *const Guid, out: *mut *mut c_void) -> i32 {
+    let f = Com::create(CF_VT.ptr(), inner);
     let hr = cf_qi(f, riid, out);
     Com::release(f);
-    Some(hr)
+    hr
 }
 
 /// DllGetClassObject commun aux DLL audio intégrées.
