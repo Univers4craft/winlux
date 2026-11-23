@@ -772,35 +772,25 @@ pub fn read_all(archive: &[u8]) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
-/// Fin de l'image PE (dernière section), là où commence l'archive d'un SFX.
-fn pe_end(data: &[u8]) -> Option<usize> {
-    let pe = u32::from_le_bytes(data.get(0x3C..0x40)?.try_into().ok()?) as usize;
-    if data.get(pe..pe + 4)? != b"PE\0\0" {
-        return None;
-    }
-    let n = u16::from_le_bytes(data.get(pe + 6..pe + 8)?.try_into().ok()?) as usize;
-    let opt = u16::from_le_bytes(data.get(pe + 20..pe + 22)?.try_into().ok()?) as usize;
-    let sec = pe + 24 + opt;
-    let mut end = 0;
-    for i in 0..n {
-        let s = sec + i * 40;
-        let raw = u32::from_le_bytes(data.get(s + 16..s + 20)?.try_into().ok()?) as usize;
-        let ptr = u32::from_le_bytes(data.get(s + 20..s + 24)?.try_into().ok()?) as usize;
-        end = end.max(ptr + raw);
-    }
-    Some(end)
-}
-
 /// Position de l'archive 7z d'un exécutable auto-extractible : après
 /// l'image PE, avec un en-tête de départ valide.
+///
+/// Un installateur 7z est la concaténation du module SFX, d'un bloc de
+/// configuration facultatif (`;!@Install@!UTF-8!` … `;!@InstallEnd@!`) et
+/// de l'archive (« 7-Zip for installers », DOC/installer.txt du SDK LZMA,
+/// domaine public : `copy /b 7zSD.sfx + config.txt + archive.7z`).
+/// L'archive commence donc juste après l'image, à la taille du bloc de
+/// configuration près : on ne la cherche que dans `super::AFTER_IMAGE`
+/// octets, pas dans tout le fichier (#3189).
 pub fn find_archive(data: &[u8]) -> Option<usize> {
     if data.len() < 64 || &data[..2] != b"MZ" {
         return None;
     }
-    let from = pe_end(data)?;
+    let from = super::pe_end(data)?;
+    let stop = from.saturating_add(super::AFTER_IMAGE).min(data.len());
     let mut i = from;
-    while i + 32 <= data.len() {
-        let rest = data.get(i..)?;
+    while i + 32 <= data.len() && i < stop {
+        let rest = data.get(i..(stop + SIGNATURE.len()).min(data.len()))?;
         // Recherche par memchr : octet par octet, elle prenait 42 % du
         // lancement d'un .exe de 300 Mo à recouvrement (#2878).
         let k = crate::search::find(rest, SIGNATURE)?;

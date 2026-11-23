@@ -246,6 +246,8 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-backup-page.py
       - name: Paramètres › Imprimantes et Partage affichés sans attendre leur état lent (#3021)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-etat-lent.py
+      - name: Paramètres › bytecode des pages dans le cache du compte (Gain #3027)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-pycache.py
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
@@ -559,6 +561,18 @@ jobs:
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
 
+      - name: Boutons Réduire et Agrandir selon le style Win32, sous l'openbox de Winlux (#3064)
+        run: |
+          deps="autoconf automake libtool gettext autopoint pkg-config libglib2.0-dev libxml2-dev
+            libpango1.0-dev libx11-dev libxft-dev libxrandr-dev libxinerama-dev libxcursor-dev
+            libstartup-notification0-dev libsm-dev libxext-dev libimlib2-dev librsvg2-dev libxi-dev
+            openbox xvfb xdotool x11-utils x11-apps imagemagick gcc-mingw-w64-x86-64-win32"
+          sudo apt-get install -y -q $deps || { sudo apt-get update -q && sudo apt-get install -y -q $deps; }
+          sh scripts/build-openbox.sh build/openbox
+          WINLUX_OPENBOX=build/openbox/openbox /usr/bin/python3 -B scripts/test-openbox-boutons.py
+          # Fenêtre affichée pendant le démarrage d'openbox, jamais gérée (#3190).
+          WINLUX_OPENBOX=build/openbox/openbox /usr/bin/python3 -B scripts/test-openbox-demarrage.py
+
       - name: Mémoire au lancement d'un gros .exe (#997)
         run: python3 -B scripts/test-image-memory.py
 
@@ -813,11 +827,23 @@ jobs:
       - name: Recherche du menu Démarrer sans chemin AppData ni marque Microsoft (#2905)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-appdata.py
 
+      - name: Recherche du menu Démarrer, Meilleur résultat application ou page des Paramètres (#3018)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-meilleur.py
+
       - name: Menu Démarrer préchargé, ouverture indépendante de l'historique (mesure, #2858)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-ouverture.py
 
+      - name: Menu Démarrer, liste construite une fois par ouverture (#3217)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-rendu-unique.py
+
       - name: Menu Démarrer fermé tant que l'écran est verrouillé (#2994)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-verrou.py
+
+      - name: Fond Aurore animé coupé dès qu'on ne le voit pas (#3079)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-fond-anime.py
+
+      - name: Menu Démarrer, catalogue des applications relu sur signal de GIO, pas à chaque ouverture (#3121)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-catalogue.py
 
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py

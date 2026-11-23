@@ -5,13 +5,16 @@ No shell commands from registry/shortcut files are evaluated. Windows arguments
 are encoded as separate Desktop Entry Exec arguments. Only our own generated
 launchers are replaced or removed.
 """
+import array
 import configparser
 import ctypes
 import fcntl
 import hashlib
 import json
+import mmap
 import os
 import re
+import select
 from pathlib import Path
 import struct
 import subprocess
@@ -129,8 +132,21 @@ def _windows_path(value, home):
     return Path(value) if value.startswith("/") else home / value
 
 def pe_icon(path, index=0):
-    """Rebuild a resource icon as ICO (Windows icon index: N-th group, or -id); do not execute the PE."""
-    data = path.read_bytes() if path.stat().st_size <= 256 * 1024 * 1024 else b""
+    """Rebuild a resource icon as ICO (Windows icon index: N-th group, or -id); do not execute the PE.
+
+    The file is mapped, not read (#3164): only the pages of the headers and of
+    the icon resources are loaded. Reading it whole cost up to its full size in
+    memory and on disk (191 Mo for a 70-byte icon of an installer)."""
+    try:
+        with open(path, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size < 64: return None
+            with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                return _pe_icon(data, index)
+    except ValueError as error:
+        if "mmap" in str(error) or "empty file" in str(error): return None
+        raise
+
+def _pe_icon(data, index):
     if len(data) < 64 or data[:2] != b"MZ":
         return None
     def u16(offset): return struct.unpack_from("<H", data, offset)[0]
@@ -312,15 +328,25 @@ def launcher_icon(target):
         except OSError: continue
     return None
 
+WINDOW_ICON_CACHE = Path("/run/winlux/window-icons.json")
+
 def window_icons():
-    """Publish extracted PE icons to EWMH, where the native tasklist reads them."""
+    """Publish extracted PE icons to EWMH, where the native tasklist reads them.
+
+    Only the cheap part runs in the resident daemon: which windows belong to a
+    `winlux` process, whether their key changed, which icon file they get, and
+    the pixels of an icon already decoded once (ARGB_CACHE, #3198). Decoding
+    (GdkPixbuf, glycin, GIO, fontconfig) happens in a forked child, and only
+    for an icon never decoded before (#3196): done in the daemon, it left about
+    27 Mo of C heap and 5 extra threads behind for the whole session, and it
+    costs 23 to 47 ms per icon on the bench PC."""
     try:
         windows = subprocess.check_output(["wmctrl", "-lp"], text=True, timeout=2)
     except (OSError, subprocess.SubprocessError): return
-    cache = Path("/run/winlux/window-icons.json")
+    cache = WINDOW_ICON_CACHE
     try: known = json.loads(cache.read_text())
     except (OSError, ValueError): known = {}
-    current, theme = {}, None
+    current, pending = {}, []
     for line in windows.splitlines():
         fields = line.split(None, 4)
         if len(fields) < 3: continue
@@ -333,31 +359,99 @@ def window_icons():
             regedit = target is None and b"--regedit" in args[1:2]
             if not regedit and (target is None or not target.is_file()): continue
             key = f"{pid}:regedit" if regedit else f"{pid}:{target.stat().st_mtime_ns}"
-            current[window] = key
-            if known.get(window) == key: continue
-            icon = "application-x-executable" if regedit else icon_for(target, hashlib.sha256(str(target).encode()).hexdigest()[:24])
-            if icon == "application-x-executable" and not regedit:
-                icon = launcher_icon(target) or icon
-            if icon == "application-x-executable":
-                environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-                mode = "regedit" if regedit else next((item.split(b"=", 1)[1].decode() for item in environment if item.startswith(b"WINLUX_SHELL_APP=")), "")
-                name = BUILTIN_ICONS.get(target.name.lower()) if target is not None and target.parent == BUILTIN_APPS else None
-                name = name or SHELL_APP_ICONS.get(mode)
-                if theme is None and name: theme = icon_theme()
-                icon = theme_icon(name, theme) if name else None
-                if icon is None: continue
+        except (OSError, ValueError): continue
+        current[window] = key
+        if known.get(window) != key: pending.append((window, pid, target, regedit))
+    to_decode, theme = [], {}
+    for window, pid, target, regedit in pending:
+        try:
+            icon = window_icon_file(pid, target, regedit, theme)
+            if icon is None: continue
+            argb = load_argb(icon)
+            if argb is None: to_decode.append((window, icon))
+            else: publish_icon(window, argb)
+        except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+            window_icon_failed(window, error, current)
+    if to_decode:
+        run_apart(lambda: decode_window_icons(to_decode, current, cache), "Icônes des fenêtres")
+    elif current != known:
+        write_icon_cache(cache, current)
+
+def window_icon_failed(window, error, current):
+    current.pop(window, None)
+    detail = getattr(error, "stderr", b"")
+    if isinstance(detail, bytes): detail = detail.decode(errors="replace")
+    print(f"Window icon {window}: {type(error).__name__} {detail[:200]}", file=sys.stderr)
+
+def write_icon_cache(cache, current):
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(current))
+
+def window_icon_file(pid, target, regedit, theme):
+    """The icon file of a window: the .exe's own, its Start menu launcher's,
+    or the Prisme icon of a built-in app; None when there is none."""
+    icon = "application-x-executable" if regedit else icon_for(target, hashlib.sha256(str(target).encode()).hexdigest()[:24])
+    if icon == "application-x-executable" and not regedit:
+        icon = launcher_icon(target) or icon
+    if icon == "application-x-executable":
+        environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        mode = "regedit" if regedit else next((item.split(b"=", 1)[1].decode() for item in environment if item.startswith(b"WINLUX_SHELL_APP=")), "")
+        name = BUILTIN_ICONS.get(target.name.lower()) if target is not None and target.parent == BUILTIN_APPS else None
+        name = name or SHELL_APP_ICONS.get(mode)
+        if name and "name" not in theme: theme["name"] = icon_theme()
+        icon = theme_icon(name, theme["name"]) if name else None
+    return icon
+
+# Pixels already decoded, one file per icon file (#3198): a window of an app
+# seen before gets its icon without glycin, fork or decoding. The stamp holds
+# the sizes and the source's mtime and size, so an updated .exe or theme icon
+# is decoded again. Per account, under the account's own cache.
+ARGB_CACHE = HOME / ".cache/winlux/icons/argb"
+
+def argb_stamp(icon):
+    info = os.stat(icon)
+    return os.fsencode(f"{ICON_SIZES}:{info.st_mtime_ns}:{info.st_size}:{icon}") + b"\n"
+
+def argb_file(icon):
+    return ARGB_CACHE / (hashlib.sha256(os.fsencode(str(icon))).hexdigest()[:24] + ".argb")
+
+def load_argb(icon):
+    """The cached _NET_WM_ICON values of this icon file, or None."""
+    try:
+        with open(argb_file(icon), "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if info.st_uid != os.geteuid() or info.st_mode & 0o022: return None
+            data = handle.read()
+        stamp = argb_stamp(icon)
+    except OSError: return None
+    if not data.startswith(stamp) or (len(data) - len(stamp)) % 4: return None
+    values = array.array("I")
+    values.frombytes(data[len(stamp):])
+    return values.tolist() or None
+
+def save_argb(icon, values):
+    try:
+        ARGB_CACHE.mkdir(parents=True, exist_ok=True, mode=0o700)
+        output = argb_file(icon)
+        temporary = output.with_name(f"{output.name}.{os.getpid()}")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(argb_stamp(icon) + array.array("I", values).tobytes())
+        os.replace(temporary, output)
+    except (OSError, OverflowError): pass
+
+def decode_window_icons(to_decode, current, cache):
+    """Decode, remember and publish the icons never decoded before (in a child)."""
+    for window, icon in to_decode:
+        try:
             # Several sizes: openbox's title bar and Alt+Tab pick 16/32, the taskbar 32/48.
             argb = [value for size in ICON_SIZES for value in icon_argb(icon, size)]
             if not argb: continue
+            save_argb(icon, argb)
             publish_icon(window, argb)
-        except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
-            current.pop(window, None)
-            detail = getattr(error, "stderr", b"")
-            if isinstance(detail, bytes): detail = detail.decode(errors="replace")
-            print(f"Window icon {window}: {type(error).__name__} {detail[:200]}", file=sys.stderr)
-            continue
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(current))
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            window_icon_failed(window, error, current)
+    write_icon_cache(cache, current)
 
 def publish_icon(window, values):
     # Xlib expects native unsigned longs for a 32-bit CARDINAL property on LP64.
@@ -1061,22 +1155,105 @@ def watched_inputs():
         except OSError: signature.append((str(path), None, None))
     return tuple(signature)
 
+def run_apart(work, label="Catalogue"):
+    """work() dans un processus fils, attendu : la mémoire qu'il prend (tas
+    fragmenté, bibliothèques C, fils GLib) part avec lui. Le démon reste un seul
+    fil Python sans connexion X ni D-Bus, donc rien n'est hérité à moitié."""
+    try:
+        pid = os.fork()
+    except OSError:
+        work()
+        return
+    if pid == 0:
+        code = 1
+        try:
+            work()
+            code = 0
+        except BaseException as error:
+            print(f"{label} : {type(error).__name__}: {error}", file=sys.stderr)
+        finally:
+            try: sys.stdout.flush(); sys.stderr.flush()
+            finally: os._exit(code)
+    os.waitpid(pid, 0)
+
+def refresh_apart():
+    """refresh() dans un processus fils : le démon résident ne garde pas la
+    mémoire de la passe. Relire tout le registre (des dizaines de milliers de
+    chaînes) toutes les 5 minutes fragmentait son tas : 10 Mo au départ, 40 Mo
+    après une trentaine de passes, jamais rendus."""
+    def passe():
+        CHANGED.clear()
+        refresh()
+    run_apart(passe)
+
+class _PropertyEvent(ctypes.Structure):
+    # XPropertyEvent; XEvent itself is 24 longs, the buffer XNextEvent fills.
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("atom", ctypes.c_ulong),
+                ("time", ctypes.c_ulong), ("state", ctypes.c_int), ("pad", ctypes.c_long * 18)]
+
+class ClientListWatch:
+    """The root window's _NET_CLIENT_LIST, which the window manager updates for
+    each window it manages (EWMH): its PropertyNotify tells the daemon a window
+    appeared, so the icon is set at once instead of up to 5 s later (#3198).
+    One X connection, opened once, used only to wait; the forked children
+    never touch it (their publish_icon opens its own)."""
+    PROPERTY_NOTIFY, PROPERTY_CHANGE_MASK = 28, 1 << 22
+
+    def __init__(self):
+        xlib = self.xlib = ctypes.CDLL("libX11.so.6")
+        xlib.XOpenDisplay.argtypes, xlib.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+        for name, args, result in (("XDefaultRootWindow", [ctypes.c_void_p], ctypes.c_ulong),
+                                   ("XInternAtom", [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong),
+                                   ("XSelectInput", [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long], ctypes.c_int),
+                                   ("XConnectionNumber", [ctypes.c_void_p], ctypes.c_int),
+                                   ("XFlush", [ctypes.c_void_p], ctypes.c_int),
+                                   ("XPending", [ctypes.c_void_p], ctypes.c_int),
+                                   ("XNextEvent", [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int)):
+            function = getattr(xlib, name)
+            function.argtypes, function.restype = args, result
+        self.display = xlib.XOpenDisplay(None)
+        if not self.display: raise OSError("No X display")
+        root = xlib.XDefaultRootWindow(self.display)
+        self.atom = xlib.XInternAtom(self.display, b"_NET_CLIENT_LIST", 0)
+        xlib.XSelectInput(self.display, root, self.PROPERTY_CHANGE_MASK)
+        xlib.XFlush(self.display)
+        self.fd = xlib.XConnectionNumber(self.display)
+        os.set_inheritable(self.fd, False)
+        self.event = _PropertyEvent()
+
+    def wait(self, timeout):
+        """Wait up to timeout seconds; True when the client list changed."""
+        changed = False
+        if self.xlib.XPending(self.display) == 0:
+            ready, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
+            if not ready: return False
+        while self.xlib.XPending(self.display) > 0:
+            self.xlib.XNextEvent(self.display, ctypes.byref(self.event))
+            if self.event.type == self.PROPERTY_NOTIFY and self.event.atom == self.atom: changed = True
+        return changed
+
 def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
-    """Resident catalogue: window icons each tick, refresh() only when an input changed.
+    """Resident catalogue: window icons when a window appears, refresh() only when an input changed.
 
     Replaces the session loop that started Python twice every 5 seconds and
     rescanned every launcher, registry and shortcut each time (#214). A full
-    pass still runs every 5 minutes in case an input is not watched.
+    pass still runs every 5 minutes in case an input is not watched. The inputs
+    and the windows are still checked every `interval` seconds, in case the
+    window manager does not keep _NET_CLIENT_LIST.
     """
-    signature, last_full = None, float("-inf")
+    try: clients = ClientListWatch()
+    except (OSError, AttributeError): clients = None
+    signature, last_full, next_check = None, float("-inf"), 0.0
     while True:
         try:
-            current = watched_inputs()
-            if current != signature or time.monotonic() - last_full >= full_pass:
-                CHANGED.clear()
-                refresh()
-                # refresh() itself touches APPS: read the inputs after it.
-                signature, last_full = watched_inputs(), time.monotonic()
+            if time.monotonic() >= next_check:
+                next_check = time.monotonic() + interval
+                current = watched_inputs()
+                if current != signature or time.monotonic() - last_full >= full_pass:
+                    refresh_apart()
+                    # refresh() itself touches APPS: read the inputs after it.
+                    signature, last_full = watched_inputs(), time.monotonic()
             window_icons()
         except Exception as error:  # one bad tick must not stop the catalogue
             print(f"Catalogue : {type(error).__name__}: {error}", file=sys.stderr)
@@ -1085,7 +1262,13 @@ def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
             sys.stderr.flush()
             if os.fstat(2).st_size > log_limit: os.ftruncate(2, 0)
         except OSError: pass
-        time.sleep(interval)
+        if clients is None:
+            time.sleep(interval)
+            next_check = 0.0
+            continue
+        # Wake for a new window, else at the next check.
+        while not clients.wait(next_check - time.monotonic()):
+            if time.monotonic() >= next_check: break
 
 def print_shortcut(path):
     """Target, working folder then one argument per line, for winlux-open (sh)."""

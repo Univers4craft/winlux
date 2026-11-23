@@ -54,6 +54,10 @@ pub extern "win64" fn wer_set_flags(flags: u32) -> i32 {
     WER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
     0
 }
+/// Réglages WerSetFlags du processus, lus au plantage (#3183).
+pub fn wer_flags() -> u32 {
+    WER_FLAGS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 fn is_console(h: usize) -> bool {
     let h = super::kernel32::canon_std(h);
@@ -382,8 +386,20 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
         }
     }
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
+    // Entrée [CRASH] dans tous les cas, boîte affichée ou non (#3183).
+    let marked = crate::dlls::kernel32::crash_marked();
+    crate::crash::record_unhandled_exception(code, detail.trim(), marked);
     // Plantage, pas une sortie voulue : winlux-open le signalera (#2272).
     crate::dlls::kernel32::record_crash();
+    // Sans lanceur qui l'affiche (processus enfant, lancement direct),
+    // Windows montre sa boîte « a cessé de fonctionner » sauf si le
+    // programme l'a refusée (SetErrorMode, WerSetFlags) ; un plantage ne
+    // disparaît plus sans un mot (#3183).
+    let display = std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty())
+        || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
+    if crate::crash::crash_box_wanted(marked, display, get_thread_error_mode(), wer_flags()) {
+        crate::crash::show_crash_box(code);
+    }
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 /// DLL (et fonction) qu'un programme n'a pas pu charger en différé.
@@ -1164,6 +1180,22 @@ fn package_arch(arch: &str) -> u32 {
     }
 }
 
+/// `AppPolicyGetThreadInitializationType` (appmodel.h ; kernel32 d'après
+/// `api_location` de sdk-api et le kernel32.def de mingw-w64, #3096) : un
+/// programme de bureau n'a aucune initialisation WinRT à faire au début d'un
+/// fil, `AppPolicyThreadInitializationType_None` (0). Jeton ou pointeur nul :
+/// ERROR_INVALID_PARAMETER, comme le dit Learn.
+pub unsafe extern "win64" fn app_policy_get_thread_initialization_type(
+    process_token: usize,
+    policy: *mut u32,
+) -> u32 {
+    if process_token == 0 || policy.is_null() {
+        return 87; // ERROR_INVALID_PARAMETER
+    }
+    *policy = 0; // AppPolicyThreadInitializationType_None
+    0
+}
+
 /// `GetCurrentPackageId` : structure PACKAGE_ID (48 octets en 64 bits)
 /// suivie de ses chaînes, dans le même tampon.
 pub unsafe extern "win64" fn get_current_package_id(len: *mut u32, buf: *mut u8) -> u32 {
@@ -1697,6 +1729,7 @@ pub fn exports() -> crate::dlls::Exports {
         "FormatMessageA" => fn format_message_a, "FormatMessageW" => fn format_message_w, "LocalFree" => fn local_free,
         "LocalAlloc" => fn local_alloc, "LocalReAlloc" => fn local_realloc, "LocalLock" => fn local_lock,
         "LocalUnlock" => fn local_unlock, "LocalSize" => fn local_size,
+        "AppPolicyGetThreadInitializationType" => fn app_policy_get_thread_initialization_type,
         "GetCurrentPackageId" => fn get_current_package_id,
         "GetCurrentPackageFullName" => fn get_current_package_full_name,
         "GetCurrentPackageFamilyName" => fn get_current_package_family_name,
@@ -1724,6 +1757,228 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Variable qui fait de `plantage_enfant` le processus enfant (#3183) :
+    /// `simple`, `sem` (SetErrorMode SEM_NOGPFAULTERRORBOX) ou `wer`
+    /// (WerSetFlags WER_FAULT_REPORTING_NO_UI).
+    const PLANTAGE_ENFANT: &str = "WINLUX_TEST_PLANTAGE_ENFANT";
+
+    /// Partie enfant : exception 0xC06D007F non gérée, comme l'enfant 32 bits
+    /// de l'outil de déploiement d'Office. Ne fait rien dans l'exécuteur.
+    #[test]
+    fn plantage_enfant() {
+        let Some(mode) = std::env::var_os(PLANTAGE_ENFANT) else {
+            return;
+        };
+        crate::dlls::kernel32::crash_mark_file_init();
+        match mode.to_str() {
+            Some("sem") => {
+                super::set_error_mode(2);
+            }
+            Some("wer") => {
+                super::wer_set_flags(0x20);
+            }
+            _ => {}
+        }
+        super::report_unhandled(0xC06D_007F, 1, &[]);
+    }
+
+    struct Issue {
+        status: std::process::ExitStatus,
+        journal: String,
+        offre: bool,
+        boite: Option<String>,
+        marque: Option<String>,
+    }
+
+    /// Lance `plantage_enfant` dans un processus neuf, avec un faux python3
+    /// qui note ses arguments au lieu d'ouvrir la boîte.
+    fn planter(cas: &str, mode: &str, affichage: bool, marque: bool) -> Issue {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("winlux-plantage-{}-{cas}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin = dir.join("bin");
+        let journal = dir.join("journal");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&journal).unwrap();
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let boite = dir.join("boite.txt");
+        let python = bin.join("python3");
+        std::fs::write(
+            &python,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$WINLUX_TEST_BOITE.tmp\"\nmv \"$WINLUX_TEST_BOITE.tmp\" \"$WINLUX_TEST_BOITE\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mark = dir.join("marque");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "dlls::kernel32_misc::tests::plantage_enfant",
+            "--test-threads=1",
+        ])
+        .env(PLANTAGE_ENFANT, mode)
+        .env("WINLUX_JOURNAL_DIR", &journal)
+        .env("WINLUX_TEST_BOITE", &boite)
+        .env("WINLUX_LANG", "fr")
+        .env("PATH", path)
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WINLUX_CRASH_MARK_FILE")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        if affichage {
+            cmd.env("DISPLAY", ":3183");
+        } else {
+            cmd.env_remove("DISPLAY");
+        }
+        if marque {
+            cmd.env("WINLUX_CRASH_MARK_FILE", &mark);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break st;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{cas} : processus enfant bloqué plus de 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        // La boîte est lancée sans être attendue : on lui laisse le temps
+        // d'écrire, et autant dans les cas où elle ne doit pas venir.
+        let attente = std::time::Instant::now()
+            + std::time::Duration::from_secs(if affichage && mode == "simple" && !marque {
+                15
+            } else {
+                2
+            });
+        while !boite.exists() && std::time::Instant::now() < attente {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let issue = Issue {
+            status,
+            journal: std::fs::read_to_string(journal.join("crash.log")).unwrap_or_default(),
+            offre: journal.join("crash-offer").exists(),
+            boite: std::fs::read_to_string(&boite).ok(),
+            marque: std::fs::read_to_string(&mark).ok(),
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        issue
+    }
+
+    fn entree_ecrite(cas: &str, i: &Issue) {
+        // Code de sortie 0xC06D007F : Linux n'en garde que l'octet bas.
+        assert_eq!(i.status.code(), Some(0x7F), "{cas} : {:?}", i.status);
+        let entree = i
+            .journal
+            .lines()
+            .find(|l| l.starts_with("[CRASH] "))
+            .unwrap_or_else(|| panic!("{cas} : aucune entrée [CRASH] : {:?}", i.journal));
+        assert!(
+            entree.contains("exception=UNHANDLED_EXCEPTION") && entree.contains("code=0xC06D007F"),
+            "{cas} : {entree}"
+        );
+    }
+
+    /// #3183 : un enfant qui plante sur une exception non gérée montre la
+    /// boîte « a cessé de fonctionner » quand rien d'autre ne l'affiche ;
+    /// l'entrée [CRASH] est écrite dans tous les cas.
+    #[test]
+    fn plantage_non_gere_boite_et_journal_3183() {
+        let i = planter("affiche", "simple", true, false);
+        entree_ecrite("affiche", &i);
+        let boite = i
+            .boite
+            .expect("boîte attendue : affichage présent, aucun lanceur, aucun refus");
+        assert!(boite.contains("C06D007F"), "{boite}");
+        assert!(boite.contains("crash.log"), "{boite}");
+        assert!(boite.contains("a cessé de fonctionner"), "{boite}");
+        assert!(
+            !boite.contains("http"),
+            "la boîte n'envoie ni ne propose rien : {boite}"
+        );
+        assert!(!i.offre, "sans lanceur, pas de proposition de signalement");
+
+        let i = planter("sans-affichage", "simple", false, false);
+        entree_ecrite("sans-affichage", &i);
+        assert_eq!(i.boite, None, "sans affichage : strictement silencieux");
+
+        let i = planter("sem", "sem", true, false);
+        entree_ecrite("sem", &i);
+        assert_eq!(i.boite, None, "SEM_NOGPFAULTERRORBOX refuse la boîte");
+
+        let i = planter("wer", "wer", true, false);
+        entree_ecrite("wer", &i);
+        assert_eq!(i.boite, None, "WER_FAULT_REPORTING_NO_UI refuse la boîte");
+
+        let i = planter("marque", "simple", true, true);
+        entree_ecrite("marque", &i);
+        assert_eq!(i.boite, None, "winlux-open affiche lui-même ce plantage");
+        assert_eq!(
+            i.marque.as_deref(),
+            Some("exception\n"),
+            "marque de winlux-open"
+        );
+        assert!(i.offre, "le lanceur attend la proposition de signalement");
+    }
+
+    #[test]
+    fn quatre_conditions_de_la_boite_3183() {
+        use crate::crash::crash_box_wanted as voulu;
+        assert!(voulu(false, true, 0, 0));
+        assert!(!voulu(true, true, 0, 0), "marque winlux-open");
+        assert!(!voulu(false, false, 0, 0), "aucun affichage");
+        assert!(!voulu(false, true, 2, 0), "SEM_NOGPFAULTERRORBOX");
+        assert!(
+            !voulu(false, true, 2 | 1 | 0x8000, 0),
+            "SEM_NOGPFAULTERRORBOX parmi d'autres"
+        );
+        assert!(
+            voulu(false, true, 1 | 0x8000, 0),
+            "SEM_FAILCRITICALERRORS seul n'y touche pas"
+        );
+        assert!(!voulu(false, true, 0, 0x20), "WER_FAULT_REPORTING_NO_UI");
+        assert!(
+            voulu(false, true, 0, 0x1),
+            "un autre drapeau WER n'y touche pas"
+        );
+    }
+
+    #[test]
+    fn texte_de_la_boite_3183() {
+        for lang in ["fr", "en_US.UTF-8", "de", "es", "it"] {
+            let (titre, texte, bouton) = crate::crash::crash_box_text(
+                lang,
+                "setup.exe",
+                0xC06D_007F,
+                Some("/run/winlux/journal-1000/crash.log"),
+            );
+            assert!(!titre.is_empty() && !bouton.is_empty());
+            assert!(
+                texte.contains("setup.exe") && texte.contains("0xC06D007F"),
+                "{lang} : {texte}"
+            );
+            assert!(
+                texte.contains("/run/winlux/journal-1000/crash.log"),
+                "{lang} : {texte}"
+            );
+            assert!(texte.contains("\n\n"), "{lang} : tête puis détail");
+            let (_, sans, _) = crate::crash::crash_box_text(lang, "setup.exe", 0xC000_0005, None);
+            assert!(
+                sans.contains("0xC0000005") && !sans.contains("{log}"),
+                "{lang} : {sans}"
+            );
+        }
+    }
+
     #[test]
     fn imports_differes_listes() {
         // Image factice : descripteur RVA à +0x10, INT x86 à +0x40 (deux
@@ -2025,6 +2280,33 @@ mod tests {
             assert_eq!(wow, 0);
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn politique_d_initialisation_des_fils_3096() {
+        let mut policy = 7u32;
+        unsafe {
+            // GetCurrentProcessToken() vaut le pseudo-handle -4.
+            assert_eq!(
+                app_policy_get_thread_initialization_type(-4isize as usize, &mut policy),
+                0
+            );
+            assert_eq!(policy, 0, "AppPolicyThreadInitializationType_None");
+            assert_eq!(
+                app_policy_get_thread_initialization_type(0, &mut policy),
+                87
+            );
+            assert_eq!(
+                app_policy_get_thread_initialization_type(-4isize as usize, std::ptr::null_mut()),
+                87
+            );
+        }
+        assert!(crate::dlls::builtins()
+            .iter()
+            .find(|b| b.name == "kernel32")
+            .expect("kernel32 intégrée")
+            .exports
+            .contains_key("AppPolicyGetThreadInitializationType"));
     }
 
     #[test]

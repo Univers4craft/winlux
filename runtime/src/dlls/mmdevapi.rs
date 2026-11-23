@@ -240,7 +240,13 @@ unsafe extern "win64" fn en_enum(
             flows.push(1);
         }
     }
-    put(out, Com::create(COLL_VT.ptr(), Collection { flows }))
+    put(
+        out,
+        Com::create(
+            COLL_VT.traced("mmdevapi", "IMMDeviceCollection"),
+            Collection { flows },
+        ),
+    )
 }
 unsafe extern "win64" fn en_default(
     _this: *mut Com<Enumerator>,
@@ -360,10 +366,10 @@ struct Device {
 
 fn new_device(flow: u32) -> *mut Com<Device> {
     let d = Com::create(
-        DEV_VT.ptr(),
+        DEV_VT.traced("mmdevapi", "IMMDevice"),
         Device {
             flow,
-            endpoint: Iface::new(ENDPOINT_VT.ptr()),
+            endpoint: Iface::new(ENDPOINT_VT.traced("mmdevapi", "IMMEndpoint")),
         },
     );
     unsafe { (*d).inner.endpoint.owner = d as *mut c_void };
@@ -409,9 +415,13 @@ unsafe extern "win64" fn dev_activate(
         Some(g) if g == IID_IAUDIOCLIENT || g == IID_IAUDIOCLIENT2 || g == IID_IAUDIOCLIENT3 => {
             put(out, new_client(flow))
         }
-        Some(g) if g == IID_IAUDIOENDPOINTVOLUME => {
-            put(out, Com::create(EPV_VT.ptr(), EndpointVolume))
-        }
+        Some(g) if g == IID_IAUDIOENDPOINTVOLUME => put(
+            out,
+            Com::create(
+                EPV_VT.traced("mmdevapi", "IAudioEndpointVolume"),
+                EndpointVolume,
+            ),
+        ),
         Some(g) if g == IID_IUNKNOWN => put(out, new_client(flow)),
         _ => E_NOINTERFACE,
     }
@@ -427,7 +437,7 @@ unsafe extern "win64" fn dev_props(
     put(
         out,
         Com::create(
-            PROPS_VT.ptr(),
+            PROPS_VT.traced("mmdevapi", "IPropertyStore"),
             Props {
                 flow: Com::get(this).flow,
             },
@@ -733,7 +743,7 @@ impl Drop for Client {
 
 fn new_client(flow: u32) -> *mut Com<Client> {
     let c = Com::create(
-        AC_VT.ptr(),
+        AC_VT.traced("mmdevapi", "IAudioClient"),
         Client {
             sh: Arc::new(ClientShared {
                 flow,
@@ -742,12 +752,12 @@ fn new_client(flow: u32) -> *mut Com<Client> {
                 session_mute: AtomicU32::new(0),
                 source: AtomicU64::new(0),
             }),
-            render: Iface::new(RENDER_VT.ptr()),
-            capture: Iface::new(CAPTURE_VT.ptr()),
-            clock: Iface::new(CLOCK_VT.ptr()),
-            simple: Iface::new(SIMPLE_VT.ptr()),
-            stream_vol: Iface::new(STREAMVOL_VT.ptr()),
-            session: Iface::new(SESSION_VT.ptr()),
+            render: Iface::new(RENDER_VT.traced("mmdevapi", "IAudioRenderClient")),
+            capture: Iface::new(CAPTURE_VT.traced("mmdevapi", "IAudioCaptureClient")),
+            clock: Iface::new(CLOCK_VT.traced("mmdevapi", "IAudioClock")),
+            simple: Iface::new(SIMPLE_VT.traced("mmdevapi", "ISimpleAudioVolume")),
+            stream_vol: Iface::new(STREAMVOL_VT.traced("mmdevapi", "IAudioStreamVolume")),
+            session: Iface::new(SESSION_VT.traced("mmdevapi", "IAudioSessionControl2")),
         },
     );
     unsafe {
@@ -1826,7 +1836,7 @@ static EPV_VT: VTable<21> = VTable([
 // ---------------------------------------------------------------------------
 
 pub(crate) unsafe fn create_enumerator(riid: *const Guid, out: *mut *mut c_void) -> i32 {
-    let e = Com::create(EN_VT.ptr(), Enumerator);
+    let e = Com::create(EN_VT.traced("mmdevapi", "IMMDeviceEnumerator"), Enumerator);
     let hr = en_qi(e, riid, out);
     Com::release(e);
     hr
@@ -1879,6 +1889,40 @@ mod tests {
         let vt = *(obj as *const *const usize);
         let f: unsafe extern "win64" fn(*mut c_void) -> R = std::mem::transmute(*vt.add(idx));
         f(obj)
+    }
+
+    /// #3281 : l'énumérateur passe par la trace COM. Sans WINLUX_COMTRACE la
+    /// table est la table d'origine ; tracée, elle énumère toujours, et
+    /// chaque appel est compté dans le journal.
+    #[test]
+    fn enumerateur_trace_par_winlux_comtrace_3281() {
+        if std::env::var_os("WINLUX_COMTRACE").is_none() {
+            assert_eq!(EN_VT.traced("mmdevapi", "IMMDeviceEnumerator"), EN_VT.ptr());
+        }
+        let t = crate::thunks::com_trace_table_for(&EN_VT, "IMMDeviceEnumerator");
+        assert_ne!(t, EN_VT.ptr() as usize);
+        unsafe {
+            let e = Com::create(t as *const (), Enumerator) as *mut c_void;
+            let avant = crate::thunks::com_calls();
+            let vt = *(e as *const *const usize);
+            let enum_endpoints: unsafe extern "win64" fn(
+                *mut c_void,
+                u32,
+                u32,
+                *mut *mut c_void,
+            ) -> i32 = std::mem::transmute(*vt.add(3));
+            let mut coll: *mut c_void = std::ptr::null_mut();
+            assert_eq!(enum_endpoints(e, 2, 1, &mut coll), S_OK);
+            assert!(!coll.is_null());
+            assert!(crate::thunks::com_calls() > avant, "appel non journalisé");
+            let mut n = 0u32;
+            let count: unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32 =
+                std::mem::transmute(*(*(coll as *const *const usize)).add(3));
+            assert_eq!(count(coll, &mut n), S_OK);
+            assert!(n >= 1);
+            call::<u32>(coll, 2);
+            call::<u32>(e, 2);
+        }
     }
 
     #[test]

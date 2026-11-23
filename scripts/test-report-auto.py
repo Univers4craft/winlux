@@ -86,6 +86,17 @@ ok(item["signature"].startswith("wlx-") and f"`{item['signature']}`" in item["bo
 ok("alice" not in item["body"] and "Téléchargements" not in item["body"], "rapport en file anonymisé")
 ok("urgence:2-confort" in item["labels"] and "Rapport envoyé automatiquement" in item["body"],
    "étiquette d'urgence et mention de l'envoi automatique")
+# #3183 : un échec logiciel d'un programme Windows (exception non gérée,
+# exception C++, __fastfail) ne part jamais de lui-même, même envoi
+# automatique activé.
+SOFT = "".join(f"""[CRASH] ts={150 + i} sig=0 stop=APPLICATION_FAILURE exception={kind} code=0x{code} exe=setup.exe module=inconnu pid={50 + i}
+  path=/home/alice/Téléchargements/setup.exe
+""" for i, (kind, code) in enumerate([("CXX_EXCEPTION", "0"), ("FAST_FAIL", "0"), ("UNHANDLED_EXCEPTION", "C06D007F")]))
+(tmp / "journal/crash.log").write_text(LOG + SOFT)
+ok(r["auto_enabled"]() and r["collect"]() == 0 and r["queue_size"]() == 2,
+   "exception non gérée, exception C++ et __fastfail jamais mises en file d'envoi automatique (#3183)")
+ok(r["last_crash"](0).get("exception") == "UNHANDLED_EXCEPTION",
+   "elles restent proposées par « Signaler un problème », envoyées seulement sur un clic (#3183)")
 (tmp / "journal/crash.log").unlink()  # arrêt : /run est vidé
 ok(r["queue_size"]() == 2, "la file survit à l'arrêt (crash.log perdu)")
 

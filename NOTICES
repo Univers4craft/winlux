@@ -76,6 +76,15 @@ indiquant la version de l'image. Les sources sont aussi celles des paquets
 Ubuntu de même nom et de même version listés dans sources-gpl.tsv
 (« apt-get source PAQUET=VERSION »).
 
+Openbox modifié (/usr/lib/winlux/openbox/openbox) :
+
+  Openbox 3.6.1 — GPL-2.0-or-later (Copyright (c) 2003-2011 Dana Jansens,
+    Mikael Magnusson et les contributeurs d'Openbox). Programme openbox
+    reconstruit depuis le paquet source Ubuntu openbox 3.6.1-12ubuntu3, ses
+    correctifs Debian, puis les correctifs de Winlux publiés dans
+    integration/native/openbox/ du dépôt, et scripts/build-openbox.sh qui
+    les applique. /usr/bin/openbox reste le programme Ubuntu non modifié.
+
 Données intégrées au bureau :
 
   emojibase-data 18   — MIT (Copyright (c) 2017-2019 Miles Johnson)
@@ -87,7 +96,8 @@ Données intégrées au bureau :
 Microsoft Edge, lorsqu'il est embarqué via WINLUX_EDGE_DEB, est distribué
 selon les conditions de licence de Microsoft et n'est pas inclus par défaut.
 
-Tous les composants externes sont utilisés sans modification. Aucun code
+Hormis le programme openbox décrit plus haut, tous les composants externes
+sont utilisés sans modification. Aucun code
 propriétaire n'est requis pour compiler ou exécuter Winlux. Aucun fichier de
 Microsoft (DLL, police, icône, son, redistribuable Visual C++) n'est inclus.
 

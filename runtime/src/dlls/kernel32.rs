@@ -318,6 +318,9 @@ struct MutexState {
     /// partagée (DuplicateHandle vers un autre processus, #767).
     owner_os: u32,
     recursion: usize,
+    /// Fils endormis sur `changed` dans wait_mutex : sans eux, libérer le
+    /// mutex ne réveille personne (notify_one coûte un appel futex).
+    waiters: usize,
 }
 pub(crate) struct MutexObject {
     state: Mutex<MutexState>,
@@ -336,7 +339,28 @@ const SHARED_KIND_MUTEX: u32 = 2;
 const SHARED_KIND_SEMAPHORE: u32 = 3;
 
 fn os_thread_id() -> u32 {
-    unsafe { libc::syscall(libc::SYS_gettid) as u32 }
+    // tid noyau gardé par fil : évite un gettid par EnterCriticalSection ou
+    // WaitForSingleObject. Pas lu dans le TEB : un fil créé hors de notre
+    // chemin hérite de la base GS de son créateur, donc de son TEB et de son
+    // tid, et prenait pour sien un mutex tenu par l'autre (témoin Synchro).
+    thread_local! {
+        static TID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let cached = TID.try_with(|c| c.get()).unwrap_or(0);
+    if cached != 0 {
+        return cached;
+    }
+    static ATFORK: std::sync::Once = std::sync::Once::new();
+    ATFORK.call_once(|| {
+        // Après fork, le fil de l'enfant a un autre tid : le cache repart à zéro.
+        extern "C" fn child() {
+            let _ = TID.try_with(|c| c.set(0));
+        }
+        unsafe { libc::pthread_atfork(None, None, Some(child)) };
+    });
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+    let _ = TID.try_with(|c| c.set(tid));
+    tid
 }
 
 impl MutexObject {
@@ -346,6 +370,7 @@ impl MutexObject {
                 owner: owned.then(|| std::thread::current().id()),
                 owner_os: if owned { os_thread_id() } else { 0 },
                 recursion: usize::from(owned),
+                waiters: 0,
             }),
             changed: Condvar::new(),
             shared: std::sync::OnceLock::new(),
@@ -475,6 +500,9 @@ pub(crate) struct ThreadObject {
     pub(crate) slot: super::thread_ctl::SuspendSlot,
     /// Thread Rust correspondant (file d'APC de QueueUserAPC).
     pub(crate) rust_id: OnceLock<ThreadId>,
+    /// Fil d'un autre processus ouvert par OpenThread (#2024) : PID Linux
+    /// de ce processus, 0 pour un fil d'ici.
+    pub(crate) foreign_pid: AtomicI32,
 }
 
 impl ThreadObject {
@@ -494,6 +522,7 @@ impl ThreadObject {
             exit_jump: Mutex::new(Box::new([0; 8])),
             slot: super::thread_ctl::SuspendSlot::new(),
             rust_id: OnceLock::new(),
+            foreign_pid: AtomicI32::new(0),
         }
     }
 }
@@ -565,6 +594,8 @@ pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
         }));
     }
     match lookup_sync(h)? {
+        // Fil d'un autre processus : ni suspension ni contexte d'ici (#2024).
+        SyncHandle::Thread(t) if t.is_foreign() => None,
         SyncHandle::Thread(t) => match t.os_tid.load(Ordering::Acquire) {
             0 => Some(ThreadTarget::NotStarted(t)),
             tid => Some(ThreadTarget::Running(tid)),
@@ -975,6 +1006,7 @@ pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
 fn post_iocp(port: &CompletionPort, packet: CompletionPacket) {
     lock(&port.state).queue.push_back(packet);
     port.changed.notify_all();
+    wake_multi_waiters(port);
 }
 fn iocp_is_signaled(port: &CompletionPort) -> bool {
     !lock(&port.state).queue.is_empty()
@@ -5901,13 +5933,19 @@ fn wait_mutex(m: &MutexObject, timeout: u32) -> u32 {
             timeout - elapsed
         };
         drop(gate);
-        let (next, _) = wait_condvar(&m.changed, s, left);
+        s.waiters += 1;
+        let (mut next, _) = wait_condvar(&m.changed, s, left);
+        next.waiters -= 1;
         drop(next);
     }
 }
 fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
     let start = std::time::Instant::now();
+    let foreign = t.is_foreign();
     loop {
+        if foreign {
+            t.refresh_foreign();
+        }
         let gate = sync_gate();
         let s = lock(&t.state);
         if s.finished {
@@ -5926,6 +5964,11 @@ fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
             timeout - elapsed
         };
         drop(gate);
+        let left = if foreign {
+            left.min(FOREIGN_THREAD_POLL_MS)
+        } else {
+            left
+        };
         let (next, _) = wait_condvar(&t.changed, s, left);
         drop(next);
     }
@@ -5961,6 +6004,7 @@ fn poll_process(p: &ProcessObject) -> bool {
 }
 fn wait_process(p: &ProcessObject, timeout: u32) -> u32 {
     let start = std::time::Instant::now();
+    let mut pidfd: Option<Option<std::os::fd::OwnedFd>> = None;
     loop {
         let gate = sync_gate();
         if poll_process(p) {
@@ -5969,11 +6013,37 @@ fn wait_process(p: &ProcessObject, timeout: u32) -> u32 {
         if timeout == 0 {
             return 258;
         }
-        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
-            return 258;
-        }
         drop(gate);
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        let Some(left) = time_left(start, timeout) else {
+            return 258;
+        };
+        // Attente sur le pidfd plutôt qu'une relecture toutes les 2 ms
+        // (#3123) ; sans pidfd, relecture toutes les MULTI_CAP_MS.
+        match pidfd.get_or_insert_with(|| open_pidfd(p)) {
+            Some(fd) => {
+                use std::os::fd::AsRawFd;
+                let mut pfd = libc::pollfd {
+                    fd: fd.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let t = if left == u32::MAX {
+                    -1
+                } else {
+                    left.min(i32::MAX as u32) as i32
+                };
+                // SAFETY : un pollfd valide.
+                let rc = unsafe { libc::poll(&mut pfd, 1, t) };
+                if rc > 0 && !poll_process(p) {
+                    // pidfd prêt mais processus pas fini (zombie d'un autre
+                    // parent) : on repasse à la relecture.
+                    pidfd = Some(None);
+                }
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(
+                left.min(MULTI_CAP_MS) as u64
+            )),
+        }
     }
 }
 fn try_mutex(m: &MutexObject) -> bool {
@@ -6005,6 +6075,7 @@ fn leave_mutex(m: &MutexObject) -> bool {
             w.slot(1).store(0, Ordering::Release);
             w.slot(0).store(0, Ordering::Release);
             w.wake();
+            wake_multi_waiters(m);
         }
         return true;
     }
@@ -6025,7 +6096,11 @@ fn leave_mutex(m: &MutexObject) -> bool {
     } else {
         s.recursion = 0;
         s.owner = None;
-        m.changed.notify_one();
+        if s.waiters > 0 {
+            m.changed.notify_one();
+        }
+        drop(s);
+        wake_multi_waiters(m);
     }
     true
 }
@@ -6279,6 +6354,7 @@ impl Drop for AdoptedThread {
             s.exit_code = 0;
             s.finished = true;
             thread.changed.notify_all();
+            wake_multi_waiters(&*thread);
         }
     }
 }
@@ -6382,6 +6458,11 @@ pub extern "win64" fn suspend_thread(h: usize) -> u32 {
         crate::process::set_last_error(6);
         return u32::MAX;
     };
+    if t.is_foreign() {
+        // Fil d'un autre processus (#2024) : refus net, jamais un faux succès.
+        crate::process::set_last_error(5);
+        return u32::MAX;
+    }
     {
         let mut s = lock(&t.state);
         if s.finished {
@@ -6421,6 +6502,11 @@ pub unsafe extern "win64" fn get_thread_context(h: usize, ctx: *mut u8) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if t.is_foreign() {
+        // Registres d'un fil d'un autre processus : pas lus d'ici (#2024).
+        crate::process::set_last_error(5);
+        return 0;
+    }
     if is_current(&t) {
         super::thread_ctl::get_own_context(ctx);
         return 1;
@@ -6448,6 +6534,10 @@ pub unsafe extern "win64" fn set_thread_context(h: usize, ctx: *const u8) -> i32
         crate::process::set_last_error(6);
         return 0;
     };
+    if t.is_foreign() {
+        crate::process::set_last_error(5);
+        return 0;
+    }
     if is_current(&t) {
         let flags = (ctx.add(0x30) as *const u32).read_unaligned();
         if flags & 0x1 != 0 {
@@ -6480,7 +6570,7 @@ pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize
     } else {
         thread_object_by_tid(tid as i32)
     };
-    let Some(t) = t else {
+    let Some(t) = t.or_else(|| open_foreign_thread(tid as i32)) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -6488,6 +6578,132 @@ pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize
     crate::dlls::inherit::set(h, inherit != 0);
     h
 }
+
+/// Fil `tid` d'un autre processus du même compte (#2024). Sous Windows,
+/// OpenThread ouvre le fil de tout processus du même compte : crashpad
+/// ouvre ainsi chaque fil du processus planté. Refusé pour un fil d'un
+/// autre compte, ou d'un processus qui n'est pas le sien (tid de /proc
+/// absent de /proc/<pid>/task).
+fn open_foreign_thread(tid: i32) -> Option<Arc<ThreadObject>> {
+    let pid = foreign_thread_pid(tid)?;
+    let t = ThreadObject::new(false);
+    t.os_tid.store(tid, Ordering::Release);
+    t.foreign_pid.store(pid, Ordering::Release);
+    lock(&t.state).win_tid = tid as u32;
+    Some(Arc::new(t))
+}
+
+/// PID du processus d'un fil `tid` d'un autre processus du même compte
+/// réel, d'après /proc/<tid>/status (Tgid, Uid).
+fn foreign_thread_pid(tid: i32) -> Option<i32> {
+    if tid <= 0 {
+        return None;
+    }
+    let status = std::fs::read_to_string(format!("/proc/{tid}/status")).ok()?;
+    let pid = foreign_thread_owner(
+        &status,
+        unsafe { libc::getuid() },
+        std::process::id() as i32,
+    )?;
+    std::path::Path::new(&format!("/proc/{pid}/task/{tid}"))
+        .exists()
+        .then_some(pid)
+}
+
+/// Garde-fou de sécurité de #2024 : le processus (Tgid) du fil décrit par
+/// `status`, seulement si son uid réel est `my_uid` et que ce n'est pas le
+/// processus courant. Un fil d'un autre compte ne s'ouvre jamais.
+fn foreign_thread_owner(status: &str, my_uid: u32, my_pid: i32) -> Option<i32> {
+    let field = |name: &str| -> Option<u32> {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name))?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    };
+    let pid = field("Tgid:")? as i32;
+    let uid = field("Uid:")?;
+    (uid == my_uid && pid != my_pid).then_some(pid)
+}
+
+impl ThreadObject {
+    pub(crate) fn is_foreign(&self) -> bool {
+        self.foreign_pid.load(Ordering::Acquire) != 0
+    }
+
+    /// Fil d'un autre processus : relu dans /proc, marqué fini quand il
+    /// n'existe plus ou n'est plus qu'un zombie. Son code de sortie n'est
+    /// pas connu d'ici : 0. Vrai s'il est fini.
+    fn refresh_foreign(&self) -> bool {
+        let pid = self.foreign_pid.load(Ordering::Acquire);
+        if pid == 0 {
+            return lock(&self.state).finished;
+        }
+        let tid = self.os_tid.load(Ordering::Acquire);
+        let alive = std::fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat"))
+            .ok()
+            .and_then(|s| {
+                let i = s.rfind(')')?;
+                s[i + 1..].trim_start().chars().next()
+            })
+            .is_some_and(|c| c != 'Z' && c != 'X');
+        let mut s = lock(&self.state);
+        if !alive && !s.finished {
+            s.finished = true;
+            s.exit_code = 0;
+            self.changed.notify_all();
+        }
+        s.finished
+    }
+}
+
+/// Champs de THREAD_BASIC_INFORMATION pour un handle de fil (#2024) :
+/// (code de sortie ou STATUS_PENDING, TEB, PID, TID, priorité relative).
+/// Le TEB d'un fil d'un autre processus est lu dans l'annuaire que ce
+/// processus publie (`process::foreign_teb_of_tid`).
+pub(crate) fn thread_basic_info(h: usize) -> Option<(u32, usize, u32, u32, i32)> {
+    let me = std::process::id();
+    if h == get_current_thread() {
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+        return Some((0x103, crate::process::teb(), me, tid, 0));
+    }
+    let Some(SyncHandle::Thread(t)) = lookup_sync(h) else {
+        return None;
+    };
+    let finished = t.refresh_foreign();
+    let tid = t.os_tid.load(Ordering::Acquire);
+    let pid = match t.foreign_pid.load(Ordering::Acquire) {
+        0 => me as i32,
+        p => p,
+    };
+    let teb = if finished || tid == 0 {
+        0
+    } else if pid == me as i32 {
+        crate::process::teb_of_tid(tid).unwrap_or(0)
+    } else {
+        crate::process::foreign_teb_of_tid(pid, tid).unwrap_or(0)
+    };
+    let s = lock(&t.state);
+    let status = if s.finished { s.exit_code } else { 0x103 };
+    let win_tid = if s.win_tid != 0 {
+        s.win_tid
+    } else {
+        tid as u32
+    };
+    Some((
+        status,
+        teb,
+        pid as u32,
+        win_tid,
+        t.priority.load(Ordering::Relaxed),
+    ))
+}
+
+/// Relecture d'un fil d'un autre processus pendant une attente : rien ne
+/// nous prévient de sa fin.
+const FOREIGN_THREAD_POLL_MS: u32 = 10;
 
 /// Termine le thread Win32 courant : rappels DLL_THREAD_DETACH, libération
 /// du TEB, puis signalement du handle avec son code de sortie. Appelé à la
@@ -6526,6 +6742,7 @@ pub(crate) fn finish_current_thread(code: u32) {
         s.exit_code = code;
         s.finished = true;
         thread.changed.notify_all();
+        wake_multi_waiters(&*thread);
     }
 }
 pub(crate) fn split_windows_command_line(line: &str) -> Vec<String> {
@@ -7442,6 +7659,7 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
     }
     s.exit_code = code;
     p.changed.notify_all();
+    wake_multi_waiters(&*p);
     1
 }
 /// Ce que désigne un handle, pour la trace des fils (#2161) : « fil 1234
@@ -7477,6 +7695,7 @@ pub unsafe extern "win64" fn get_exit_code_thread(handle: usize, code: *mut u32)
     }
     match lookup_sync(handle) {
         Some(SyncHandle::Thread(t)) => {
+            t.refresh_foreign();
             let s = lock(&t.state);
             *code = if s.finished { s.exit_code } else { 259 };
             1
@@ -7498,6 +7717,10 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
         return u32::MAX;
     };
     match obj {
+        SyncHandle::Thread(t) if t.is_foreign() => {
+            crate::process::set_last_error(5);
+            u32::MAX
+        }
         SyncHandle::Thread(t) => {
             let _gate = sync_gate();
             let mut s = lock(&t.state);
@@ -7686,6 +7909,7 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
     } else {
         v.changed.notify_one()
     }
+    wake_multi_waiters(&*v);
     1
 }
 pub extern "win64" fn reset_event(h: usize) -> i32 {
@@ -8041,14 +8265,20 @@ fn wait_for_single_object_inner(h: usize, timeout: u32) -> u32 {
         // de Windows le signale ; ici, l'attente interroge la socket.
         SyncHandle::Event(e) if crate::dlls::ws2_32::has_socket_assoc(h) => {
             let start = std::time::Instant::now();
+            let obj = SyncHandle::Event(e.clone());
+            let waiter = MultiWait::register(&[&obj]);
+            let mut none = None;
             loop {
+                waiter.arm();
                 if crate::dlls::ws2_32::handle_ready(h) || wait_event(&e, 0) == 0 {
                     return 0;
                 }
-                if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+                let Some(left) = time_left(start, timeout) else {
                     return 258;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                };
+                let mut fds = Vec::new();
+                let cap = wait_sources(&obj, h, &mut none, &mut fds);
+                waiter.block(fds, multi_sleep(left, cap));
             }
         }
         SyncHandle::Event(e) => wait_event(&e, timeout),
@@ -8059,15 +8289,291 @@ fn wait_for_single_object_inner(h: usize, timeout: u32) -> u32 {
         SyncHandle::Semaphore(sem) => wait_semaphore(&sem, timeout),
     }
 }
+// ============================================================
+//  Point de réveil commun des attentes sur plusieurs objets (#3123)
+// ============================================================
+//
+// WaitForMultipleObjects « bloque » le fil jusqu'à ce qu'un objet (ou tous)
+// soit signalé, sans consommer de processeur (Learn, WaitForMultipleObjects,
+// Remarks). Chaque attente « plusieurs objets » inscrit l'eventfd de son fil
+// sous l'adresse de chaque objet attendu ; tout changement d'état qui peut
+// rendre un objet signalé (SetEvent, minuteur, ReleaseMutex,
+// ReleaseSemaphore, fin d'un fil ou d'un processus, paquet de port de
+// complétion) écrit dans les eventfd inscrits sous cet objet. L'attente
+// dort dans poll(2) sur cet eventfd, plus les sockets (WSAEventSelect) et
+// les pidfd des processus attendus. Seuls les objets partagés qu'un autre
+// processus peut changer sans nous prévenir gardent une relecture, toutes
+// les MULTI_CAP_MS millisecondes.
+
+/// Relecture des objets qu'un autre processus peut signaler sans passer par
+/// `wake_multi_waiters` (page partagée, processus sans pidfd).
+const MULTI_CAP_MS: u32 = 10;
+static MULTI_WAITING: AtomicUsize = AtomicUsize::new(0);
+static MULTI_FDS: OnceLock<Mutex<HashMap<usize, Vec<i32>>>> = OnceLock::new();
+fn multi_fds() -> &'static Mutex<HashMap<usize, Vec<i32>>> {
+    MULTI_FDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+/// Adresse d'un objet de synchronisation, clé des inscriptions.
+fn sync_key(o: &SyncHandle) -> usize {
+    match o {
+        SyncHandle::Event(x) => Arc::as_ptr(x) as usize,
+        SyncHandle::Mutex(x) => Arc::as_ptr(x) as usize,
+        SyncHandle::Thread(x) => Arc::as_ptr(x) as usize,
+        SyncHandle::Process(x) => Arc::as_ptr(x) as usize,
+        SyncHandle::CompletionPort(x) => Arc::as_ptr(x) as usize,
+        SyncHandle::Semaphore(x) => Arc::as_ptr(x) as usize,
+    }
+}
+/// Réveille les attentes « plusieurs objets » inscrites sous `obj`, après
+/// un changement de son état. Sans attente en cours, une lecture atomique.
+fn wake_multi_waiters<T>(obj: &T) {
+    std::sync::atomic::fence(Ordering::SeqCst);
+    if MULTI_WAITING.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let key = obj as *const T as usize;
+    let map = lock(multi_fds());
+    let Some(fds) = map.get(&key) else {
+        return;
+    };
+    let one: u64 = 1;
+    for &fd in fds {
+        // SAFETY : eventfd inscrit par un fil vivant, 8 octets.
+        unsafe {
+            libc::write(fd, &one as *const u64 as *const c_void, 8);
+        }
+    }
+}
+/// eventfd du fil, créé à sa première attente « plusieurs objets ».
+struct WakeFd(i32);
+impl Drop for WakeFd {
+    fn drop(&mut self) {
+        if self.0 >= 0 {
+            // Fil sorti en pleine attente : aucune inscription ne doit
+            // survivre à son eventfd, dont le numéro sera réutilisé.
+            if let Some(m) = MULTI_FDS.get() {
+                lock(m).retain(|_, v| {
+                    v.retain(|&f| f != self.0);
+                    !v.is_empty()
+                });
+            }
+            // SAFETY : descripteur créé par eventfd et possédé ici.
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+}
+thread_local! {
+    // SAFETY : eventfd sans pointeur.
+    static WAKE_FD: WakeFd =
+        WakeFd(unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) });
+}
+/// Inscription d'une attente sur plusieurs objets, retirée à sa fin.
+struct MultiWait {
+    fd: i32,
+    keys: Vec<usize>,
+}
+impl MultiWait {
+    fn register(objects: &[&SyncHandle]) -> MultiWait {
+        let fd = WAKE_FD.try_with(|w| w.0).unwrap_or(-1);
+        let keys: Vec<usize> = if fd >= 0 {
+            objects.iter().map(|o| sync_key(o)).collect()
+        } else {
+            Vec::new()
+        };
+        if !keys.is_empty() {
+            let mut map = lock(multi_fds());
+            for &k in &keys {
+                map.entry(k).or_default().push(fd);
+            }
+        }
+        // Inscrit avant de relire l'état des objets : un changement
+        // postérieur à la lecture trouve l'inscription.
+        MULTI_WAITING.fetch_add(1, Ordering::SeqCst);
+        std::sync::atomic::fence(Ordering::SeqCst);
+        MultiWait { fd, keys }
+    }
+    /// Vide l'eventfd avant de relire l'état des objets.
+    fn arm(&self) {
+        if self.fd >= 0 {
+            let mut v: u64 = 0;
+            // SAFETY : eventfd non bloquant, 8 octets.
+            unsafe {
+                libc::read(self.fd, &mut v as *mut u64 as *mut c_void, 8);
+            }
+        }
+    }
+    /// Dort jusqu'à un réveil, un descripteur de `extra` prêt, ou `ms`
+    /// millisecondes (u32::MAX : sans limite).
+    fn block(&self, mut extra: Vec<libc::pollfd>, ms: u32) {
+        if self.fd < 0 {
+            std::thread::sleep(std::time::Duration::from_millis(ms.min(MULTI_CAP_MS) as u64));
+            return;
+        }
+        extra.push(libc::pollfd {
+            fd: self.fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
+        let t = if ms == u32::MAX {
+            -1
+        } else {
+            ms.min(i32::MAX as u32) as i32
+        };
+        // SAFETY : `extra` est un tableau valide pour la durée de l'appel.
+        unsafe { libc::poll(extra.as_mut_ptr(), extra.len() as libc::nfds_t, t) };
+        // Socket fermée pendant l'attente : poll répondrait aussitôt à
+        // chaque tour, on relit au rythme de la relecture.
+        if extra.iter().any(|p| p.revents & libc::POLLNVAL != 0) {
+            std::thread::sleep(std::time::Duration::from_millis(ms.min(MULTI_CAP_MS) as u64));
+        }
+    }
+}
+impl Drop for MultiWait {
+    fn drop(&mut self) {
+        if !self.keys.is_empty() {
+            let mut map = lock(multi_fds());
+            for k in &self.keys {
+                if let Some(v) = map.get_mut(k) {
+                    if let Some(i) = v.iter().position(|&f| f == self.fd) {
+                        v.swap_remove(i);
+                    }
+                    if v.is_empty() {
+                        map.remove(k);
+                    }
+                }
+            }
+        }
+        MULTI_WAITING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+/// pidfd du processus attendu (Linux 5.3) : lisible quand il se termine.
+fn open_pidfd(p: &ProcessObject) -> Option<std::os::fd::OwnedFd> {
+    let pid = {
+        let s = lock(&p.state);
+        match (s.foreign, s.child.as_ref()) {
+            (Some(pid), _) => pid,
+            (None, Some(c)) => c.id() as i32,
+            (None, None) => return None,
+        }
+    };
+    // SAFETY : appel système sans pointeur.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as i32;
+    // SAFETY : descripteur neuf, possédé par l'OwnedFd.
+    (fd >= 0).then(|| unsafe { std::os::fd::FromRawFd::from_raw_fd(fd) })
+}
+/// Sources de réveil d'un objet non signalé : ajoute à `fds` ses sockets ou
+/// son pidfd ; vrai s'il faut aussi le relire toutes les MULTI_CAP_MS.
+fn wait_sources(
+    o: &SyncHandle,
+    h: usize,
+    pidfd: &mut Option<Option<std::os::fd::OwnedFd>>,
+    fds: &mut Vec<libc::pollfd>,
+) -> bool {
+    use std::os::fd::AsRawFd;
+    match o {
+        SyncHandle::Event(e) => {
+            fds.extend(crate::dlls::ws2_32::wait_fds(h));
+            e.shared.get().is_some()
+        }
+        SyncHandle::Mutex(m) => m.shared.get().is_some(),
+        SyncHandle::Semaphore(sem) => sem.shared.get().is_some(),
+        SyncHandle::Process(p) => match pidfd.get_or_insert_with(|| open_pidfd(p)) {
+            Some(fd) => {
+                fds.push(libc::pollfd {
+                    fd: fd.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
+                false
+            }
+            None => true,
+        },
+        // Un fil d'un autre processus se relit (#2024).
+        SyncHandle::Thread(t) => t.is_foreign(),
+        SyncHandle::CompletionPort(_) => false,
+    }
+}
+/// Durée du prochain sommeil : le temps restant, ramené à MULTI_CAP_MS si
+/// un objet attendu doit être relu.
+fn multi_sleep(left: u32, cap: bool) -> u32 {
+    if cap {
+        left.min(MULTI_CAP_MS)
+    } else {
+        left
+    }
+}
+
+/// Attente d'objets mêlée à d'autres descripteurs, pour
+/// MsgWaitForMultipleObjects (#3170) : le fil dort dans poll(2) jusqu'au
+/// signal d'un objet, d'un descripteur de `extra` (connexion X11, éveil de
+/// la file de messages) ou du délai, au lieu de relire toutes les 10 ms.
+pub(crate) struct ObjectWait {
+    hs: Vec<usize>,
+    objects: Vec<Option<SyncHandle>>,
+    pidfds: Vec<Option<Option<std::os::fd::OwnedFd>>>,
+    waiter: MultiWait,
+}
+
+impl ObjectWait {
+    pub(crate) fn new(hs: &[usize]) -> ObjectWait {
+        let objects: Vec<Option<SyncHandle>> = hs.iter().map(|&h| lookup_sync(h)).collect();
+        let waiter = MultiWait::register(&objects.iter().flatten().collect::<Vec<_>>());
+        ObjectWait {
+            hs: hs.to_vec(),
+            pidfds: hs.iter().map(|_| None).collect(),
+            objects,
+            waiter,
+        }
+    }
+
+    /// À appeler avant de relire l'état des objets et de la file.
+    pub(crate) fn arm(&self) {
+        self.waiter.arm();
+    }
+
+    /// Dort au plus `ms` millisecondes. Un objet sans source de réveil
+    /// (objet partagé entre processus, entrée console) ramène le sommeil à
+    /// MULTI_CAP_MS, comme pour WaitForMultipleObjects.
+    pub(crate) fn block(&mut self, extra: &[i32], ms: u32) {
+        let mut fds: Vec<libc::pollfd> = extra
+            .iter()
+            .filter(|&&fd| fd >= 0)
+            .map(|&fd| libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        let mut cap = false;
+        for (i, &h) in self.hs.iter().enumerate() {
+            match &self.objects[i] {
+                Some(o) => cap |= wait_sources(o, h, &mut self.pidfds[i], &mut fds),
+                None => {
+                    let sock = crate::dlls::ws2_32::wait_fds(h);
+                    cap |= sock.is_empty();
+                    fds.extend(sock);
+                }
+            }
+        }
+        self.waiter.block(fds, multi_sleep(ms, cap));
+    }
+}
+
 /// Attente « un seul parmi » qui contient des événements de WSACreateEvent
 /// (#1351) : ceux-ci, et les autres handles, sont interrogés sans attente
 /// jusqu'au premier prêt. Un événement WSA est à réinitialisation manuelle :
 /// l'interroger ne le consomme pas.
 fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
     let start = std::time::Instant::now();
+    let objects: Vec<Option<SyncHandle>> = hs.iter().map(|&h| lookup_sync(h)).collect();
+    let waiter = MultiWait::register(&objects.iter().flatten().collect::<Vec<_>>());
+    let mut pidfds: Vec<Option<Option<std::os::fd::OwnedFd>>> = hs.iter().map(|_| None).collect();
     loop {
+        waiter.arm();
         for (i, &h) in hs.iter().enumerate() {
-            let ready = if lookup_sync(h).is_none() {
+            let ready = if objects[i].is_none() {
                 if !crate::dlls::ws2_32::is_wsa_event(h) {
                     crate::process::set_last_error(6);
                     return u32::MAX;
@@ -8085,10 +8591,21 @@ fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
                 return i as u32;
             }
         }
-        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+        let Some(left) = time_left(start, timeout) else {
+            return 258;
+        };
+        if timeout == 0 {
             return 258;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        let mut fds = Vec::new();
+        let mut cap = false;
+        for (i, &h) in hs.iter().enumerate() {
+            match &objects[i] {
+                Some(o) => cap |= wait_sources(o, h, &mut pidfds[i], &mut fds),
+                None => fds.extend(crate::dlls::ws2_32::wait_fds(h)),
+            }
+        }
+        waiter.block(fds, multi_sleep(left, cap));
     }
 }
 pub unsafe extern "win64" fn wait_for_multiple_objects(
@@ -8161,29 +8678,37 @@ unsafe fn wait_for_multiple_objects_inner(
                 return u32::MAX;
             }
         }
+        let waiter = MultiWait::register(&objects.iter().collect::<Vec<_>>());
+        let mut pidfds: Vec<Option<Option<std::os::fd::OwnedFd>>> =
+            objects.iter().map(|_| None).collect();
         loop {
+            waiter.arm();
             let gate = sync_gate();
             let me = std::thread::current().id();
-            let ready = objects.iter().zip(hs).all(|(o, &h)| match o {
-                SyncHandle::Event(e) => {
-                    e.is_set(&lock(&e.signaled)) || crate::dlls::ws2_32::handle_ready(h)
-                }
-                SyncHandle::Mutex(m) => match m.shared.get() {
-                    Some(w) => MutexObject::shared_ready(w),
-                    None => {
-                        let s = lock(&m.state);
-                        s.owner.is_none() || s.owner.as_ref() == Some(&me)
+            let each: Vec<bool> = objects
+                .iter()
+                .zip(hs)
+                .map(|(o, &h)| match o {
+                    SyncHandle::Event(e) => {
+                        e.is_set(&lock(&e.signaled)) || crate::dlls::ws2_32::handle_ready(h)
                     }
-                },
-                SyncHandle::Thread(t) => lock(&t.state).finished,
-                SyncHandle::Process(p) => poll_process(p),
-                SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
-                SyncHandle::Semaphore(sem) => match sem.shared.get() {
-                    Some(w) => w.slot(0).load(Ordering::Acquire) > 0,
-                    None => lock(&sem.count).0 > 0,
-                },
-            });
-            if ready {
+                    SyncHandle::Mutex(m) => match m.shared.get() {
+                        Some(w) => MutexObject::shared_ready(w),
+                        None => {
+                            let s = lock(&m.state);
+                            s.owner.is_none() || s.owner.as_ref() == Some(&me)
+                        }
+                    },
+                    SyncHandle::Thread(t) => t.refresh_foreign(),
+                    SyncHandle::Process(p) => poll_process(p),
+                    SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
+                    SyncHandle::Semaphore(sem) => match sem.shared.get() {
+                        Some(w) => w.slot(0).load(Ordering::Acquire) > 0,
+                        None => lock(&sem.count).0 > 0,
+                    },
+                })
+                .collect();
+            if each.iter().all(|&r| r) {
                 for o in &objects {
                     match o {
                         SyncHandle::Event(e) => {
@@ -8220,13 +8745,26 @@ unsafe fn wait_for_multiple_objects_inner(
             if timeout == 0 {
                 return 258;
             }
-            if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+            let Some(left) = time_left(start, timeout) else {
                 return 258;
+            };
+            // Seuls les objets pas encore signalés comptent : une socket
+            // déjà prête ne doit pas faire tourner l'attente des autres.
+            let mut fds = Vec::new();
+            let mut cap = false;
+            for (i, o) in objects.iter().enumerate() {
+                if !each[i] {
+                    cap |= wait_sources(o, hs[i], &mut pidfds[i], &mut fds);
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            waiter.block(fds, multi_sleep(left, cap));
         }
     }
+    let waiter = MultiWait::register(&objects.iter().collect::<Vec<_>>());
+    let mut pidfds: Vec<Option<Option<std::os::fd::OwnedFd>>> =
+        objects.iter().map(|_| None).collect();
     loop {
+        waiter.arm();
         for (i, obj) in objects.iter().enumerate() {
             let ready = match obj {
                 // WinSCP (PuTTY) attend ainsi ses sockets (#1340).
@@ -8250,10 +8788,15 @@ unsafe fn wait_for_multiple_objects_inner(
         if timeout == 0 {
             return 258;
         }
-        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+        let Some(left) = time_left(start, timeout) else {
             return 258;
+        };
+        let mut fds = Vec::new();
+        let mut cap = false;
+        for (i, o) in objects.iter().enumerate() {
+            cap |= wait_sources(o, hs[i], &mut pidfds[i], &mut fds);
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        waiter.block(fds, multi_sleep(left, cap));
     }
 }
 /// Variables cachées « =C: » (dossier courant de chaque lecteur) : Windows
@@ -9190,6 +9733,12 @@ pub fn crash_mark_file_init() {
             }
         }
     }
+}
+
+/// Vrai quand un lanceur (winlux-open) attend la marque de plantage et
+/// l'affichera lui-même (#3183).
+pub fn crash_marked() -> bool {
+    CRASH_MARK_FILE.get().is_some()
 }
 
 /// Note que le processus finit sur une exception non gérée (faute matérielle
@@ -10239,8 +10788,8 @@ pub unsafe extern "win64" fn set_waitable_timer(
     h: usize,
     due: *const i64,
     period: i32,
-    _routine: usize,
-    _arg: usize,
+    routine: usize,
+    arg: usize,
     _resume: i32,
 ) -> i32 {
     let Some(generation) = lock(waitable_timers()).get(&h).cloned() else {
@@ -10269,6 +10818,17 @@ pub unsafe extern "win64" fn set_waitable_timer(
     let my_generation = generation.fetch_add(1, Ordering::AcqRel) + 1;
     event.store(&mut lock(&event.signaled), false);
     let period = std::time::Duration::from_millis(period as u64);
+    // pfnCompletionRoutine (Learn, SetWaitableTimer) : appelée par le fil qui
+    // a armé le minuteur, quand il attend en mode alertable, avec
+    // (lpArgToCompletionRoutine, dwTimerLowValue, dwTimerHighValue). DirectSound
+    // de PortAudio (Audacity) ne cadence son traitement que par cette routine :
+    // l'ignorer laissait lecture et enregistrement muets (#3117).
+    let apc = (routine != 0).then(|| {
+        (
+            std::thread::current().id(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+    });
     let spawned = std::thread::Builder::new()
         .name("winlux-waitable-timer".into())
         .spawn(move || {
@@ -10285,6 +10845,18 @@ pub unsafe extern "win64" fn set_waitable_timer(
                         w.wake();
                     }
                     event.changed.notify_all();
+                    wake_multi_waiters(&*event);
+                }
+                // Une seule routine en attente par minuteur : un fil qui
+                // n'attend jamais en mode alertable n'accumule rien.
+                if let Some((thread, pending)) = &apc {
+                    if !pending.swap(true, Ordering::AcqRel) {
+                        let at = filetime_now();
+                        queue_apc(
+                            *thread,
+                            Apc::Timer(routine, arg, at as u32, (at >> 32) as u32, pending.clone()),
+                        );
+                    }
                 }
                 if period.is_zero() {
                     return;
@@ -10586,12 +11158,15 @@ pub(crate) fn forget_dir_watcher(h: usize) {
 
 // File d'APC par thread : routines d'achèvement (ReadDirectoryChangesW,
 // ReadFileEx…) et QueueUserAPC, exécutées pendant une attente « alertable ».
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Apc {
     /// PAPCFUNC(param)
     User(usize, usize),
     /// LPOVERLAPPED_COMPLETION_ROUTINE(erreur, octets, overlapped)
     Completion(usize, u32, u32, usize),
+    /// PTIMERAPCROUTINE(argument, heure basse, heure haute) d'un minuteur
+    /// d'attente ; le drapeau dit qu'un appel attend déjà ce fil.
+    Timer(usize, usize, u32, u32, Arc<std::sync::atomic::AtomicBool>),
 }
 static APC_QUEUES: OnceLock<(Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar)> = OnceLock::new();
 fn apc_queues() -> &'static (Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar) {
@@ -10629,6 +11204,11 @@ pub(crate) fn run_apcs() -> bool {
                 Apc::Completion(func, error, bytes, overlapped) => {
                     let f: extern "win64" fn(u32, u32, usize) = std::mem::transmute(func);
                     f(error, bytes, overlapped);
+                }
+                Apc::Timer(func, arg, low, high, pending) => {
+                    pending.store(false, Ordering::Release);
+                    let f: extern "win64" fn(usize, u32, u32) = std::mem::transmute(func);
+                    f(arg, low, high);
                 }
             }
         }
@@ -11629,6 +12209,9 @@ unsafe fn duplicate_local(
     } else if let Some(h) = crate::dlls::electron_win32::duplicate_user_object(src_handle) {
         // Station de fenêtres ou bureau (#2443).
         Some(h)
+    } else if let Some(h) = crate::dlls::object_directory::duplicate(src_handle) {
+        // Répertoire d'objets ouvert par NtOpenDirectoryObject (#3004).
+        Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
         // processus, port de complétion) : nouveau numéro de handle vers le
@@ -11861,6 +12444,7 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
             *prev = v as i32;
         }
         w.wake();
+        wake_multi_waiters(&*sem);
         return 1;
     }
     let gate = sync_gate();
@@ -11882,6 +12466,7 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
     for _ in 0..count {
         sem.changed.notify_one();
     }
+    wake_multi_waiters(&*sem);
     1
 }
 
@@ -12075,6 +12660,116 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    /// Un fil créé hors de notre chemin hérite de la base GS (donc du TEB)
+    /// de son créateur : son tid de propriétaire de mutex doit rester le sien.
+    #[test]
+    fn tid_de_mutex_propre_a_chaque_fil_meme_avec_gs_herite() {
+        std::thread::spawn(|| {
+            let _teb = crate::process::test_teb();
+            let t = crate::process::teb();
+            let moi = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+            unsafe { *((t + crate::process::TEB_TID) as *mut usize) = moi as usize };
+            assert_eq!(super::os_thread_id(), moi);
+            let (enfant, vu) = std::thread::spawn(|| {
+                (
+                    unsafe { libc::syscall(libc::SYS_gettid) as u32 },
+                    super::os_thread_id(),
+                )
+            })
+            .join()
+            .unwrap();
+            assert_eq!(vu, enfant, "tid du créateur pris pour celui du fil");
+            assert_ne!(vu, moi);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// LeaveCriticalSection ne réveille plus que s'il y a un dormeur : un fil
+    /// bloqué dans EnterCriticalSection doit quand même être réveillé à chaque
+    /// libération, y compris après une libération sans dormeur.
+    #[test]
+    fn section_critique_reveille_le_fil_qui_attend() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static DANS: AtomicU32 = AtomicU32::new(0);
+        let mut cs = Box::new([0u8; 64]);
+        let p = cs.as_mut_ptr() as usize;
+        unsafe {
+            super::initialize_critical_section(p as *mut c_void);
+            // Libération sans dormeur, récursion comprise.
+            super::enter_critical_section(p as *mut c_void);
+            super::enter_critical_section(p as *mut c_void);
+            super::leave_critical_section(p as *mut c_void);
+            super::leave_critical_section(p as *mut c_void);
+            for tour in 0..50u32 {
+                super::enter_critical_section(p as *mut c_void);
+                let fil = std::thread::spawn(move || {
+                    super::enter_critical_section(p as *mut c_void);
+                    DANS.store(tour + 1, Ordering::SeqCst);
+                    super::leave_critical_section(p as *mut c_void);
+                });
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                assert_ne!(DANS.load(Ordering::SeqCst), tour + 1, "section tenue");
+                super::leave_critical_section(p as *mut c_void);
+                fil.join().unwrap();
+                assert_eq!(DANS.load(Ordering::SeqCst), tour + 1, "tour {tour}");
+            }
+            super::delete_critical_section(p as *mut c_void);
+        }
+    }
+
+    /// #3117 : SetWaitableTimer appelle sa routine de complétion sur le fil
+    /// qui l'a armé, pendant ses attentes alertables, et pas ailleurs ; un
+    /// fil qui n'attend pas en mode alertable n'accumule pas d'appels.
+    #[test]
+    fn minuteur_appelle_sa_routine_en_attente_alertable_3117() {
+        use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        static ARG: AtomicUsize = AtomicUsize::new(0);
+        extern "win64" fn routine(arg: usize, low: u32, high: u32) {
+            assert!(low != 0 || high != 0, "heure du signal attendue");
+            ARG.store(arg, Ordering::Relaxed);
+            CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+        unsafe {
+            let t = super::create_waitable_timer_a(0, 0, std::ptr::null());
+            assert_ne!(t, 0);
+            let due: i64 = -20_000; // 2 ms, relatif
+            assert_eq!(
+                super::set_waitable_timer(t, &due, 5, routine as *const () as usize, 0x3117, 0),
+                1
+            );
+            // Attente non alertable : la routine ne doit pas tourner.
+            super::sleep_ex(60, 0);
+            assert_eq!(
+                CALLS.load(Ordering::Relaxed),
+                0,
+                "appel hors attente alertable"
+            );
+            // Attente alertable : la routine tourne, une seule fois pour tout
+            // ce qui s'est accumulé, et l'attente rend WAIT_IO_COMPLETION.
+            assert_eq!(super::sleep_ex(1000, 1), 0xC0);
+            assert_eq!(CALLS.load(Ordering::Relaxed), 1, "appels accumulés");
+            assert_eq!(ARG.load(Ordering::Relaxed), 0x3117);
+            // Le minuteur périodique continue de rappeler.
+            let t0 = std::time::Instant::now();
+            while CALLS.load(Ordering::Relaxed) < 5 {
+                assert!(t0.elapsed().as_secs() < 5, "rappel périodique absent");
+                super::sleep_ex(50, 1);
+            }
+            assert_eq!(super::cancel_waitable_timer(t), 1);
+            super::sleep_ex(30, 1);
+            let n = CALLS.load(Ordering::Relaxed);
+            super::sleep_ex(60, 1);
+            assert_eq!(
+                CALLS.load(Ordering::Relaxed),
+                n,
+                "rappel après CancelWaitableTimer"
+            );
+            super::close_handle(t);
+        }
+    }
 
     #[test]
     fn compare_string_respecte_la_casse_sans_ignorecase() {
@@ -13160,6 +13855,94 @@ mod tests {
         close_handle(b);
     }
 
+    /// Réveils volontaires du fil Linux `tid` (/proc, #3123).
+    fn reveils_du_fil(tid: i32) -> u64 {
+        let st = std::fs::read_to_string(format!("/proc/self/task/{tid}/status")).unwrap();
+        st.lines()
+            .find_map(|l| l.strip_prefix("voluntary_ctxt_switches:"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    /// WaitForMultipleObjects bloque sans relire les objets en boucle : un
+    /// fil qui attend deux événements non signalés ne se réveille pas
+    /// pendant 500 ms (une relecture toutes les millisecondes en donnait
+    /// ~500), puis rend la main dès SetEvent, en mode « un » comme
+    /// « tous » (#3123).
+    #[test]
+    fn wait_for_multiple_objects_dort_jusqu_au_signal() {
+        init();
+        for all in [0, 1] {
+            let a = unsafe { create_event_a(0, 0, 0, std::ptr::null()) };
+            let b = unsafe { create_event_a(0, 0, 0, std::ptr::null()) };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waiter = std::thread::spawn(move || {
+                tx.send(unsafe { libc::syscall(libc::SYS_gettid) } as i32)
+                    .unwrap();
+                let handles = [a, b];
+                let r = unsafe { wait_for_multiple_objects(2, handles.as_ptr(), all, u32::MAX) };
+                (r, std::time::Instant::now())
+            });
+            let tid = rx.recv().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let avant = reveils_du_fil(tid);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let apres = reveils_du_fil(tid);
+            println!("mode tous={all} : {} réveils en 500 ms", apres - avant);
+            assert!(apres - avant < 10, "{} réveils en 500 ms", apres - avant);
+            if all != 0 {
+                set_event(a);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                assert!(!waiter.is_finished(), "un seul des deux signalé");
+            }
+            let signal = std::time::Instant::now();
+            set_event(b);
+            let (r, fin) = waiter.join().unwrap();
+            assert_eq!(r, if all != 0 { 0 } else { 1 });
+            assert!(fin.duration_since(signal) < std::time::Duration::from_millis(50));
+            close_handle(a);
+            close_handle(b);
+        }
+    }
+
+    /// Les autres changements d'état réveillent aussi l'attente : sémaphore
+    /// relâché, mutex rendu (#3123).
+    #[test]
+    fn wait_for_multiple_objects_reveille_par_semaphore_et_mutex() {
+        init();
+        let ev = unsafe { create_event_a(0, 0, 0, std::ptr::null()) };
+        let sem = unsafe { create_semaphore_a(0, 0, 1, std::ptr::null()) };
+        let attend = |h: usize| {
+            std::thread::spawn(move || {
+                let handles = [ev, h];
+                let t = std::time::Instant::now();
+                let r = unsafe { wait_for_multiple_objects(2, handles.as_ptr(), 0, 5000) };
+                (r, t.elapsed())
+            })
+        };
+        let w = attend(sem);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(
+            unsafe { release_semaphore(sem, 1, std::ptr::null_mut()) },
+            1
+        );
+        let (r, d) = w.join().unwrap();
+        assert_eq!(r, 1);
+        assert!(d < std::time::Duration::from_millis(1000), "{d:?}");
+        close_handle(sem);
+        let m = unsafe { create_mutex_a(0, 1, std::ptr::null()) };
+        let w = attend(m);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(release_mutex(m), 1);
+        let (r, d) = w.join().unwrap();
+        assert_eq!(r, 1);
+        assert!(d < std::time::Duration::from_millis(1000), "{d:?}");
+        close_handle(m);
+        close_handle(ev);
+    }
+
     #[test]
     fn wait_all_ne_consomme_aucun_evenement_avant_que_tous_soient_signales() {
         init();
@@ -13304,6 +14087,130 @@ mod tests {
         assert_eq!(unsafe { get_exit_code_thread(h, &mut code) }, 1);
         assert_eq!(code, 42);
         assert_eq!(close_handle(h), 1);
+    }
+
+    /// OpenThread sur le fil d'un autre processus du même compte (#2024) :
+    /// handle valide, identifiant, ThreadBasicInformation (processus et
+    /// fil), attente qui se termine avec le fil.
+    #[test]
+    fn open_thread_ouvre_le_fil_d_un_autre_processus() {
+        init();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let h = open_thread(0x1F03FF, 0, pid);
+        assert_ne!(h, 0, "fil principal d'un autre processus du même compte");
+        assert_eq!(thread_id_of_handle(h), Some(pid));
+        assert_eq!(wait_for_single_object(h, 0), 258, "vivant");
+        let mut b = [0u8; 48];
+        let mut n = 0u32;
+        let st = unsafe {
+            crate::dlls::ntdll::nt_query_information_thread(
+                h,
+                0,
+                b.as_mut_ptr() as *mut c_void,
+                48,
+                &mut n,
+            )
+        };
+        assert_eq!((st, n), (0, 48));
+        let q = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
+        assert_eq!(q(0) as u32, 0x103, "STATUS_PENDING tant qu'il tourne");
+        assert_eq!((q(16), q(24)), (pid as u64, pid as u64), "ClientId");
+        // Ni suspension ni registres d'ici : refus net (ERROR_ACCESS_DENIED).
+        assert_eq!(suspend_thread(h), u32::MAX);
+        assert_eq!(resume_thread(h), u32::MAX);
+        let mut ctx = vec![0u8; 1232];
+        assert_eq!(unsafe { get_thread_context(h, ctx.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { set_thread_context(h, ctx.as_ptr()) }, 0);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(wait_for_single_object(h, 5_000), 0, "fin du fil vue");
+        let mut code = 259;
+        assert_eq!(unsafe { get_exit_code_thread(h, &mut code) }, 1);
+        assert_ne!(code, 259);
+        close_handle(h);
+        // Fil inexistant : refus, comme avant.
+        assert_eq!(open_thread(0x1F03FF, 0, i32::MAX as u32 - 7), 0);
+    }
+
+    /// Garde-fou de sécurité de #2024 : le fil d'un processus d'un autre
+    /// compte ne s'ouvre jamais, celui du même compte oui.
+    #[test]
+    fn open_thread_refuse_le_fil_d_un_autre_compte() {
+        let status = |uid: u32| {
+            format!("Name:\tx\nTgid:\t4242\nPid:\t4243\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        };
+        assert_eq!(foreign_thread_owner(&status(1000), 1000, 1), Some(4242));
+        assert_eq!(
+            foreign_thread_owner(&status(1001), 1000, 1),
+            None,
+            "autre compte"
+        );
+        assert_eq!(foreign_thread_owner(&status(0), 1000, 1), None, "root");
+        assert_eq!(
+            foreign_thread_owner(&status(1000), 1000, 4242),
+            None,
+            "soi-même"
+        );
+        assert_eq!(
+            foreign_thread_owner("Name:\tx\n", 1000, 1),
+            None,
+            "illisible"
+        );
+        // En root (conteneur) : un vrai processus d'un autre compte.
+        if unsafe { libc::getuid() } == 0 {
+            use std::os::unix::process::CommandExt;
+            init();
+            let mut child = std::process::Command::new("sleep")
+                .arg("30")
+                .uid(65534)
+                .gid(65534)
+                .spawn()
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert_eq!(
+                open_thread(0x1F03FF, 0, child.id()),
+                0,
+                "fil d'un autre compte"
+            );
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+    }
+
+    /// ThreadBasicInformation d'un fil de ce processus : son vrai TEB.
+    #[test]
+    fn information_de_base_d_un_fil_d_ici_donne_son_teb() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        static TEB: AtomicUsize = AtomicUsize::new(0);
+        static FIN: AtomicBool = AtomicBool::new(false);
+        extern "win64" fn note_teb(_p: usize) -> u32 {
+            TEB.store(crate::process::teb(), Ordering::SeqCst);
+            while !FIN.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            0
+        }
+        init();
+        let mut tid = 0;
+        let h = unsafe { create_thread(0, 0, note_teb as *const () as usize, 0, 0, &mut tid) };
+        assert_ne!(h, 0);
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while TEB.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < limite {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let (status, teb, pid, t, _) = thread_basic_info(h).unwrap();
+        assert_eq!(status, 0x103);
+        assert_eq!(pid, std::process::id());
+        assert_eq!(t, tid);
+        assert_ne!(teb, 0);
+        assert_eq!(teb, TEB.load(Ordering::SeqCst));
+        FIN.store(true, Ordering::SeqCst);
+        assert_eq!(wait_for_single_object(h, 5_000), 0);
+        close_handle(h);
     }
 
     #[test]

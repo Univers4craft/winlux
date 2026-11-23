@@ -31,6 +31,7 @@ journaux de session ($WINLUX_SESSION_LOGS ou $XDG_RUNTIME_DIR/winlux, #750).
 """
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -263,6 +264,14 @@ def saver_processes(proc="/proc", uid=None):
     return daemons, init
 
 
+def saver_alive(pid, proc="/proc"):
+    """Le démon XScreenSaver déjà connu tourne-t-il encore ? Un seul fichier
+    lu, au lieu du cmdline de tous les processus (#3291)."""
+    try: argv0 = Path(proc, str(pid), "cmdline").read_bytes().split(b"\0")[0]
+    except OSError: return False
+    return os.path.basename(argv0.decode(errors="replace")) == "xscreensaver"
+
+
 def dpms_wanted(path=None):
     """Choix de l'utilisateur dans ~/.xscreensaver (Winlux : actif par défaut)."""
     path = Path(path) if path else Path.home() / ".xscreensaver"
@@ -283,13 +292,19 @@ class SaverDpms:
 
     WINDOW = 60
 
-    def __init__(self, xset=_xset, processes=saver_processes, wanted=dpms_wanted, held=None, clock=time.monotonic):
-        self.xset, self.processes, self.wanted, self.clock = xset, processes, wanted, clock
+    def __init__(self, xset=_xset, processes=saver_processes, wanted=dpms_wanted, held=None, clock=time.monotonic,
+                 alive=saver_alive):
+        self.xset, self.processes, self.wanted, self.clock, self.alive = xset, processes, wanted, clock, alive
         self.held = held or (lambda: DisplayHold(xset=lambda *_: "").held_by_other())
         self.daemon = None
         self.until = 0
 
     def tick(self):
+        # Hors de la minute qui suit son apparition, le démon connu n'appelle
+        # plus rien : on vérifie seulement qu'il vit encore. Le parcours de
+        # tout /proc ne revient que s'il a disparu (relance d'XScreenSaver).
+        if self.daemon is not None and self.clock() > self.until and self.alive(self.daemon):
+            return True
         daemons, init = self.processes()
         if not daemons:
             self.daemon = None
@@ -305,11 +320,35 @@ class SaverDpms:
         return True
 
 
-def update_busy():
-    tool = shutil.which("winlux-update")
-    if tool is None: return False
-    try: return subprocess.run([tool, "--busy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
-    except (OSError, subprocess.SubprocessError): return False
+def update_busy(root="/"):
+    """Même réponse que `winlux-update --busy` (branche du moteur APT, à garder
+    synchronisée : scripts/test-veille-repos.py rejoue cette branche du shell
+    sur les mêmes cas et échoue si les deux réponses divergent), sans lancer de programme
+    (#3291 : 30 ms de CPU et une dizaine de processus toutes les 15 s).
+    Installation en cours : drapeau de root /run/winlux/update-inhibit dont le
+    processus vit, ou verrou POSIX d'APT/dpkg posé (/proc/locks)."""
+    flag = Path(root, "run/winlux/update-inhibit")
+    try:
+        info = os.lstat(flag)
+        if stat.S_ISREG(info.st_mode) and info.st_uid == 0:
+            pid = flag.read_text(errors="replace").rstrip("\n")   # comme $(cat …)
+            if pid.isascii() and pid.isdigit() and pid != "0" and Path(root, "proc", pid).is_dir():
+                return True
+    except OSError:
+        pass
+    inodes = set()
+    for name in ("lock-frontend", "lock"):
+        try: inodes.add(os.stat(Path(root, "var/lib/dpkg", name)).st_ino)
+        except OSError: pass
+    if not inodes: return False
+    try: locks = Path(root, "proc/locks").read_text(errors="replace").splitlines()
+    except OSError: return False
+    for line in locks:
+        # « 1: POSIX  ADVISORY  WRITE 1234 08:02:131 0 EOF », ou « 1: -> POSIX … »
+        # pour une attente : même lecture que `grep " POSIX .*:$inode "`.
+        found = re.search(r" POSIX .*:(\d+) ", line)
+        if found and int(found.group(1)) in inodes: return True
+    return False
 
 
 def watch_updates(interval=None):
@@ -336,7 +375,10 @@ def watch_updates(interval=None):
     def uninhibit(cookie):
         bus.call_sync(NAME, PATHS[0], NAME, "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 10000, None)
 
-    watcher = UpdateWatch(update_busy, inhibit, uninhibit)
+    # WINLUX_UPDATE_ROOT : racine lue par update_busy, pour les tests qui
+    # simulent une installation sans être root (test-boot-journaux.py).
+    root = os.environ.get("WINLUX_UPDATE_ROOT", "/")
+    watcher = UpdateWatch(lambda: update_busy(root), inhibit, uninhibit)
     watcher.tick()
     GLib.timeout_add_seconds(interval or int(os.environ.get("WINLUX_UPDATE_WATCH_SECONDS", "15")), watcher.tick)
     GLib.MainLoop().run()

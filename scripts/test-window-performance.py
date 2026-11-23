@@ -22,6 +22,41 @@ os.symlink(project / "scripts/winlux-snap.py", Path(shims.name) / "winlux-snap")
 manager_env = dict(os.environ, PATH=shims.name + os.pathsep + os.environ.get("PATH", ""), WINLUX_SNAP_ASSIST="0")
 manager = subprocess.Popen(["openbox", "--sm-disable", "--config-file", str(project / "integration/native/config/openbox/rc.xml")],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=manager_env)
+
+
+def manager_ready():
+    """Openbox d'Ubuntu (#3190) : « wmctrl -m » répond dès qu'il prend l'écran,
+    avant la fin de son démarrage. Une fenêtre affichée à ce moment-là attend
+    le prochain événement X reçu par openbox, indéfiniment sur un Xvfb au
+    repos : les Paramètres manquaient une fois sur huit environ. L'openbox de
+    Winlux est corrigé (integration/native/openbox/0002-fenetre-au-demarrage.patch,
+    gardé par test-openbox-demarrage.py) ; celui d'Ubuntu, pris ici dans le
+    PATH, ne l'est pas. Une sonde attend donc que sa boucle d'événements
+    tourne, ce qui n'est pas le sujet de ce test, avant d'ouvrir les
+    Paramètres."""
+    probe = Gtk.Window(title="Sonde du gestionnaire de fenêtres")
+    probe.set_default_size(40, 40)
+    probe.show_all()
+    deadline = time.monotonic() + 30
+    try:
+        for attempt in range(100000):
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            if "Sonde du gestionnaire de fenêtres" in subprocess.run(["wmctrl", "-l"], capture_output=True, text=True).stdout:
+                return
+            if time.monotonic() > deadline:
+                raise RuntimeError("openbox n'a pris en charge aucune fenêtre en 30 s")
+            # Un événement X pour openbox : sa boucle traite alors sa file.
+            subprocess.run(["xprop", "-root", "-f", "_WINLUX_SONDE_3190", "32c", "-set", "_WINLUX_SONDE_3190", str(attempt)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.05)
+    finally:
+        probe.destroy()
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+
+
+manager_ready()
 window = module["Settings"]()
 failures = []
 # The title follows the interface language since #145.

@@ -96,16 +96,18 @@ ok(icon is not None and 'width="24"' in icon.read_text(), "recherche : « Icône
 # ── 3. Cloche : pastille du nombre de notifications ─────────────────────────
 state = work / "home/.local/state/winlux"
 state.mkdir(parents=True)
-(state / "notifications.json").write_text(json.dumps([{"id": n} for n in range(3)]))
+# La pastille compte les notifications nouvelles, tenues par le démon (#3057).
+(state / "notifications.json").write_text(json.dumps([{"id": n} for n in range(12)]))
+(state / "notifications-nouvelles").write_text("3\n")
 output, icon = tray("notifications", WINLUX_PANEL_THEME="dark")
 ok(icon is not None and ">3</text>" in icon.read_text() and "<click>/usr/bin/winlux-popup notifications</click>" in output,
    "cloche : pastille « 3 »")
-(state / "notifications.json").write_text(json.dumps([{"id": n} for n in range(12)]))
+(state / "notifications-nouvelles").write_text("12\n")
 output, icon = tray("notifications", WINLUX_PANEL_THEME="dark")
 ok(icon is not None and ">9+</text>" in icon.read_text(), "cloche : « 9+ » au-delà de neuf")
-(state / "notifications.json").write_text("[]")
+(state / "notifications-nouvelles").write_text("0\n")
 output, icon = tray("notifications", WINLUX_PANEL_THEME="dark")
-ok(icon is not None and "<text" not in icon.read_text(), "cloche : pas de pastille sans notification")
+ok(icon is not None and "<text" not in icon.read_text(), "cloche : pas de pastille sans notification nouvelle (12 gardées, toutes vues)")
 
 # ── 4. Barre claire ou sombre selon le thème du compte ──────────────────────
 for theme, expected in (("Winlux-light-2", "l"), ("Winlux-dark-1", "d"), ("Adwaita", "l"), ("HighContrastInverse", "d")):
