@@ -84,6 +84,9 @@ wm=/usr/lib/winlux/winlux-openbox
 test -x "$wm" || wm=/usr/bin/openbox
 "$wm" --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid
+# Une fenêtre affichée pendant le démarrage d'openbox ne doit pas attendre un
+# autre événement X (#3190) : réveils tant qu'il démarre.
+if test -x /usr/bin/winlux-wm-reveil; then (/usr/bin/winlux-wm-reveil "$(cat /run/winlux/window-manager.pid)" </dev/null >/dev/null 2>&1 &); fi
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
 /usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
@@ -276,6 +279,9 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
         while ! pgrep -x xfdesktop >/dev/null 2>&1 && test "$tries" -lt 60; do sleep 0.5; tries=$((tries + 1)); done
         sleep 2
         pkill -USR1 -x picom 2>/dev/null
+        # Fond Aurore animé (#3079), seulement s'il est activé dans Paramètres :
+        # le bureau et le compositeur sont là, la couche peut se poser.
+        if test -x /usr/bin/winlux-fond-anime; then /usr/bin/winlux-fond-anime ensure; fi
     ) >/dev/null 2>&1 &
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
