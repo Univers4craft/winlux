@@ -77,7 +77,11 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
             "libcrypt1", "libxss1", "python3-gi-cairo",
             # Compositeur : déplacements sans traînées, ombres et coins arrondis.
-            "picom"]
+            "picom",
+            # Capture d'écran (winlux-capture, #3046) : xclip garde l'image au
+            # presse-papiers après la fermeture de l'outil (≈ 1 Mo, jusqu'au
+            # copier suivant), au lieu d'un processus Python resté ouvert.
+            "xclip"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()
