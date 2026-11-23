@@ -138,7 +138,7 @@ EFI32_ARGS = ('# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Av
               '    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable\n'
               '    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).\n'
               '    insmod efi_gop\n'
-              '    insmod efi_uga\n'
+              "    # Pas d'efi_uga : le paquet grub-efi-ia32-bin d'Ubuntu ne le fournit plus (#2957).\n"
               '    set gfxpayload=keep\n'
               'fi\n')
 
@@ -957,7 +957,7 @@ if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop
-    insmod efi_uga
+    # Pas d'efi_uga : le paquet grub-efi-ia32-bin d'Ubuntu ne le fournit plus (#2957).
     set gfxpayload=keep
 fi
 set timeout={timeout}

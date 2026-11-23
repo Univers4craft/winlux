@@ -93,6 +93,13 @@ def copyright_file(packages: list[dict], version: str) -> str:
         " sources des paquets sous GPL de l'image : /usr/share/doc/winlux/sources-gpl.tsv.\n",
         "Files: *\nCopyright: Winlux contributors\nLicense: GPL-3.0-or-later\n"
         f" Le texte complet est dans /{NOTICES_DIR}/LICENSE (et /usr/share/common-licenses/GPL-3).\n",
+        # Openbox reconstruit avec les correctifs de Winlux (voir NOTICES).
+        "Files: usr/lib/winlux/openbox/*\n"
+        "Copyright: 2003-2011 Dana Jansens, Mikael Magnusson et les contributeurs d'Openbox\n"
+        "License: GPL-2.0-or-later\n"
+        "Comment: openbox 3.6.1 (paquet source Ubuntu openbox 3.6.1-12ubuntu3) avec les\n"
+        " correctifs de Winlux publiés dans integration/native/openbox/ du dépôt.\n"
+        " Texte de la licence : /usr/share/common-licenses/GPL-2.\n",
     ]
     for package in packages:
         folder = f"{NOTICES_DIR}/crates/{package['name']}-{package['version']}"

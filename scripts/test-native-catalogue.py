@@ -189,19 +189,26 @@ with tempfile.TemporaryDirectory() as temporary:
     (sub / "Programme.lnk").write_bytes(b"x")
     assert catalogue.watched_inputs() != after, "un raccourci ajouté dans un sous-dossier doit relancer le catalogue"
     calls = {"refresh": 0, "icons": 0, "ticks": 0}
-    saved = catalogue.refresh, catalogue.window_icons, catalogue.time.sleep
+    saved = catalogue.refresh, catalogue.window_icons, catalogue.time.sleep, catalogue.ClientListWatch
+    # Sans serveur X (comme dans ce test), le démon retombe sur le sondage (#3198).
+    def sans_x(): raise OSError("No X display")
+    catalogue.ClientListWatch = sans_x
     class Stop(Exception): pass
     def tick(_seconds):
         calls["ticks"] += 1
         if calls["ticks"] == 2: (home / ".local/share/winlux").mkdir(parents=True, exist_ok=True); (home / ".local/share/winlux/launchers.json").write_text("[]")
         if calls["ticks"] >= 4: raise Stop
-    catalogue.refresh = lambda: calls.__setitem__("refresh", calls["refresh"] + 1)
+    # refresh() tourne dans un processus fils (refresh_apart) : il compte dans un fichier.
+    passes = home / "passes-refresh"
+    passes.write_text("")
+    catalogue.refresh = lambda: passes.open("a").write("x")
     catalogue.window_icons = lambda: calls.__setitem__("icons", calls["icons"] + 1)
     catalogue.time.sleep = tick
     try: catalogue.watch(full_pass=3600)
     except Stop: pass
-    finally: catalogue.refresh, catalogue.window_icons, catalogue.time.sleep = saved
+    finally: catalogue.refresh, catalogue.window_icons, catalogue.time.sleep, catalogue.ClientListWatch = saved
     assert calls["icons"] == 4, calls
+    calls["refresh"] = len(passes.read_text())
     assert calls["refresh"] == 2, f"refresh au démarrage puis une fois après le changement, pas à chaque tour : {calls}"
     (sub / "Programme.lnk").unlink(); sub.rmdir()
 

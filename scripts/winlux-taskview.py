@@ -179,14 +179,76 @@ def rename_desktop(number, name):
 
 # ── Vue des tâches (GTK) ────────────────────────────────────────────────────
 
+MARGIN = 40          # marge autour de la vue
+STRIP = 64           # bande des bureaux (bouton de 44 px) et son écart avec la grille
+GAP = 18             # écart entre deux cartes
+CARD_W, CARD_H = 24, 52  # cadre d'une carte autour de l'aperçu (mesuré sous Xvfb : 22 et 46 px)
+THUMB_MAX = (280, 170)
+
+
+def grid_layout(count, width, height):
+    """(colonnes, largeur, hauteur de l'aperçu) pour que `count` cartes et la
+    bande des bureaux tiennent dans un écran `width` × `height` (#3066).
+
+    Le nombre de colonnes retenu est celui qui donne les plus grands aperçus,
+    au format 280 × 170, sans dépasser cette taille ; à taille égale, le plus
+    grand, pour une rangée plutôt qu'une colonne."""
+    count = max(1, count)
+    room_w = width - 2 * MARGIN
+    room_h = height - 2 * MARGIN - STRIP
+    best = None
+    for columns in range(1, count + 1):
+        rows = -(-count // columns)
+        thumb_w = (room_w - (columns - 1) * GAP) // columns - CARD_W
+        thumb_h = (room_h - (rows - 1) * GAP) // rows - CARD_H
+        thumb_h = min(thumb_h, THUMB_MAX[1], thumb_w * THUMB_MAX[1] // THUMB_MAX[0])
+        if best is None or thumb_h >= best[2]:
+            best = (columns, thumb_h * THUMB_MAX[0] // THUMB_MAX[1], thumb_h)
+    columns, _, thumb_h = best
+    thumb_h = max(thumb_h, 12)
+    return columns, thumb_h * THUMB_MAX[0] // THUMB_MAX[1], thumb_h
+
+
+def _pid_file():
+    """Fichier de la vue ouverte, propre au compte (#3074)."""
+    folder = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/winlux-{os.getuid()}"
+    display = "".join(c for c in os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0] if c.isdigit()) or "0"
+    return os.path.join(folder, f"winlux-taskview-{display}.pid")
+
+
+def running_view(path):
+    """Pid d'une vue des tâches encore vivante, sinon None."""
+    try:
+        with open(path, encoding="ascii") as handle:
+            pid = int(handle.read().strip())
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            command = handle.read()
+    except (OSError, ValueError):
+        return None
+    return pid if pid != os.getpid() and b"winlux-taskview" in command else None
+
+
 def run_view():
+    # Une seule vue par écran (#3074) : un second appel ferme la première.
+    path = _pid_file()
+    other = running_view(path)
+    if other is not None:
+        try: os.kill(other, 15)
+        except OSError: pass
+        return 0
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, "w", encoding="ascii") as handle:
+            handle.write(f"{os.getpid()}\n")
+    except OSError:
+        pass
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
     gi.require_version("GdkX11", "3.0")
     from gi.repository import Gdk, GdkX11, GLib, Gtk
 
-    def thumbnail(window, width=280, height=170):
+    def thumbnail(window, width, height):
         """Aperçu de la fenêtre (contenu réel quand le compositeur le garde), sinon rien."""
         try:
             foreign = GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(), int(window, 16))
@@ -207,6 +269,10 @@ def run_view():
             self.set_decorated(False)
             self.set_keep_above(True)
             self.set_skip_taskbar_hint(True)
+            # Sur tous les bureaux (#3074) : « Nouveau bureau » ou la suppression
+            # du bureau courant changent de bureau, la vue doit suivre au lieu
+            # de rester cachée sur l'ancien, hors de portée d'Échap.
+            self.stick()
             screen = self.get_screen()
             visual = screen.get_rgba_visual()
             if visual is not None and screen.is_composited(): self.set_visual(visual)
@@ -216,7 +282,9 @@ def run_view():
             css = Gtk.CssProvider()
             css.load_from_data(b"""
               window { background: rgba(16, 18, 26, 0.86); color: #ecedf5; }
-              .card { background: #2a3040; border-radius: 8px; padding: 8px; }
+              .card { background: #2a3040; border-radius: 8px; padding: 6px; border: 2px solid transparent; }
+              flowboxchild { padding: 0; outline: none; }
+              flowboxchild:focus .card, .desk.focus { border-color: #ecedf5; background: #343b4e; }
               .card:hover { background: #343b4e; }
               .title { font-size: 13px; }
               .hint { color: #adb6c9; font-size: 15px; }
@@ -235,14 +303,26 @@ def run_view():
                 self.move(area.x, area.y)
                 self.set_default_size(area.width, area.height)
             self.fullscreen()
-            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, margin=40)
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=STRIP - 44, margin=MARGIN)
             self.add(outer)
-            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=5,
-                                    row_spacing=18, column_spacing=18, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
+            self.area = (area.width, area.height) if area is not None else (screen.get_width(), screen.get_height())
+            # FlowBox centré : GTK lui donne sa largeur naturelle, une seule
+            # colonne, et la vue débordait de l'écran (#3066). Les colonnes
+            # sont fixées par grid_layout.
+            # Clavier (#3075) : les flèches passent d'une carte à l'autre,
+            # Entrée ou Espace ouvre la fenêtre, Suppr la ferme ; Tab mène
+            # à la bande des bureaux. La souris reste sur les EventBox.
+            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, activate_on_single_click=False,
+                                    row_spacing=GAP, column_spacing=GAP, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
             outer.pack_start(self.flow, True, True, 0)
             self.desks = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER)
             outer.pack_end(self.desks, False, False, 0)
+            self.flow.connect("child-activated", lambda _, child: getattr(child.get_child(), "window_id", None)
+                              and self.open_window(child.get_child().window_id))
             self.connect("key-press-event", self.key)
+            # GTK efface l'indicateur de focus au premier affichage : remis
+            # après, sinon la carte choisie au clavier ne se voit pas.
+            self.connect("map-event", lambda *_: GLib.idle_add(self.show_focus))
             self.connect("button-release-event", lambda *_: self.close_view())
             self.refresh()
 
@@ -256,15 +336,42 @@ def run_view():
                 label = Gtk.Label(label=_t("Aucune fenêtre ouverte sur ce bureau."))
                 label.get_style_context().add_class("hint")
                 self.flow.add(label)
+            columns, thumb_w, thumb_h = grid_layout(len(shown), *self.area)
+            self.flow.set_min_children_per_line(columns)
+            self.flow.set_max_children_per_line(columns)
             for window, _, title in shown:
-                self.flow.add(self.window_card(window, title, desks, current))
+                self.flow.add(self.window_card(window, title, desks, current, thumb_w, thumb_h))
+            self.desk_events = []
             for number, name, on in desks:
-                self.desks.pack_start(self.desk_card(number, name, on, len(desks)), False, False, 0)
+                card = self.desk_card(number, name, on, len(desks))
+                self.desk_events.append(card)
+                if on: self.current_desk = card
+                self.desks.pack_start(card, False, False, 0)
             add = Gtk.Button(label="+  " + _t("Nouveau bureau"))
             add.get_style_context().add_class("new")
             add.connect("clicked", lambda *_: (new_desktop(), GLib.timeout_add(150, self.refresh_later)))
             self.desks.pack_start(add, False, False, 0)
             self.show_all()
+            first = self.flow.get_child_at_index(0)
+            if shown and first is not None:
+                first.grab_focus()
+            elif getattr(self, "current_desk", None) is not None:
+                self.current_desk.grab_focus()
+
+        def show_focus(self):
+            self.set_focus_visible(True)
+            return False
+
+        def open_window(self, window):
+            self.hide()
+            _run(["wmctrl", "-i", "-a", window])
+            Gtk.main_quit()
+
+        def go_to(self, number):
+            # Choisir un bureau y mène et ferme la vue (#3074).
+            self.hide()
+            _run(["wmctrl", "-s", str(number)])
+            Gtk.main_quit()
 
         def refresh_later(self):
             self.refresh()
@@ -274,24 +381,26 @@ def run_view():
             gdk_window = self.get_window()
             return gdk_window.get_xid() if gdk_window is not None and hasattr(gdk_window, "get_xid") else 0
 
-        def window_card(self, window, title, desks, current):
+        def window_card(self, window, title, desks, current, thumb_w, thumb_h):
             event = Gtk.EventBox()
+            event.window_id = window
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             box.get_style_context().add_class("card")
             event.add(box)
             head = Gtk.Box(spacing=6)
-            name = Gtk.Label(label=title, xalign=0, ellipsize=3, max_width_chars=30)
+            name = Gtk.Label(label=title, xalign=0, ellipsize=3, max_width_chars=30, width_chars=1)
             name.get_style_context().add_class("title")
             head.pack_start(name, True, True, 0)
             close = Gtk.Button(label="✕")
             close.get_style_context().add_class("x")
             close.set_tooltip_text(_t("Fermer"))
+            close.set_can_focus(False)  # au clavier : Suppr sur la carte
             close.connect("clicked", lambda *_: (_run(["wmctrl", "-i", "-c", window]), GLib.timeout_add(300, self.refresh_later)))
             head.pack_start(close, False, False, 0)
             box.pack_start(head, False, False, 0)
-            pixbuf = thumbnail(window)
+            pixbuf = thumbnail(window, thumb_w, thumb_h)
             image = Gtk.Image.new_from_pixbuf(pixbuf) if pixbuf else Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.DIALOG)
-            image.set_size_request(280, 170)
+            image.set_size_request(thumb_w, thumb_h)
             box.pack_start(image, True, True, 0)
 
             def clicked(_, event):
@@ -310,9 +419,7 @@ def run_view():
                     menu.popup_at_pointer(event)
                     return True
                 if event.button == 1:
-                    self.hide()
-                    _run(["wmctrl", "-i", "-a", window])
-                    Gtk.main_quit()
+                    self.open_window(window)
                 return True
             event.connect("button-release-event", clicked)
             return event
@@ -329,11 +436,17 @@ def run_view():
             box.get_style_context().add_class("desk")
             if on: box.get_style_context().add_class("on")
             event.add(box)
+            event.set_can_focus(True)
+            event.connect("focus-in-event", lambda *_: box.get_style_context().add_class("focus"))
+            event.connect("focus-out-event", lambda *_: box.get_style_context().remove_class("focus"))
+            event.connect("key-press-event", lambda _, key: key.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space)
+                          and (self.go_to(number) or True))
             box.pack_start(Gtk.Label(label=name), False, False, 0)
             if count > 1:
                 close = Gtk.Button(label="✕")
                 close.get_style_context().add_class("x")
                 close.set_tooltip_text(_t("Supprimer le bureau"))
+                close.set_can_focus(False)
                 close.connect("clicked", lambda *_: (remove_desktop(number), GLib.timeout_add(200, self.refresh_later)))
                 box.pack_start(close, False, False, 0)
 
@@ -350,8 +463,7 @@ def run_view():
                     menu.show_all()
                     menu.popup_at_pointer(event)
                 elif event.button == 1:
-                    _run(["wmctrl", "-s", str(number)])
-                    GLib.timeout_add(150, self.refresh_later)
+                    self.go_to(number)
                 return True
             event.connect("button-release-event", clicked)
             return event
@@ -373,15 +485,38 @@ def run_view():
             if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_Super_L, Gdk.KEY_Super_R):
                 self.close_view()
                 return True
+            focused = self.get_focus()
+            # Tab : de la grille au bureau courant de la bande, et retour.
+            if event.keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_KP_Tab):
+                if isinstance(focused, Gtk.FlowBoxChild) or focused is None:
+                    target = getattr(self, "current_desk", None)
+                else:
+                    target = self.flow.get_child_at_index(0)
+                    target = target if target is not None and getattr(target.get_child(), "window_id", None) else None
+                if target is not None:
+                    target.grab_focus()
+                    return True
+            if event.keyval == Gdk.KEY_Delete and isinstance(focused, Gtk.FlowBoxChild) \
+                    and getattr(focused.get_child(), "window_id", None):
+                _run(["wmctrl", "-i", "-c", focused.get_child().window_id])
+                GLib.timeout_add(300, self.refresh_later)
+                return True
             return False
 
         def close_view(self):
             Gtk.main_quit()
             return True
 
+    import signal
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: (Gtk.main_quit(), False)[1])
     view = View()
     view.present()
-    Gtk.main()
+    try:
+        Gtk.main()
+    finally:
+        if running_view(path) is None:
+            try: os.unlink(path)
+            except OSError: pass
     return 0
 
 

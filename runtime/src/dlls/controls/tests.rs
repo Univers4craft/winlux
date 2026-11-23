@@ -13,6 +13,8 @@ static LINK_URLS: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
 static CONTEXT: StdMutex<Vec<(usize, isize)>> = StdMutex::new(Vec::new());
 /// WM_DRAWITEM reçus par la fenêtre parente : (type de contrôle, élément, donnée).
 static DRAWN: StdMutex<Vec<(u32, u32, usize)>> = StdMutex::new(Vec::new());
+/// WM_MEASUREITEM reçus par la fenêtre parente : (type de contrôle, élément).
+static MEASURED: StdMutex<Vec<(u32, u32)>> = StdMutex::new(Vec::new());
 
 extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
     if msg == WM_COMMAND {
@@ -27,6 +29,17 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
             let item = *(p.add(8) as *const u32);
             let data = *(p.add(56) as *const usize);
             DRAWN.lock().unwrap().push((ctl_type, item, data));
+        }
+        return 1;
+    }
+    if msg == 0x002C && lp != 0 {
+        // WM_MEASUREITEM : CtlType, CtlID, itemID, itemWidth, itemHeight.
+        // Champ d'une combo (itemID (UINT)-1) : 11 ; éléments : 13.
+        unsafe {
+            let p = lp as *mut u32;
+            let item = *p.add(2);
+            MEASURED.lock().unwrap().push((*p, item));
+            *p.add(4) = if item == u32::MAX { 11 } else { 13 };
         }
         return 1;
     }
@@ -464,6 +477,37 @@ fn liste_deroulante_selection_et_texte() {
     let ed = child(p, "ComboBox", "", 0x2, 31, (0, 40, 150, 200));
     sendw(ed, WM_CHAR, 'x' as usize, 0);
     assert_eq!(text_of(ed), "x");
+    gui::destroy_window(p);
+}
+
+/// Combo dessinée par son propriétaire (CBS_OWNERDRAWFIXED, comme les
+/// ComboBox WinForms de Paint.NET) : WM_MEASUREITEM à la création, pour le
+/// champ et pour les éléments, et la hauteur de la fenêtre fermée est celle
+/// du champ dès CreateWindowEx, même demandée plus basse. Sinon la hauteur
+/// lue après la création (14) différait de celle que SetWindowPos imposait
+/// ensuite (25), et la boîte Redimensionner de Paint.NET replaçait ses
+/// listes sans fin (#3222).
+#[test]
+fn combo_dessinee_par_le_proprietaire_mesuree_a_la_creation() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    MEASURED.lock().unwrap().clear();
+    // CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, hauteur 14.
+    let cb = child(p, "ComboBox", "", 0x3 | 0x10 | 0x200, 32, (0, 0, 150, 14));
+    let got = MEASURED.lock().unwrap().clone();
+    println!("WM_MEASUREITEM reçus : {got:?}");
+    assert_eq!(got, vec![(3, u32::MAX), (3, 0)], "champ puis éléments");
+    assert_eq!(sendw(cb, 0x154, usize::MAX, 0), 11, "hauteur du champ");
+    assert_eq!(sendw(cb, 0x154, 0, 0), 13, "hauteur des éléments");
+    let h = gui::window_rect(cb).unwrap().height();
+    assert_eq!(h, 17, "fenêtre fermée = champ + 6, dès la création");
+    unsafe { user32::set_window_pos(cb, 0, 0, 0, 105, 14, 0x0002 | 0x0004 | 0x0010) };
+    assert_eq!(gui::window_rect(cb).unwrap().height(), h, "hauteur stable");
+    // Liste à hauteur fixe dessinée par son propriétaire : un seul message.
+    MEASURED.lock().unwrap().clear();
+    let lb = child(p, "LISTBOX", "", 0x10 | 0x40, 33, (0, 40, 150, 100));
+    assert_eq!(MEASURED.lock().unwrap().clone(), vec![(2, 0)]);
+    assert_eq!(sendw(lb, 0x1A1, 0, 0), 13);
     gui::destroy_window(p);
 }
 
@@ -2125,4 +2169,57 @@ fn infobulle_delais_par_defaut_et_reglages() {
     assert_eq!(sendw(tip, 0x0416, 0, 0) as u32, user32::get_sys_color(24));
     sendw(tip, 0x0413, 0x00FF_00FF, 0);
     assert_eq!(sendw(tip, 0x0416, 0, 0), 0x00FF_00FF);
+}
+
+/// Verrou mort entre deux fils d'interface (#3041) : un fil tape dans un
+/// champ (WM_CHAR, mesure du texte) pendant qu'un autre crée des fenêtres
+/// enfants (backend, puis nature des voisines). Le champ ne doit jamais
+/// mesurer son texte en tenant l'état des contrôles, sinon les deux verrous
+/// se prennent dans l'ordre inverse et les deux fils se bloquent.
+#[test]
+fn saisie_et_creation_de_fenetres_sur_deux_fils_sans_verrou_mort() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let fils: Vec<_> = (0..2)
+        .map(|n| {
+            let stop = stop.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let p = parent_window();
+                if n == 0 {
+                    let e = child(p, "EDIT", "", WS_BORDER | 0x80, 1, (0, 0, 60, 20));
+                    let wp = gui::wnd_proc_of(e).expect("procédure du champ");
+                    let mut k = 0;
+                    while !stop.load(Ordering::SeqCst) {
+                        unsafe { gui::call_wndproc(wp, e, WM_CHAR, 'x' as usize, 0) };
+                        k += 1;
+                        if k % 40 == 0 {
+                            let vide = w("");
+                            unsafe { gui::call_wndproc(wp, e, 0x000C, 0, vide.as_ptr() as isize) };
+                        }
+                    }
+                } else {
+                    let _voisin = child(p, "Static", "v", 0, 1, (0, 0, 10, 10));
+                    while !stop.load(Ordering::SeqCst) {
+                        let c = child(p, "Static", "c", 0, 2, (0, 0, 10, 10));
+                        unsafe { user32::destroy_window(c) };
+                    }
+                }
+                unsafe { user32::destroy_window(p) };
+                let _ = tx.send(n);
+            })
+        })
+        .collect();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    stop.store(true, Ordering::SeqCst);
+    for _ in 0..2 {
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("un fil reste bloqué : verrou mort entre l'état des contrôles et le backend");
+    }
+    for f in fils {
+        f.join().unwrap();
+    }
 }

@@ -918,6 +918,10 @@ unsafe fn new_codecvt_c() -> P {
 unsafe extern "win64" fn cvt_true(_this: P) -> bool {
     true
 }
+// Membres de codecvt<wchar_t> exportés ET placés dans sa table virtuelle :
+// jamais « inline », sinon le build release en émet une copie par unité de
+// compilation et l'export n'a plus l'adresse de la case (#3165).
+#[inline(never)]
 unsafe extern "win64" fn cvt_false(_this: P) -> bool {
     false
 }
@@ -949,6 +953,7 @@ unsafe extern "win64" fn cvt_c_unshift(
     *mid2 = first2;
     CV_NOCONV
 }
+#[inline(never)]
 unsafe extern "win64" fn cvt_length(
     _this: P,
     _state: P,
@@ -1037,15 +1042,18 @@ unsafe extern "win64" fn codecvt_w_deleting(this: P, flags: u32) -> P {
     facet_deleting(this, flags)
 }
 
+#[inline(never)]
 unsafe extern "win64" fn cvt_w_max_length(this: P) -> i32 {
     rd::<u32>(this, 20) as i32
 }
+#[inline(never)]
 unsafe extern "win64" fn cvt_w_encoding(this: P) -> i32 {
     (rd::<u32>(this, 20) == 1) as i32
 }
 
 /// Octets → caractères larges, locale « C » : un octet par caractère.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 unsafe extern "win64" fn cvt_w_do_in(
     _this: P,
     _state: P,
@@ -1072,6 +1080,7 @@ unsafe extern "win64" fn cvt_w_do_in(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 unsafe extern "win64" fn cvt_w_do_out(
     _this: P,
     _state: P,
@@ -1100,6 +1109,7 @@ unsafe extern "win64" fn cvt_w_do_out(
     }
 }
 
+#[inline(never)]
 unsafe extern "win64" fn cvt_w_do_unshift(
     _this: P,
     _state: P,

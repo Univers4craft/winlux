@@ -95,7 +95,18 @@ pub unsafe fn native_init() {
             path.as_mut_ptr().cast(),
             path.len() as u32,
         );
-        if n > 0 && (n as usize) < path.len() {
+        let mut archive = [0u8; 1024];
+        let k = GetEnvironmentVariableA(
+            c"WINLUX_SHELL_EXTRACT".as_ptr(),
+            archive.as_mut_ptr().cast(),
+            archive.len() as u32,
+        );
+        // Lue une fois : un Explorateur relancé par celui-ci ne doit pas
+        // extraire l'archive une seconde fois.
+        SetEnvironmentVariableA(c"WINLUX_SHELL_EXTRACT".as_ptr(), core::ptr::null());
+        if k > 0 && (k as usize) < archive.len() {
+            crate::explorer::extract_at(&archive[..k as usize]);
+        } else if n > 0 && (n as usize) < path.len() {
             crate::explorer::open_at(&path[..n as usize]);
         } else {
             crate::explorer::preload();
@@ -509,8 +520,27 @@ pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
+/// Cadence du tic de la fenêtre native (ms) : 500, ou moins quand
+/// l'Explorateur anime un défilement, attend une vignette ou une copie (#3155).
+pub unsafe fn native_tick_ms() -> u32 {
+    if NATIVE_APP == APP_EXPLORER {
+        crate::explorer::tick_ms()
+    } else {
+        500
+    }
+}
+
+static mut NATIVE_SLOW_AT: u32 = 0;
+
 pub unsafe fn native_tick(hwnd: Handle) {
-    let changed = crate::settings::system_tick() | crate::gfx::a11y_reload();
+    // Les fichiers d'état du système et l'accessibilité restent relus
+    // toutes les 500 ms, même quand le tic s'accélère.
+    let now = GetTickCount();
+    let slow = now.wrapping_sub(NATIVE_SLOW_AT) >= 500;
+    if slow {
+        NATIVE_SLOW_AT = now;
+    }
+    let changed = slow && (crate::settings::system_tick() | crate::gfx::a11y_reload());
     if app_tick(NATIVE_APP, &native_frame(hwnd)) || changed {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }

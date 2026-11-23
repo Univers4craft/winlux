@@ -16,6 +16,14 @@
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH:/usr/games:/usr/local/games"
 uid=$(id -u)
+# Demande de relevé d'état (#3126), propre au compte : /run/winlux est
+# collant, seul ce compte peut écrire dans control-<uid> (créé par
+# winlux-control). Les fenêtres qui lisent control.txt en continu la touchent.
+control_demand="/run/winlux/control-$uid/demande"
+# En root : dans /run (à root), jamais dans /run/winlux collant.
+if test "$uid" = 0; then control_demand=/run/winlux-control-demande; fi
+WINLUX_CONTROL_DEMAND=$control_demand
+export WINLUX_CONTROL_DEMAND
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
 if ! mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || ! test -w "$XDG_RUNTIME_DIR"; then
     XDG_RUNTIME_DIR=$(mktemp -d "/tmp/winlux-runtime-$uid.XXXXXX")
@@ -81,11 +89,14 @@ if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$
 
 # Gestionnaire de fenêtres lancé tout de suite : il démarre pendant le son
 # et le service de fichiers, attendu seulement avant la barre des tâches.
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
 rc="$HOME/.config/openbox/rc.xml"
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
 if test -f "$rc"; then
-    /usr/bin/openbox --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
 else
-    /usr/bin/openbox --sm-disable >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable >"$logs/window-manager.log" 2>&1 &
 fi
 wm_pid=$!
 pids="$pids $wm_pid"
@@ -213,6 +224,12 @@ if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk
 if test -x /usr/bin/winlux-rotation; then start rotation.log /usr/bin/winlux-rotation watch; fi
 if test -x /usr/bin/xfce4-panel; then
     start panel.log /usr/bin/xfce4-panel --disable-wm-check
+fi
+# Menu Démarrer construit caché quelques secondes après la barre, comme dans
+# la session native : le premier appui sur Windows ne démarre plus Python et
+# GTK à froid. Seule la session native le préchargeait (#2996).
+if test -x /usr/lib/winlux/winlux-start-menu; then
+    start start-menu.log /bin/sh -c 'sleep 3; exec /usr/lib/winlux/winlux-start-menu --preload'
 fi
 # Clavier ou souris USB branché pendant la session : disposition (AZERTY…)
 # et réglages réappliqués, sinon un clavier branché à chaud tape en QWERTY.
@@ -354,7 +371,7 @@ wait_desktop() {
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &
             fi
             # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
-            if test -f "/run/winlux/browser-pending-$(id -u)"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
+            if test -f "/run/winlux/browser-pending-$uid"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
             # Mise à jour disponible ou redémarrage requis (#881) : une notification
             # par avis du moteur ; Python ne démarre que si l'avis a changé.
             if test -f /run/winlux/update-notice && test -x /usr/bin/winlux-update-page &&
@@ -366,11 +383,23 @@ wait_desktop() {
     ) </dev/null >/dev/null 2>&1 &
     pids="$pids $!"
     if test "$primary" = 1; then
-        # État publié pour les Paramètres et la barre des tâches.
+        # État publié pour les Paramètres (#3126) : un relevé à l'ouverture
+        # de session, puis seulement quand une fenêtre qui le lit le demande
+        # en touchant $WINLUX_CONTROL_DEMAND (Paramètres ouverts, bureau PE).
+        # Bureau immobile : aucun programme lancé hormis le sleep, et plus de
+        # « xrandr --query » qui resondait les écrans toutes les 3 s. Les
+        # actions de winlux-control refont leur propre relevé complet.
         (
+            served="$control_demand-servie"
+            WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
+            # Dossier du compte (créé par winlux-control) : jamais celui d'un autre.
+            if test "$uid" = 0 || test -O "${control_demand%/*}"; then : >"$served" 2>/dev/null || true; fi
             while :; do
-                WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
                 sleep 3
+                test "$control_demand" -nt "$served" || continue
+                test "$uid" = 0 || test -O "${control_demand%/*}" || continue
+                : >"$served" 2>/dev/null || true
+                WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
             done
         ) </dev/null >/dev/null 2>&1 &
         pids="$pids $!"
@@ -444,7 +473,19 @@ while kill -0 "$wm_pid" 2>/dev/null; do
                 kill -USR1 "$compositor_pid" 2>/dev/null || true
             ) </dev/null >/dev/null 2>&1 &
         fi
-        while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do sleep 1; done
+        # Attente sans « sleep 1 » à chaque seconde (#3297) : avec un piège
+        # sur SIGCHLD, « wait » rend la main dès qu'un enfant se termine, le
+        # bureau ou le gestionnaire de fenêtres (POSIX, wait : un signal piégé
+        # interrompt l'attente). Un enfant qui finirait entre le test et le
+        # wait est rattrapé par un réveil toutes les 10 s (un sleep, pas dix).
+        trap : CHLD
+        ticker=
+        while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do
+            kill -0 "$ticker" 2>/dev/null || { sleep 10 & ticker=$!; }
+            wait "$desktop_pid" 2>/dev/null
+        done
+        trap - CHLD
+        kill "$ticker" 2>/dev/null || true
         kill "$desktop_pid" 2>/dev/null || true
         wait "$desktop_pid" 2>/dev/null || true
     else

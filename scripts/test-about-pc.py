@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""Paramètres > À propos : section « Votre PC » sous la version et le noyau.
+"""Paramètres > À propos : section « Votre PC » sous la version et le noyau,
+et l'en-tête « À propos de ce PC » avec le démarrage mesuré (#3053).
 
 Deux fausses machines (sysfs, /proc, DMI, variables EFI) : une tablette
 UEFI 32 bits sur batterie, Secure Boot désactivé, et un PC de bureau en BIOS
@@ -12,6 +13,7 @@ from importlib.machinery import SourceFileLoader
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -133,6 +135,144 @@ DISPLAY = {"display_count": "1", "display_1_name": "DSI-1", "display_1_mode": "1
            "display_1_internal": "1", "network": "wlan0 192.168.1.42/24", "network_connected": "1"}
 
 
+BOOT_MARKS = "init 1.42\nrecovery 1.60\ndrivers 3.95\nhardware 4.80\nservices 5.30\nxorg 6.05\nsession 7.10\ndesktop 7.38\n"
+
+
+def boot_root(work, marks=BOOT_MARKS, history="1700000000 9100\n1700086400 7200\n1700172800 7380\n"):
+    root = work / "demarrage"
+    write(root / "run/winlux/boot-times", marks)
+    write(root / "var/lib/winlux/boot-history", history)
+    return root
+
+
+def about_data(work, reports):
+    """À propos de ce PC (#3053) : temps de démarrage mesuré, tuiles, Copier."""
+    print("À propos de ce PC : données (#3053)")
+    root = boot_root(work)
+    fr = load("hw_apropos", HERE / "winlux-hardware-page.py",
+              {"WINLUX_LANG": "fr", "WINLUX_DRIVERS_REPORT": str(reports["tablette"]), "WINLUX_BOOT_ROOT": str(root)})
+    boot = fr.boot_facts()
+    print(f"    démarrage relevé : {boot}")
+    ok(boot["total_ms"] == 7380 and fr.seconds(boot["total_ms"]) == "7,4 s",
+       "démarrage : total mesuré par l'init jusqu'au bureau (7,4 s)")
+    ok(boot["phases"][0] == ("init", 1420) and ("drivers", 2350) in boot["phases"]
+       and sum(ms for _, ms in boot["phases"]) == 7380, "démarrage : étapes entre deux repères, somme = total")
+    ok(boot["slowest"] == ("drivers", 2350), "démarrage : étape la plus longue (hors noyau)")
+    ok(boot["previous_ms"] == 7200 and boot["best_ms"] == 7200 and boot["count"] == 3
+       and boot["history"] == [9100, 7200, 7380], "démarrage : précédent, meilleur, historique sans compter deux fois ce démarrage")
+    unrecorded = fr.boot_facts(boot_root(work / "x", history="1 8000\n"))
+    ok(unrecorded["history"] == [8000, 7380] and unrecorded["count"] == 2, "démarrage pas encore enregistré : ajouté à l'historique")
+    ok(fr.boot_facts(boot_root(work / "y", marks="init 1.4\nxorg 6.0\n")) == {}, "démarrage pas fini : aucun temps inventé")
+    ok(fr.boot_facts(work / "absent") == {}, "aucun repère : aucun temps")
+    ok(fr.boot_facts(boot_root(work / "z", marks="init\nx y\nok -1\ndesktop 3.5\n", history="bad\n"))["total_ms"] == 3500,
+       "repères illisibles ignorés")
+
+    tiles = fr.highlights(fr.report())
+    print(f"    tuiles tablette : {tiles}")
+    ok([t[0] for t in tiles] == ["cpu", "memory", "drive", "gpu"], "tablette : processeur, mémoire, stockage, carte graphique")
+    ok(tiles[0][2] == "Intel Atom x5-Z8350" and tiles[0][3] == "2 cœurs, 4 threads", "processeur : nom court, cœurs et threads")
+    ok(tiles[2][2] == "31,3 Go" and tiles[2][3].startswith("Mémoire eMMC"), "stockage : taille et type")
+    ok(tiles[3][2] == "Intel Atom/Celeron/Pentium Processor x5-E8000/J3xxx/N3xxx Integrated Graphics", "carte graphique : nom raccourci")
+    desk = load("hw_apropos_bureau", HERE / "winlux-hardware-page.py",
+                {"WINLUX_LANG": "fr", "WINLUX_DRIVERS_REPORT": str(reports["bureau"])})
+    tiles = desk.highlights(desk.report())
+    print(f"    tuiles bureau : {tiles}")
+    ok(("drive", "Stockage", "2,5 To", "2 disques") in tiles, "bureau : deux disques additionnés")
+    ok("gpu" not in [t[0] for t in tiles], "carte graphique non détectée : pas de tuile")
+    usb = dict(desk.report(), pc_disk_count="3", pc_disk2_kind="usb", pc_disk2_size="64000000000")
+    ok(desk.highlights(usb) == tiles, "clé USB branchée : pas comptée dans le stockage du PC")
+    ok(fr.short_cpu("11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz") == "11th Gen Intel Core i5-1135G7"
+       and fr.short_cpu("AMD Ryzen 5 5600X 6-Core Processor") == "AMD Ryzen 5 5600X 6-Core", "nom court du processeur")
+    text = fr.about_text(fr.report(), {"version": "0.2.21", "kernel": "7.0.0-14-generic", **DISPLAY}, boot)
+    print(text)
+    ok("Modèle : T100HAN (1.0)" in text and text.count("Modèle") == 1 and "Winlux 0.2.21 · noyau 7.0.0-14-generic" in text
+       and "Temps de démarrage : 7,4 s" in text and "Secure Boot : Désactivé" in text, "Copier : ce que la page montre")
+    for lang in ("en", "es", "de"):
+        other = load(f"hw_apropos_{lang}", HERE / "winlux-hardware-page.py", {"WINLUX_LANG": lang})
+        ok(other._t("Démarrage") != "Démarrage" and other._t("Copier") != "Copier", f"{lang} : page traduite")
+    brand = re.compile(r"microsoft|\bedge\b|\bbing\b", re.I)
+    source = (HERE / "winlux-hardware-page.py").read_text()
+    added = source[source.index("# À propos de ce PC (#3053)"):source.index("# ── Page Matériel et pilotes")]
+    ok(not brand.search(added), "aucune marque Microsoft dans les textes de la page")
+
+
+def about_window(work, reports):
+    """La vraie fenêtre Paramètres : page 9 affichée aussitôt, complétée ensuite."""
+    import runpy
+    import time
+    print("À propos de ce PC : fenêtre (#3053)")
+    slow = work / "bin" / "winlux-drivers-lent"
+    calls = work / "appels-drivers"
+    slow.write_text(f"#!/bin/sh\necho appel >> {calls}\nsleep 1\ncat {reports['tablette']}\n")
+    slow.chmod(0o755)
+    missing = work / "pas-encore" / "drivers.txt"
+    os.environ.update(WINLUX_LANG="fr", WINLUX_DRIVERS_REPORT=str(missing), WINLUX_BOOT_ROOT=str(boot_root(work / "fenetre")))
+    settings = runpy.run_path(str(HERE / "winlux-settings.py"), run_name="apropos_test")
+    Gtk = settings["Gtk"]
+    hardware = settings["EXTRA"].hardware_page()
+    hardware.tool = lambda: [str(slow)]
+    window = settings["Settings"]()
+    window.show_all()
+
+    def walk(widget):
+        yield widget
+        if isinstance(widget, Gtk.Container):
+            for child in widget.get_children(): yield from walk(child)
+
+    def labels():
+        return [w.get_text() for w in walk(window.body) if isinstance(w, Gtk.Label)]
+
+    def pump(cond=lambda: False, seconds=6.0):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and not cond():
+            while Gtk.events_pending(): Gtk.main_iteration_do(False)
+            time.sleep(0.01)
+        while Gtk.events_pending(): Gtk.main_iteration_do(False)
+        return cond()
+
+    start = time.monotonic()
+    window.open_page(9)
+    ms = (time.monotonic() - start) * 1000
+    print(f"    page 9 ouverte en {ms:.0f} ms, relevé du matériel absent ; textes : {labels()[:12]}")
+    ok(ms < 500, f"À propos s'ouvre sans attendre winlux-drivers ({ms:.0f} ms)")
+    ok("Détection du matériel…" in labels() and "7,4 s" in labels(), "« Détection du matériel… », démarrage déjà affiché")
+    filled = pump(lambda: "Intel Atom x5-Z8350" in labels())
+    print(f"    après réponse : {labels()[:16]}")
+    ok(filled and "Détection du matériel…" not in labels(), "les tuiles apparaissent quand le relevé a répondu")
+    ok(any(text.startswith("ASUSTeK COMPUTER INC. T100HAN") for text in labels()), "en-tête : fabricant et modèle")
+    ok("Votre PC" in labels(), "« Votre PC » complété aussi")
+    body = window.body.get_children()
+    hero = next(w for w in walk(window.body) if w.get_name() == "about-hero")
+    top = next(child for child in body if hero in list(walk(child)))
+    ok(body.index(top) < body.index(window.state_card), "en-tête et démarrage au-dessus de la carte Version / Noyau")
+    button = next(w for w in walk(hero) if isinstance(w, Gtk.Button))
+    button.clicked()
+    pump(seconds=0.2)
+    from gi.repository import Gdk
+    copied = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or ""
+    print(f"    presse-papiers : {copied!r}")
+    ok("Nom du PC : " in copied and "Temps de démarrage : 7,4 s" in copied, "Copier met la fiche du PC dans le presse-papiers")
+    pump(seconds=1.5)
+    ok(calls.read_text().count("appel") == 1, "winlux-drivers lancé une seule fois")
+
+    calls.unlink()
+    window.open_page(9)
+    window.open_page(11)
+    shown = labels()
+    pump(seconds=2.0)
+    ok(window.current == 11 and labels() == shown, "une réponse tardive ne touche pas la page affichée ensuite")
+
+    missing.parent.mkdir(parents=True, exist_ok=True)
+    missing.write_text(reports["tablette"].read_text())
+    calls.unlink(missing_ok=True)
+    start = time.monotonic()
+    window.open_page(9)
+    ms = (time.monotonic() - start) * 1000
+    pump(seconds=1.2)
+    ok("Intel Atom x5-Z8350" in labels() and not calls.exists(), f"relevé présent : tout affiché d'emblée, sans commande ({ms:.0f} ms)")
+    window.destroy()
+
+
 def main():
     work = Path(tempfile.mkdtemp())
     bindir = work / "bin"
@@ -186,9 +326,7 @@ def main():
        "bureau : disques avec modèle, type et taille")
     ok(not any(not value for value in rows.values()), "aucune ligne vide")
 
-    pages = (HERE / "winlux-settings-pages.py").read_text()
-    ok('9: "sections_about"' in pages and "hardware.pc_section(self, self.status)" in pages,
-       "À propos (page 9) : « Votre PC » ajouté sous la version et le noyau")
+    about_data(work, reports)
 
     try:
         import gi
@@ -238,6 +376,7 @@ def main():
     window = Window()
     empty.pc_section(window, {})
     ok(not texts(window.body), "rien de détecté : pas de section vide")
+    about_window(work, reports)
     print(f"À propos / Votre PC : {checks} vérifications.")
 
 

@@ -12,11 +12,18 @@
 //! itinérance ni limite de données : Winlux n'a pas de forfait mobile à lire.
 //! NetworkStatusChanged rend un jeton sans jamais appeler le gestionnaire.
 //!
+//! Un profil sert aussi IConnectionProfile2 (#3031, Audacity et le module
+//! réseau de Qt) : ni WWAN ni domaine, WLAN quand l'interface de la route
+//! est sans fil (`/sys/class/net/<if>/wireless`) ; WlanConnectionProfileDetails
+//! n'existe que pour un profil WLAN (Learn : IsWlanConnectionProfile
+//! « determines whether or not WlanConnectionProfileDetails is null »).
+//!
 //! Pas encore servies (E_NOTIMPL, journalisé une fois chacune) :
 //! GetLanIdentifiers, GetHostNames, GetProxyConfigurationAsync,
 //! GetSortedEndpointPairs, et sur un profil GetNetworkNames,
 //! GetDataPlanStatus, NetworkAdapter, GetLocalUsage…,
-//! NetworkSecuritySettings.
+//! NetworkSecuritySettings, GetNetworkUsageAsync,
+//! GetConnectivityIntervalsAsync.
 //!
 //! Sources : documentation publique Microsoft (NetworkInformation,
 //! GetInternetConnectionProfile « or null if there's no connection profile
@@ -45,16 +52,21 @@ const fn g(d1: u32, d2: u16, d3: u16, d4: u64) -> Guid {
 
 const IID_IINSPECTABLE: Guid = g(0xAF86_E2E0, 0xB12D, 0x4C6A, 0x9C5A_D7AA_6510_1E90);
 const IID_IAGILEOBJECT: Guid = g(0x94EA_2B94, 0xE9CC, 0x49E0, 0xC0FF_EE64_CA8F_5B90);
-const IID_STATICS: Guid = g(0x5074_f851, 0x950d, 0x4165, 0x9c15_3656_1948_1eea);
-const IID_CONNECTION_PROFILE: Guid = g(0x71ba_143c, 0x598e, 0x49d0, 0x84eb_8feb_aedc_c195);
-const IID_CONNECTION_COST: Guid = g(0xbad7_d829, 0x3416, 0x4b10, 0xa202_bac0_b075_bdae);
-const IID_CONNECTION_COST2: Guid = g(0x8e11_3a05, 0xe209, 0x4549, 0xbb25_5e0d_b691_cb05);
-const IID_VIEW_PROFILE: Guid = g(0x6db1_b492, 0x3852, 0x5df8, 0xa29d_6944_002f_58d4);
-const IID_ITERABLE_PROFILE: Guid = g(0x34da_bef9, 0x87d0, 0x5b1c, 0xa7ac_9d29_0ade_b0c8);
-const IID_ITERATOR_PROFILE: Guid = g(0x8991_3732, 0xa08b, 0x5cb2, 0xaf16_bbbb_2223_839e);
+pub(crate) const IID_STATICS: Guid = g(0x5074_f851, 0x950d, 0x4165, 0x9c15_3656_1948_1eea);
+pub(crate) const IID_CONNECTION_PROFILE: Guid =
+    g(0x71ba_143c, 0x598e, 0x49d0, 0x84eb_8feb_aedc_c195);
+pub(crate) const IID_CONNECTION_PROFILE2: Guid =
+    g(0xe204_5145, 0x4c9f, 0x400c, 0x9150_7ec7_d6e2_888a);
+pub(crate) const IID_WLAN_DETAILS: Guid = g(0x5620_98cb, 0xb35a, 0x4bf1, 0xa884_b755_7e88_ff86);
+pub(crate) const IID_CONNECTION_COST: Guid = g(0xbad7_d829, 0x3416, 0x4b10, 0xa202_bac0_b075_bdae);
+pub(crate) const IID_CONNECTION_COST2: Guid = g(0x8e11_3a05, 0xe209, 0x4549, 0xbb25_5e0d_b691_cb05);
+pub(crate) const IID_VIEW_PROFILE: Guid = g(0x6db1_b492, 0x3852, 0x5df8, 0xa29d_6944_002f_58d4);
+pub(crate) const IID_ITERABLE_PROFILE: Guid = g(0x34da_bef9, 0x87d0, 0x5b1c, 0xa7ac_9d29_0ade_b0c8);
+pub(crate) const IID_ITERATOR_PROFILE: Guid = g(0x8991_3732, 0xa08b, 0x5cb2, 0xaf16_bbbb_2223_839e);
 
 const CLASS: &str = "Windows.Networking.Connectivity.NetworkInformation";
 const PROFILE_CLASS: &str = "Windows.Networking.Connectivity.ConnectionProfile";
+const WLAN_CLASS: &str = "Windows.Networking.Connectivity.WlanConnectionProfileDetails";
 const COST_CLASS: &str = "Windows.Networking.Connectivity.ConnectionCost";
 const VIEW_CLASS: &str =
     "Windows.Foundation.Collections.IVectorView`1<Windows.Networking.Connectivity.ConnectionProfile>";
@@ -174,6 +186,8 @@ fn profile_from(route: &str, ipv6_route: &str) -> Option<(String, i32)> {
 #[repr(C)]
 struct Object {
     vt: *const (),
+    /// Seconde interface à +8 (IConnectionProfile2 d'un profil), sinon nul.
+    vt2: *const (),
     refs: AtomicU32,
     kind: Kind,
 }
@@ -182,17 +196,19 @@ enum Kind {
     Profile {
         name: String,
         level: i32,
+        /// Interface sans fil (IsWlanConnectionProfile).
+        wlan: bool,
     },
+    /// WlanConnectionProfileDetails de l'interface nommée.
+    Wlan { iface: String },
     /// Itérateur sur une vue de profils, qu'il tient par une référence.
-    Iter {
-        view: usize,
-        pos: AtomicU32,
-    },
+    Iter { view: usize, pos: AtomicU32 },
 }
 
 fn boxed<const N: usize>(vt: &'static VTable<N>, kind: Kind) -> usize {
     Box::into_raw(Box::new(Object {
         vt: vt as *const VTable<N> as *const (),
+        vt2: std::ptr::null(),
         refs: AtomicU32::new(1),
         kind,
     })) as usize
@@ -242,6 +258,11 @@ unsafe fn qi_single(this: usize, iid: *const u8, out: *mut usize, own: &[Guid], 
 // --- ConnectionProfile ---------------------------------------------------
 
 unsafe extern "win64" fn p_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    if !out.is_null() && read_guid(iid) == Some(IID_CONNECTION_PROFILE2) {
+        obj(this).refs.fetch_add(1, Ordering::SeqCst);
+        *out = this + 8;
+        return S_OK;
+    }
     qi_single(
         this,
         iid,
@@ -303,8 +324,136 @@ static PROFILE_VTBL: VTable<15> = VTable([
 ]);
 
 fn new_profile(name: String, level: i32) -> usize {
-    boxed(&PROFILE_VTBL, Kind::Profile { name, level })
+    let wlan = std::path::Path::new("/sys/class/net")
+        .join(&name)
+        .join("wireless")
+        .exists();
+    new_profile_with(name, level, wlan)
 }
+
+fn new_profile_with(name: String, level: i32, wlan: bool) -> usize {
+    let p = boxed(&PROFILE_VTBL, Kind::Profile { name, level, wlan });
+    unsafe { (*(p as *mut Object)).vt2 = &PROFILE2_VTBL as *const VTable<15> as *const () };
+    p
+}
+
+// --- IConnectionProfile2, à +8 du profil (#3031) --------------------------
+
+unsafe extern "win64" fn p2_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    p_qi(this - 8, iid, out)
+}
+unsafe extern "win64" fn p2_add_ref(this: usize) -> u32 {
+    o_add_ref(this - 8)
+}
+unsafe extern "win64" fn p2_release(this: usize) -> u32 {
+    release_obj(this - 8)
+}
+unsafe fn profile_wlan(this2: usize) -> Option<(String, bool)> {
+    match &obj(this2 - 8).kind {
+        Kind::Profile { name, wlan, .. } => Some((name.clone(), *wlan)),
+        _ => None,
+    }
+}
+unsafe extern "win64" fn p2_is_wwan(_this: usize, out: *mut u8) -> i32 {
+    put(out, 0)
+}
+unsafe extern "win64" fn p2_is_wlan(this: usize, out: *mut u8) -> i32 {
+    match profile_wlan(this) {
+        Some((_, wlan)) => put(out, wlan as u8),
+        None => E_INVALIDARG,
+    }
+}
+/// WwanConnectionProfileDetails, ServiceProviderGuid, GetSignalBars : null.
+/// Pas de profil mobile ni d'opérateur ; GetSignalBars rend un
+/// IReference<byte> qui peut être nul (la barre de force du signal n'est
+/// pas mesurée ici).
+unsafe extern "win64" fn p2_null(_this: usize, out: *mut usize) -> i32 {
+    put(out, 0)
+}
+unsafe extern "win64" fn p2_wlan_details(this: usize, out: *mut usize) -> i32 {
+    match profile_wlan(this) {
+        Some((iface, true)) => put(out, boxed(&WLAN_VTBL, Kind::Wlan { iface })),
+        Some((_, false)) => put(out, 0),
+        None => E_INVALIDARG,
+    }
+}
+/// DomainConnectivityLevel.None : la session n'appartient à aucun domaine.
+unsafe extern "win64" fn p2_domain(_this: usize, out: *mut i32) -> i32 {
+    put(out, 0)
+}
+extern "win64" fn p2_usage(_this: usize) -> i32 {
+    not_implemented("ConnectionProfile.GetNetworkUsageAsync")
+}
+extern "win64" fn p2_intervals(_this: usize) -> i32 {
+    not_implemented("ConnectionProfile.GetConnectivityIntervalsAsync")
+}
+
+static PROFILE2_VTBL: VTable<15> = VTable([
+    p2_qi as *const (),
+    p2_add_ref as *const (),
+    p2_release as *const (),
+    get_iids as *const (),
+    p_class as *const (),
+    trust_level as *const (),
+    p2_is_wwan as *const (),
+    p2_is_wlan as *const (),
+    p2_null as *const (), // WwanConnectionProfileDetails
+    p2_wlan_details as *const (),
+    p2_null as *const (), // ServiceProviderGuid
+    p2_null as *const (), // GetSignalBars
+    p2_domain as *const (),
+    p2_usage as *const (),     // GetNetworkUsageAsync
+    p2_intervals as *const (), // GetConnectivityIntervalsAsync
+]);
+
+// --- WlanConnectionProfileDetails ------------------------------------------
+
+unsafe extern "win64" fn w_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    qi_single(
+        this,
+        iid,
+        out,
+        &[IID_WLAN_DETAILS],
+        "WlanConnectionProfileDetails",
+    )
+}
+unsafe extern "win64" fn w_class(_this: usize, out: *mut usize) -> i32 {
+    hstring(WLAN_CLASS, out)
+}
+/// SSID du réseau sans fil de l'interface, lu par `iw dev <if> link` ;
+/// chaîne vide si l'outil manque ou ne le donne pas.
+fn connected_ssid(iface: &str) -> String {
+    std::process::Command::new("iw")
+        .args(["dev", iface, "link"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .map(|o| ssid_from_iw(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default()
+}
+fn ssid_from_iw(text: &str) -> String {
+    text.lines()
+        .find_map(|l| l.trim_start().strip_prefix("SSID: "))
+        .unwrap_or_default()
+        .to_string()
+}
+unsafe extern "win64" fn w_ssid(this: usize, out: *mut usize) -> i32 {
+    match &obj(this).kind {
+        Kind::Wlan { iface } => hstring(&connected_ssid(iface), out),
+        _ => E_INVALIDARG,
+    }
+}
+
+static WLAN_VTBL: VTable<7> = VTable([
+    w_qi as *const (),
+    o_add_ref as *const (),
+    o_release as *const (),
+    get_iids as *const (),
+    w_class as *const (),
+    trust_level as *const (),
+    w_ssid as *const (), // GetConnectedSsid
+]);
 
 // --- ConnectionCost : IConnectionCost à l'objet, IConnectionCost2 à +8 ---
 
@@ -783,6 +932,66 @@ mod tests {
         );
         assert_eq!(profile_from(LOCAL, ""), Some(("eth0".into(), LOCAL_ACCESS)));
         assert_eq!(profile_from(NONE, ""), None);
+    }
+
+    /// Audacity (#3031) : le module réseau de Qt demande IConnectionProfile2
+    /// au profil ; elle est servie à +8, avec les détails WLAN pour une
+    /// interface sans fil seulement.
+    #[test]
+    fn profil2_wlan_et_filaire_3031() {
+        unsafe {
+            for (name, wlan) in [("wlan0", true), ("eth0", false)] {
+                let p = new_profile_with(name.into(), INTERNET_ACCESS, wlan);
+                let mut p2 = 0usize;
+                assert_eq!(p_qi(p, IID_CONNECTION_PROFILE2.as_ptr(), &mut p2), S_OK);
+                assert_eq!(p2, p + 8);
+                let vt = &*(*(p2 as *const *const VTable<15>));
+                let get_bool: unsafe extern "win64" fn(usize, *mut u8) -> i32 =
+                    std::mem::transmute(vt.0[7]);
+                let mut b = 9u8;
+                assert_eq!(get_bool(p2, &mut b), S_OK, "IsWlanConnectionProfile");
+                assert_eq!(b, wlan as u8);
+                let get_bool: unsafe extern "win64" fn(usize, *mut u8) -> i32 =
+                    std::mem::transmute(vt.0[6]);
+                assert_eq!(get_bool(p2, &mut b), S_OK, "IsWwanConnectionProfile");
+                assert_eq!(b, 0);
+                let get_obj: unsafe extern "win64" fn(usize, *mut usize) -> i32 =
+                    std::mem::transmute(vt.0[9]);
+                let mut d = 1usize;
+                assert_eq!(get_obj(p2, &mut d), S_OK, "WlanConnectionProfileDetails");
+                assert_eq!(d != 0, wlan);
+                if d != 0 {
+                    let mut wd = 0usize;
+                    assert_eq!(w_qi(d, IID_WLAN_DETAILS.as_ptr(), &mut wd), S_OK);
+                    assert_eq!(o_release(wd), 1);
+                    assert_eq!(o_release(d), 0);
+                }
+                for i in [8, 10, 11] {
+                    let get_obj: unsafe extern "win64" fn(usize, *mut usize) -> i32 =
+                        std::mem::transmute(vt.0[i]);
+                    let mut o = 1usize;
+                    assert_eq!(get_obj(p2, &mut o), S_OK, "entrée {i}");
+                    assert_eq!(o, 0, "entrée {i}");
+                }
+                let mut level = 7;
+                assert_eq!(p2_domain(p2, &mut level), S_OK);
+                assert_eq!(level, 0);
+                // Même objet : IUnknown depuis IConnectionProfile2 rend la base.
+                let mut unk = 0usize;
+                assert_eq!(p2_qi(p2, IID_IUNKNOWN.as_ptr(), &mut unk), S_OK);
+                assert_eq!(unk, p);
+                assert_eq!(o_release(unk), 2);
+                assert_eq!(p2_release(p2), 1);
+                assert_eq!(o_release(p), 0);
+            }
+            assert_eq!(
+                ssid_from_iw(
+                    "Connected to 00:11:22:33:44:55 (on wlan0)\n\tSSID: Maison\n\tfreq: 2412\n"
+                ),
+                "Maison"
+            );
+            assert_eq!(ssid_from_iw("Not connected.\n"), "");
+        }
     }
 
     /// Teams (#2215) : fabrique, profil, coût, vue des profils.

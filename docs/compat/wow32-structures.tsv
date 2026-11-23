@@ -4,6 +4,7 @@
 audio_com.rs	Iface	x86	interface WASAPI (mmdevapi) : mandataire x86 décrit dans wow32/com.rs (IMMDeviceEnumerator…) ; wasapi32.c
 cabinet_lz.rs	FdiNotification	x86	disposition x86 de 40 octets écrite par x86_notification (#1758)
 com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
+comdlg32_files.rs	OfNotify	interne	OFNOTIFY du crochet OFN_ENABLEHOOK (#2936), x64 seulement : FileHook::open refuse le crochet si pointer_size() != 8 ; en x86 ce serait 20 octets (NMHDR 12 + 2 pointeurs), non servi
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
 comdlg32_ui.rs	LvItemW	a-verifier	
@@ -12,6 +13,7 @@ composition.rs	Factory	a-verifier
 composition.rs	Handler	a-verifier	
 composition.rs	Slot	a-verifier	
 controls.rs	DrawItemStruct	a-verifier	
+controls.rs	MeasureItemStruct	x86	WM_MEASUREITEM traduit par wow32/comctl.rs (MEASUREITEMSTRUCT, 24 octets en x86 : itemData en ULONG_PTR de 4 octets)
 controls/bars.rs	CbeItem	a-verifier	
 controls/bars.rs	NmHdr	a-verifier	
 controls/bars.rs	NmToolbar	a-verifier	
@@ -262,6 +264,8 @@ storage_settings.rs	KidsIter	a-verifier	parcours WinRT de ApplicationDataContain
 taskbarlist_com.rs	Obj	a-verifier	
 taskschd.rs	Obj	a-verifier	
 teams_win32.rs	AssocReg	a-verifier	
+textserv.rs	Hote	interne	test unitaire (hôte factice du module tests)
+textserv.rs	TextServices	interne	objet COM x64 seulement : create_text_services refuse (E_NOTIMPL, file:line) si wow32::active(), avant d'écrire ppUnk ; jamais remis à un programme 32 bits (#3268)
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe

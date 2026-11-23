@@ -228,7 +228,7 @@ if [ "\${grub_platform}-\${grub_cpu}" = "efi-i386" ]; then
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop
-    insmod efi_uga
+    # Pas d'efi_uga : le paquet grub-efi-ia32-bin d'Ubuntu ne le fournit plus (#2957).
     set gfxpayload=keep
 fi
 set timeout=1

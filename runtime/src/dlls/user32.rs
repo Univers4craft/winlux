@@ -465,6 +465,7 @@ unsafe fn create_window_inner(
             ex_style,
             pending: Vec::new(),
             menu_bar: 0,
+            frame: [0; 4],
             painting: false,
         },
     );
@@ -509,6 +510,12 @@ unsafe fn create_window_inner(
                 b.set_decorations(hwnd, 0);
             } else if let Some(level) = popup_decorations(style) {
                 b.set_decorations(hwnd, level);
+            }
+            if fixed_size_frame(style) {
+                b.set_resizable(hwnd, false);
+            }
+            if let Some((minimize, maximize)) = caption_buttons(style) {
+                b.set_caption_buttons(hwnd, minimize, maximize);
             }
             // Fenêtre possédée : toujours au-dessus de sa propriétaire, comme
             // sous Windows (boîte « Vie privée » de VLC, #1068).
@@ -604,11 +611,6 @@ unsafe fn create_window_inner(
     let initial = rect;
     let rect = gui::window_rect(hwnd).unwrap_or(rect);
     let shown = gui::is_window_visible(hwnd);
-    // WM_SIZE donne la zone client : la barre de menus en est retirée.
-    let (w, h) = (
-        rect.width(),
-        (rect.height() - gui::menu_bar_height(hwnd)).max(0),
-    );
     with_backend(|b| {
         if rect != initial {
             b.set_window_rect(hwnd, rect);
@@ -617,7 +619,14 @@ unsafe fn create_window_inner(
             b.show_window(hwnd, true);
         }
     });
+    if shown && !empty_top_level(hwnd) {
+        sync_frame(hwnd);
+    }
     let visible = shown;
+    // WM_SIZE donne la zone client : sans la barre de menus ni le cadre du
+    // gestionnaire (#2984).
+    let client = gui::window_client_rect(hwnd).unwrap_or(rect);
+    let (w, h) = (client.width(), client.height());
 
     // WM_SIZE puis, si visible, demande de peinture.
     gui::post_to_window(
@@ -804,6 +813,7 @@ unsafe fn click_activate(m: &Msg) {
 
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
+        gui::deliver_sent();
         gui::pump_backend();
         super::chromium_win32::deliver_win_events();
         super::ws2_32::pump_async();
@@ -895,6 +905,7 @@ pub unsafe extern "win64" fn peek_message_a(
 }
 
 unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
+    gui::deliver_sent();
     gui::pump_backend();
     super::chromium_win32::deliver_win_events();
     super::ws2_32::pump_async();
@@ -961,19 +972,24 @@ pub unsafe extern "win64" fn translate_message(msg: *const Msg) -> i32 {
     // disposition clavier en produit un. Le backend X11 a mémorisé le caractère
     // effectif (majuscules, ponctuation, accents) ; à défaut on retombe sur la
     // disposition US non modifiée.
-    if m.message == gui::WM_KEYDOWN {
-        if let Some(prefix) = gui::take_key_prefix(m.hwnd, m.wparam, m.lparam) {
-            gui::post_to_window(
-                m.hwnd,
-                gui::Msg::new(m.hwnd, gui::WM_CHAR, prefix as usize, m.lparam),
-            );
-        }
-        if let Some(ch) = gui::take_key_char(m.hwnd, m.wparam, m.lparam) {
-            return gui::post_to_window(
-                m.hwnd,
-                gui::Msg::new(m.hwnd, gui::WM_CHAR, ch as usize, m.lparam),
-            ) as i32;
-        }
+    // Une frappe système (Alt tenu) donne WM_SYSCHAR au lieu de WM_CHAR
+    // (Learn : TranslateMessage ; #3054).
+    let char_message = match m.message {
+        gui::WM_KEYDOWN => gui::WM_CHAR,
+        gui::WM_SYSKEYDOWN => gui::WM_SYSCHAR,
+        _ => return 0,
+    };
+    if let Some(prefix) = gui::take_key_prefix(m.hwnd, m.wparam, m.lparam) {
+        gui::post_to_window(
+            m.hwnd,
+            gui::Msg::new(m.hwnd, char_message, prefix as usize, m.lparam),
+        );
+    }
+    if let Some(ch) = gui::take_key_char(m.hwnd, m.wparam, m.lparam) {
+        return gui::post_to_window(
+            m.hwnd,
+            gui::Msg::new(m.hwnd, char_message, ch as usize, m.lparam),
+        ) as i32;
     }
     0
 }
@@ -1089,9 +1105,9 @@ unsafe fn caption_click(
     } else {
         return None;
     };
-    let origin = gui::screen_rect(hwnd)?;
-    let x = origin.left + (lparam as u32 as u16 as i16 as i32);
-    let y = origin.top + ((lparam as u32 >> 16) as u16 as i16 as i32);
+    let (ox, oy) = gui::content_origin(hwnd)?;
+    let x = ox + (lparam as u32 as u16 as i16 as i32);
+    let y = oy + ((lparam as u32 >> 16) as u16 as i16 as i32);
     let screen = pack_i16_pair(x, y);
     let hit = send_message_w(top, 0x0084, 0, screen);
     if window_diag() {
@@ -1199,10 +1215,35 @@ unsafe fn send_message(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
     if gui::wnd_proc_of(hwnd).is_none() && gui::foreign_window(hwnd).is_some() {
         return send_to_foreign(hwnd, message, wparam, lparam);
     }
-    match gui::wnd_proc_of(hwnd) {
-        Some(wp) => gui::call_wndproc(wp, hwnd, message, wparam, lparam),
-        None => gui::def_window_proc(hwnd, message, wparam, lparam),
+    let Some(wp) = gui::wnd_proc_of(hwnd) else {
+        return gui::def_window_proc(hwnd, message, wparam, lparam);
+    };
+    // Fenêtre d'un autre fil : Windows bascule sur le fil qui l'a créée et y
+    // appelle la procédure (Learn, SendMessage). L'appeler ici faisait
+    // tourner la procédure sur deux fils à la fois : le fil de Notepad++ qui
+    // relit ses onglets (TCM_GETITEMW) croisait le fil principal, qui lisait
+    // alors un objet nul ou libéré (#2885).
+    let me = std::thread::current().id();
+    if let Some(owner) = gui::window_owner(hwnd).filter(|o| *o != me) {
+        let wide = super::controls::current_charset();
+        let job: Box<dyn FnOnce() -> isize + Send> = Box::new(move || {
+            // SAFETY : mêmes arguments que l'appel direct, sur le fil
+            // propriétaire ; la procédure est relue, elle a pu changer.
+            let call = || match gui::wnd_proc_of(hwnd) {
+                Some(wp) => unsafe { gui::call_wndproc(wp, hwnd, message, wparam, lparam) },
+                None => 0,
+            };
+            match wide {
+                Some(w) => super::controls::with_charset(w, call),
+                None => call(),
+            }
+        });
+        return match gui::send_to_owner(owner, job) {
+            Ok(r) => r,
+            Err(job) => job(),
+        };
     }
+    gui::call_wndproc(wp, hwnd, message, wparam, lparam)
 }
 
 /// Message pour la fenêtre d'un autre processus (#2046) : seule la lecture
@@ -1302,6 +1343,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     // SW_MAXIMIZE (3) donne une taille à la fenêtre : elle est montrée.
     let map = cmd != gui::SW_HIDE && (cmd == 3 || !empty_top_level(hwnd));
     with_backend(|b| b.show_window(hwnd, map));
+    if map {
+        sync_frame(hwnd);
+    }
     if was != show {
         publish_shared(hwnd);
     }
@@ -1331,6 +1375,21 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         w::notify_win_event(event, hwnd);
     }
     was as i32
+}
+
+/// Cadre du gestionnaire appris au premier affichage d'une fenêtre de
+/// premier niveau (possédée ou non) : le rectangle demandé par le programme
+/// le comprend, et la zone client est l'intérieur, comme sous Windows
+/// (#2984).
+fn sync_frame(hwnd: usize) {
+    if gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0) {
+        return;
+    }
+    let mut frame = None;
+    with_backend(|b| frame = b.frame_extents(hwnd));
+    if let Some(frame) = frame.filter(|f| *f != gui::frame_of(hwnd)) {
+        gui::set_frame_keep_outer(hwnd, frame);
+    }
 }
 
 /// Fenêtre de premier niveau à barre de titre affichée : si son cadre
@@ -1366,15 +1425,9 @@ unsafe fn fit_to_work_area(hwnd: usize) {
     };
     let work = super::monitors::work_rect(&monitor.rect, &gui::work_area());
     let resizable = style & WS_THICKFRAME != 0;
-    // Loin des bords, même avec un cadre épais : le gestionnaire n'est pas
-    // interrogé.
-    if super::monitors::fit_in_work_area(&rect, &work, [64; 4], resizable) == rect {
-        return;
-    }
-    let mut frame = None;
-    with_backend(|b| frame = b.frame_extents(hwnd));
-    let fitted =
-        super::monitors::fit_in_work_area(&rect, &work, frame.unwrap_or([0; 4]), resizable);
+    // Le rectangle de la fenêtre comprend déjà le cadre du gestionnaire
+    // (#2984) : rien à ajouter autour.
+    let fitted = super::monitors::fit_in_work_area(&rect, &work, [0; 4], resizable);
     if fitted == rect {
         return;
     }
@@ -1753,19 +1806,13 @@ pub unsafe extern "win64" fn set_window_pos(
         restack_child(hwnd, _insert_after);
     }
 
-    let mut visibility_changed = false;
-    if flags & SWP_SHOWWINDOW != 0 {
-        visibility_changed = !gui::set_visible(hwnd, true);
-        let map = !empty_top_level(hwnd);
-        with_backend(|backend| backend.show_window(hwnd, map));
+    let visibility_changed = if flags & SWP_SHOWWINDOW != 0 {
+        set_visibility(hwnd, true)
     } else if flags & SWP_HIDEWINDOW != 0 {
-        visibility_changed = gui::set_visible(hwnd, false);
-        with_backend(|backend| backend.show_window(hwnd, false));
-    }
-
-    if visibility_changed {
-        publish_shared(hwnd);
-    }
+        set_visibility(hwnd, false)
+    } else {
+        false
+    };
 
     if flags & SWP_FRAMECHANGED != 0 {
         frame_changed(hwnd, rect, flags);
@@ -1780,9 +1827,17 @@ pub unsafe extern "win64" fn set_window_pos(
     // puis hauteur) retombait à 160x160 quand ils étaient postés (#2044).
     // Une fenêtre qui ne passe pas WM_WINDOWPOSCHANGED à DefWindowProc les
     // reçoit postés, comme avant.
-    let size_msg =
-        resized.then(|| pack_i16_pair(width, (height - gui::menu_bar_height(hwnd)).max(0)));
-    let move_msg = moved.then(|| pack_i16_pair(left, top));
+    // WM_SIZE : la zone client, sans barre de menus ni cadre (#2984).
+    let size_msg = resized.then(|| {
+        let c = gui::window_client_rect(hwnd).unwrap_or_default();
+        pack_i16_pair(c.width(), c.height())
+    });
+    // WM_MOVE : origine de la zone client, sous le cadre du gestionnaire
+    // pour une fenêtre de premier niveau (Learn, « WM_MOVE »).
+    let move_msg = moved.then(|| {
+        let [l, _, t, _] = gui::frame_of(hwnd);
+        pack_i16_pair(left + l, top + t)
+    });
     let mut pending = None;
     if moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0 {
         let mut done = flags;
@@ -1959,6 +2014,13 @@ struct NcCalcSizeParams {
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
     if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        if window_diag() {
+            eprintln!(
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
+                crate::wow32::pointer_size() * 8,
+                gui::window_parent(hwnd).unwrap_or(0)
+            );
+        }
         return;
     }
     let mut pos = WindowPos {
@@ -1977,6 +2039,18 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     gui::reset_default_nccalcsize();
     send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
     let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
+    if window_diag() {
+        let r = params.rects[0];
+        eprintln!(
+            "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE fenêtre ({},{})-({},{}) → client ({},{})-({},{}), \
+             DefWindowProc {}, cadre maison {own}, légende à elle {}, en couches sans titre {} (#3205)",
+            rect.left, rect.top, rect.right, rect.bottom,
+            r.left, r.top, r.right, r.bottom,
+            gui::default_nccalcsize_seen(),
+            has_own_caption(hwnd),
+            drawn_whole(hwnd)
+        );
+    }
     if !own {
         pending_frame().retain(|(h, _, _)| *h != hwnd);
     }
@@ -2586,12 +2660,46 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
     }
 }
 
+/// Montre ou cache la fenêtre sans message ni activation, comme
+/// SWP_SHOWWINDOW et SWP_HIDEWINDOW.
+/// Rend vrai si la visibilité a changé.
+fn set_visibility(hwnd: usize, show: bool) -> bool {
+    let was = gui::set_visible(hwnd, show);
+    if show {
+        let map = !empty_top_level(hwnd);
+        with_backend(|backend| backend.show_window(hwnd, map));
+        if map {
+            sync_frame(hwnd);
+        }
+    } else {
+        with_backend(|backend| backend.show_window(hwnd, false));
+    }
+    if was != show {
+        publish_shared(hwnd);
+    }
+    was != show
+}
+
 unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
         GWL_STYLE => {
-            if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+            let style = value as u32;
+            if gui::set_window_style(hwnd, style).is_some_and(|o| o != style) {
                 publish_shared(hwnd);
+                if style & WS_CHILD == 0 {
+                    with_backend(|b| {
+                        b.set_resizable(hwnd, !fixed_size_frame(style));
+                        let (minimize, maximize) = caption_buttons(style).unwrap_or((true, true));
+                        b.set_caption_buttons(hwnd, minimize, maximize);
+                    });
+                }
+            }
+            // WS_VISIBLE posé ou ôté : IsWindowVisible suit le style (Learn,
+            // « IsWindowVisible », #3247).
+            let show = style & 0x1000_0000 != 0; // WS_VISIBLE
+            if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
+                set_visibility(hwnd, show);
             }
         }
         GWL_EXSTYLE => {
@@ -2812,18 +2920,32 @@ pub unsafe extern "win64" fn adjust_window_rect_ex(
     rect: *mut Rect,
     style: u32,
     menu: i32,
-    _ex_style: u32,
+    ex_style: u32,
 ) -> i32 {
     if rect.is_null() {
         return 0;
     }
-    // Une fenêtre de premier niveau n'a pas de cadre à elle : la barre de
-    // titre et les bords sont ceux du gestionnaire de fenêtres, hors du
-    // rectangle (GetWindowRect = zone client + barre de menus). Annoncer des
-    // marges faisait calculer à Qt (VLC) une zone client plus petite que la
-    // fenêtre, avec une bande noire à droite et en bas.
+    // Fenêtre de premier niveau : son cadre est celui que le gestionnaire
+    // de fenêtres pose, et GetClientRect en est l'intérieur (#2984). Le
+    // même cadre est annoncé ici, sinon un programme qui fixe sa zone
+    // client par ce calcul (WinForms ClientSize) la trouve plus petite,
+    // la recalcule et boucle (boîte de progression de Paint.NET, #3016).
+    // Learn, « AdjustWindowRectEx » : la taille du rectangle de fenêtre
+    // pour une zone client voulue.
     const WS_CHILD: u32 = 0x4000_0000;
     if style & WS_CHILD == 0 {
+        let [l, r, t, b] = match frame_kind(style, ex_style) {
+            Some(kind) => {
+                let mut e = None;
+                with_backend(|be| e = be.frame_for_kind(kind));
+                e.unwrap_or([0; 4])
+            }
+            None => [0; 4],
+        };
+        (*rect).left -= l;
+        (*rect).right += r;
+        (*rect).top -= t;
+        (*rect).bottom += b;
         if menu != 0 {
             (*rect).top -= crate::dlls::menus::BAR_HEIGHT;
         }
@@ -3314,9 +3436,9 @@ pub unsafe extern "win64" fn screen_to_client(hwnd: usize, point: *mut Point) ->
     if point.is_null() {
         return 0;
     }
-    if let Some(r) = gui::screen_rect(hwnd) {
-        (*point).x -= r.left;
-        (*point).y -= r.top;
+    if let Some((ox, oy)) = gui::content_origin(hwnd) {
+        (*point).x -= ox;
+        (*point).y -= oy;
         1
     } else {
         0
@@ -3327,9 +3449,9 @@ pub unsafe extern "win64" fn client_to_screen(hwnd: usize, point: *mut Point) ->
     if point.is_null() {
         return 0;
     }
-    if let Some(r) = gui::screen_rect(hwnd) {
-        (*point).x += r.left;
-        (*point).y += r.top;
+    if let Some((ox, oy)) = gui::content_origin(hwnd) {
+        (*point).x += ox;
+        (*point).y += oy;
         1
     } else {
         0
@@ -4080,12 +4202,12 @@ pub unsafe extern "win64" fn map_window_points(
     let from_offset = if from == 0 {
         (0i32, 0i32)
     } else {
-        gui::screen_rect(from).map_or((0, 0), |r| (r.left, r.top))
+        gui::content_origin(from).unwrap_or((0, 0))
     };
     let to_offset = if to == 0 {
         (0i32, 0i32)
     } else {
-        gui::screen_rect(to).map_or((0, 0), |r| (r.left, r.top))
+        gui::content_origin(to).unwrap_or((0, 0))
     };
     let dx = from_offset.0 - to_offset.0;
     let dy = from_offset.1 - to_offset.1;
@@ -4950,8 +5072,25 @@ pub extern "win64" fn reply_message(_result: isize) -> i32 {
     1
 }
 
+/// `InSendMessage` : vrai pendant le traitement d'un message envoyé par un
+/// autre fil (Learn, InSendMessage).
 pub extern "win64" fn in_send_message() -> i32 {
-    0
+    gui::in_sent_message() as i32
+}
+
+/// `InSendMessageEx` (#3104) : ISMEX_NOSEND (0) hors d'un message envoyé
+/// par un autre fil, ISMEX_SEND (1) pendant (Learn, InSendMessageEx).
+/// **Inférence nommée** : nos envois inter-fils viennent tous de
+/// SendMessage et attendent la réponse ; ISMEX_NOTIFY, ISMEX_CALLBACK et
+/// ISMEX_REPLIED ne sont pas encore distingués.
+pub extern "win64" fn in_send_message_ex(_reserved: usize) -> u32 {
+    const ISMEX_NOSEND: u32 = 0;
+    const ISMEX_SEND: u32 = 1;
+    if gui::in_sent_message() {
+        ISMEX_SEND
+    } else {
+        ISMEX_NOSEND
+    }
 }
 
 /// `WaitMessage` : dort jusqu'à ce qu'un message, un WM_PAINT ou un
@@ -4997,7 +5136,10 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
     let start = std::time::Instant::now();
+    // Inscrite avant toute lecture : un signal postérieur réveille le fil.
+    let mut objects = crate::dlls::kernel32::ObjectWait::new(&hs);
     loop {
+        objects.arm();
         // 1. Les objets. Une socket associée par WSAEventSelect rend son
         //    événement prêt : PuTTY attend ainsi le réseau (avant, on
         //    répondait toujours « un message attend » et il tournait à vide).
@@ -5034,6 +5176,7 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
         //    Les rappels SetWinEventHook en attente sont appelés pendant
         //    l'attente, comme sous Windows.
+        gui::deliver_sent();
         if wake_mask != 0 {
             super::chromium_win32::deliver_win_events();
         }
@@ -5050,11 +5193,40 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         } else {
             timeout - elapsed
         };
-        // Tranches courtes : les objets et les sockets n'ont pas de
-        // descripteur commun avec la connexion X11.
-        let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
-        if !gui::wait_backend(slice) {
-            std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+        // 4. Le sommeil (#3170) : dans poll(2), jusqu'au signal d'un objet,
+        //    à l'arrivée d'un message (connexion X11, éveil de la file) ou
+        //    au prochain minuteur. Borne de sûreté de 500 ms, comme
+        //    GetMessage ; 10 ms pour les sockets WSAAsyncSelect sondées.
+        //    En headless, sans descripteur de messages, tranches de 10 ms.
+        let wake = if wake_mask != 0 {
+            gui::message_wake_fds()
+        } else {
+            Some(([-1, -1], false))
+        };
+        match wake {
+            Some((_, true)) => continue,
+            Some((fds, false)) => {
+                let cap = if super::ws2_32::async_active() {
+                    10
+                } else {
+                    500
+                };
+                let timer = if wake_mask != 0 {
+                    gui::next_timer_ms(0).unwrap_or(cap)
+                } else {
+                    cap
+                };
+                objects.block(&fds, left.min(timer).min(cap));
+                if wake_mask != 0 {
+                    gui::drain_queue_wake();
+                }
+            }
+            None => {
+                let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
+                if !gui::wait_backend(slice) {
+                    std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+                }
+            }
         }
     }
 }
@@ -5517,6 +5689,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterWindowMessageW"=>fn register_window_message_w,
         "GetMessagePos"=>fn get_message_pos, "GetMessageTime"=>fn get_message_time,
         "ReplyMessage"=>fn reply_message, "InSendMessage"=>fn in_send_message,
+        "InSendMessageEx"=>fn in_send_message_ex,
         "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,
@@ -5751,6 +5924,22 @@ fn captioned_tool_window(style: u32, ex_style: u32) -> bool {
     style & WS_CAPTION == WS_CAPTION && style & WS_CHILD == 0 && ex_style & WS_EX_TOOLWINDOW != 0
 }
 
+/// Genre de cadre que le gestionnaire pose sur une fenêtre de premier
+/// niveau de ce style, selon les mêmes règles que CreateWindowEx (menu
+/// surgissant, fenêtre en couches sans titre, WS_POPUP sans titre, palette).
+/// None : aucun cadre (#3016).
+fn frame_kind(style: u32, ex_style: u32) -> Option<u8> {
+    if floating_popup(style, ex_style) || layered_without_caption(style, ex_style) {
+        return None;
+    }
+    match popup_decorations(style) {
+        Some(0) => None,
+        Some(_) => Some(gui::FRAME_BORDER),
+        None if captioned_tool_window(style, ex_style) => Some(gui::FRAME_TOOL),
+        None => Some(gui::FRAME_NORMAL),
+    }
+}
+
 fn popup_decorations(style: u32) -> Option<u8> {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
@@ -5765,8 +5954,80 @@ fn popup_decorations(style: u32) -> Option<u8> {
     ))
 }
 
+/// Fenêtre de premier niveau à barre de titre que l'utilisateur ne peut ni
+/// redimensionner ni agrandir (#3011). D'après « Window Styles » (Learn),
+/// le cadre de redimensionnement vient de WS_THICKFRAME et le bouton
+/// Agrandir de WS_MAXIMIZEBOX : une boîte de message (WS_POPUP |
+/// WS_CAPTION | WS_SYSMENU | DS_MODALFRAME) n'a ni l'un ni l'autre.
+fn fixed_size_frame(style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+    style & WS_CHILD == 0
+        && style & WS_CAPTION == WS_CAPTION
+        && style & (WS_THICKFRAME | WS_MAXIMIZEBOX) == 0
+}
+
+/// Boutons Réduire et Agrandir d'une fenêtre de premier niveau à barre de
+/// titre (#3064), `None` pour une autre fenêtre. D'après « Window Styles »
+/// (Learn), WS_MINIMIZEBOX et WS_MAXIMIZEBOX donnent chacun leur bouton et
+/// exigent WS_SYSMENU ; une fenêtre outil n'a que Fermer de toute façon.
+fn caption_buttons(style: u32) -> Option<(bool, bool)> {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_SYSMENU: u32 = 0x0008_0000;
+    const WS_MINIMIZEBOX: u32 = 0x0002_0000;
+    const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+    if style & WS_CHILD != 0 || style & WS_CAPTION != WS_CAPTION {
+        return None;
+    }
+    let menu = style & WS_SYSMENU != 0;
+    Some((
+        menu && style & WS_MINIMIZEBOX != 0,
+        menu && style & WS_MAXIMIZEBOX != 0,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// #3064 : Réduire et Agrandir suivent WS_MINIMIZEBOX et WS_MAXIMIZEBOX,
+    /// chacun avec WS_SYSMENU ; une fenêtre sans barre de titre ou un enfant
+    /// ne sont pas concernés.
+    #[test]
+    fn boutons_reduire_agrandir_selon_le_style_3064() {
+        use super::caption_buttons;
+        // WS_OVERLAPPEDWINDOW.
+        assert_eq!(caption_buttons(0x00CF_0000), Some((true, true)));
+        // MessageBox : WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME.
+        assert_eq!(caption_buttons(0x80C8_0080), Some((false, false)));
+        // WS_MINIMIZEBOX seul, avec cadre épais.
+        assert_eq!(caption_buttons(0x00CE_0000), Some((true, false)));
+        // Styles des boutons sans WS_SYSMENU : aucun bouton.
+        assert_eq!(caption_buttons(0x00C3_0000), Some((false, false)));
+        // Sans barre de titre, enfant à barre de titre.
+        assert_eq!(caption_buttons(0x8000_0000), None);
+        assert_eq!(caption_buttons(0x40CF_0000), None);
+    }
+
+    /// #3011 : une boîte de message ou un dialogue fixe n'est pas
+    /// redimensionnable ; une fenêtre principale, une fenêtre avec Agrandir,
+    /// une fenêtre sans barre de titre ou un enfant gardent leur cadre.
+    #[test]
+    fn cadre_fixe_sans_bouton_agrandir_3011() {
+        use super::fixed_size_frame;
+        // MessageBox : WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME.
+        assert!(fixed_size_frame(0x80C8_0080));
+        // Dialogue WS_CAPTION | WS_SYSMENU sans cadre épais.
+        assert!(fixed_size_frame(0x00C8_0000));
+        // WS_OVERLAPPEDWINDOW.
+        assert!(!fixed_size_frame(0x00CF_0000));
+        // Barre de titre et Agrandir, sans cadre épais.
+        assert!(!fixed_size_frame(0x00C9_0000));
+        // WS_POPUP sans barre de titre (menu, fenêtre dessinée par l'appli).
+        assert!(!fixed_size_frame(0x8000_0000));
+        // Enfant à barre de titre (MDI).
+        assert!(!fixed_size_frame(0x40C0_0000));
+    }
 
     /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une
     /// fenêtre outil ; une fenêtre ordinaire, un enfant ou un menu non.
@@ -6005,11 +6266,12 @@ mod tests {
 
     /// Qt lit la police de l'interface dans NONCLIENTMETRICS ; une hauteur
     /// nulle donnait des fenêtres de 5 millions de pixels à VLC (#850).
-    /// Le cadre des fenêtres de premier niveau appartient au gestionnaire de
-    /// fenêtres : AdjustWindowRectEx n'ajoute que la barre de menus, sinon
-    /// Qt (VLC) dessine une zone client plus petite que la fenêtre.
+    /// Le cadre des fenêtres de premier niveau est celui du gestionnaire de
+    /// fenêtres : sans gestionnaire, AdjustWindowRectEx n'ajoute que la
+    /// barre de menus (sous openbox, palette_suite vérifie qu'il annonce le
+    /// cadre réel, #3016).
     #[test]
-    fn adjust_window_rect_sans_cadre_pour_le_premier_niveau() {
+    fn adjust_window_rect_sans_gestionnaire_pour_le_premier_niveau() {
         let mut r = Rect::from_size(0, 0, 884, 513);
         unsafe { adjust_window_rect_ex(&mut r, 0x00CF_0000, 0, 0) };
         assert_eq!(r, Rect::from_size(0, 0, 884, 513));
@@ -6064,6 +6326,136 @@ mod tests {
                 1
             );
             assert_eq!(i32::from_le_bytes(lf[..4].try_into().unwrap()), -12);
+        }
+    }
+
+    /// SendMessage vers la fenêtre d'un autre fil : la procédure s'exécute
+    /// sur le fil qui a créé la fenêtre, quand il relève ses messages, et
+    /// l'expéditeur reçoit sa valeur (Learn, SendMessage, #2885).
+    #[test]
+    fn send_message_execute_sur_le_fil_de_la_fenetre() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+        static FIL: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == 0x0400 + 0x2885 {
+                *FIL.lock().unwrap() = Some(std::thread::current().id());
+                return w as isize + 1;
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_long_ptr_w(hwnd, GWL_WNDPROC, proc_ as *const () as isize);
+            // Même fil : appel immédiat.
+            assert_eq!(send_message_w(hwnd, 0x0400 + 0x2885, 1, 0), 2);
+            let ici = std::thread::current().id();
+            assert_eq!(*FIL.lock().unwrap(), Some(ici));
+            *FIL.lock().unwrap() = None;
+
+            static FINI: AtomicBool = AtomicBool::new(false);
+            let autre = std::thread::spawn(move || {
+                let r = send_message_w(hwnd, 0x0400 + 0x2885, 41, 0);
+                FINI.store(true, Ordering::SeqCst);
+                r
+            });
+            // Tant que ce fil ne relève pas ses messages, rien ne s'exécute.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert_eq!(*FIL.lock().unwrap(), None, "pas sur le fil expéditeur");
+            assert!(!FINI.load(Ordering::SeqCst), "l'expéditeur attend");
+            let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let mut m: Msg = std::mem::zeroed();
+            while !FINI.load(Ordering::SeqCst) && std::time::Instant::now() < limite {
+                peek_message_w(&mut m, 0, 0, 0, 0);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(autre.join().unwrap(), 42);
+            assert_eq!(
+                *FIL.lock().unwrap(),
+                Some(ici),
+                "exécutée sur le fil de la fenêtre"
+            );
+            destroy_window(hwnd);
+        }
+    }
+
+    /// InSendMessage et InSendMessageEx : ISMEX_SEND pendant un message
+    /// envoyé par un autre fil, ISMEX_NOSEND sinon (Learn, #3104).
+    #[test]
+    fn in_send_message_ex_distingue_l_envoi_d_un_autre_fil_3104() {
+        use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+        static VU: AtomicI64 = AtomicI64::new(-1);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == 0x0400 + 0x3104 {
+                let ex = in_send_message_ex(0) as i64;
+                let simple = in_send_message() as i64;
+                VU.store(ex * 10 + simple, Ordering::SeqCst);
+                return 1;
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let ex =
+            crate::dlls::lookup("user32", "InSendMessageEx").expect("InSendMessageEx exportée");
+        assert_eq!(ex, in_send_message_ex as *const () as usize);
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_long_ptr_w(hwnd, GWL_WNDPROC, proc_ as *const () as isize);
+            send_message_w(hwnd, 0x0400 + 0x3104, 0, 0);
+            let meme_fil = VU.swap(-1, Ordering::SeqCst);
+            static FINI: AtomicBool = AtomicBool::new(false);
+            let autre = std::thread::spawn(move || {
+                let r = send_message_w(hwnd, 0x0400 + 0x3104, 0, 0);
+                FINI.store(true, Ordering::SeqCst);
+                r
+            });
+            let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let mut m: Msg = std::mem::zeroed();
+            while !FINI.load(Ordering::SeqCst) && std::time::Instant::now() < limite {
+                peek_message_w(&mut m, 0, 0, 0, 0);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(autre.join().unwrap(), 1);
+            let autre_fil = VU.load(Ordering::SeqCst);
+            let apres = (in_send_message_ex(0), in_send_message());
+            destroy_window(hwnd);
+            eprintln!(
+                "      même fil (Ex, simple) = {:?}, autre fil = {:?}, après = {apres:?}",
+                (meme_fil / 10, meme_fil % 10),
+                (autre_fil / 10, autre_fil % 10)
+            );
+            assert_eq!(meme_fil, 0, "même fil : ISMEX_NOSEND, FALSE");
+            assert_eq!(autre_fil, 11, "autre fil : ISMEX_SEND, TRUE");
+            assert_eq!(apres, (0, 0));
         }
     }
 

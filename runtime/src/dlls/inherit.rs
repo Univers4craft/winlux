@@ -313,6 +313,11 @@ pub(crate) fn describe(h: usize, move_pipe: bool) -> Option<(String, Vec<OwnedFd
         // à chaque enfant (#2545). Aucun descripteur à transmettre.
         return Some((format!("u,{h:x}"), Vec::new()));
     }
+    if let Some(path) = crate::dlls::object_directory::export(h) {
+        // Répertoire d'objets : le bac à sable de Chromium en copie un vers
+        // son enfant juste après l'avoir ouvert (#3004). Aucun descripteur.
+        return Some((format!("d,{h:x},{}", hex(&path)), Vec::new()));
+    }
     None
 }
 
@@ -430,6 +435,11 @@ pub(crate) fn adopt_one(
             crate::dlls::kernel32::insert_sync_at(h, crate::dlls::kernel32::foreign_process(pid));
         }
         "u" => crate::dlls::electron_win32::adopt_user_object(h),
+        "d" => {
+            if !crate::dlls::object_directory::adopt(h, unhex(f.get(2)?)?) {
+                return None;
+            }
+        }
         _ => return None,
     }
     Some(h)

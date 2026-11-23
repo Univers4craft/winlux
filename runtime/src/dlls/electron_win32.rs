@@ -510,6 +510,10 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "VirtualFreeEx" => fn VirtualFreeEx,
         "TransactNamedPipe" => fn TransactNamedPipe,
         "WTSGetActiveConsoleSessionId" => fn WTSGetActiveConsoleSessionId,
+        "AppContainerRegisterSid" => fn AppContainerRegisterSid,
+        "AppContainerUnregisterSid" => fn AppContainerUnregisterSid,
+        "AppContainerLookupMoniker" => fn AppContainerLookupMoniker,
+        "AppContainerFreeMemory" => fn AppContainerFreeMemory,
     }
 }
 
@@ -2628,6 +2632,135 @@ unsafe extern "win64" fn DeriveAppContainerSidFromAppContainerName(
     give_appcontainer_sid(&name, sid)
 }
 
+// ------------------------------------------------------------
+//  KernelBase : registre des SID de conteneurs (bac à sable de Chromium)
+// ------------------------------------------------------------
+//
+// Le bac à sable de Chromium (code BSD : sandbox/win/src/app_container_base.cc)
+// prend AppContainerRegisterSid, AppContainerUnregisterSid,
+// AppContainerLookupMoniker et AppContainerFreeMemory dans kernelbase.dll et
+// s'arrête (CHECK) s'il en manque une. Leurs prototypes viennent de ce même
+// fichier ; aucune page publique ne les décrit. Ce que Chromium en attend,
+// lu dans son code : RegisterSid rend S_OK la première fois et
+// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS) ensuite ; LookupMoniker ne
+// réussit que pour un SID enregistré. Les profils sont ceux de
+// CreateAppContainerProfile (même clé), le SID est celui que donne
+// DeriveAppContainerSidFromAppContainerName pour le nom (#3169).
+
+/// HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : notre choix pour un SID
+/// jamais enregistré (le code de Windows n'est pas documenté).
+const HR_NOT_FOUND: u32 = 0x8007_0002;
+
+/// Sous-autorités d'un SID de conteneur S-1-15-2-… (structure SID de la
+/// page publique : révision, nombre, autorité sur 6 octets, puis DWORD).
+unsafe fn container_sid_subs(sid: *const u8) -> Option<[u32; 7]> {
+    if sid.is_null() || *sid != 1 || *sid.add(1) != 8 {
+        return None;
+    }
+    let auth = std::slice::from_raw_parts(sid.add(2), 6);
+    if auth != [0, 0, 0, 0, 0, 15] {
+        return None;
+    }
+    let sub = |i: usize| std::ptr::read_unaligned(sid.add(8 + 4 * i) as *const u32);
+    if sub(0) != 2 {
+        return None;
+    }
+    let mut out = [0u32; 7];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = sub(i + 1);
+    }
+    Some(out)
+}
+
+/// Clé du profil dont le SID dérivé vaut `subs`, et son nom d'origine.
+fn container_by_subs(subs: [u32; 7]) -> Option<(String, String)> {
+    let base = "hkcu\\Software\\Winlux\\AppContainer";
+    crate::registry::read(|d| {
+        for name in d.subkeys(base) {
+            if appcontainer_subauthorities(&name) == subs {
+                let key = format!("{base}\\{name}");
+                let moniker = d
+                    .get(&key, "Moniker")
+                    .filter(|v| crate::registry::is_string(v.kind))
+                    .map(|v| crate::registry::string_of(&v.bytes))
+                    .unwrap_or(name);
+                return Ok(Some((key, moniker)));
+            }
+        }
+        Ok(None)
+    })
+    .ok()
+    .flatten()
+}
+
+unsafe extern "win64" fn AppContainerRegisterSid(
+    sid: *const u8,
+    moniker: *const u16,
+    display: *const u16,
+) -> u32 {
+    let Some(name) = appcontainer_name(moniker) else {
+        return HR_INVALIDARG;
+    };
+    if container_sid_subs(sid) != Some(appcontainer_subauthorities(&name)) {
+        return HR_INVALIDARG;
+    }
+    let display = if display.is_null() {
+        String::new()
+    } else {
+        crate::dlls::wstr(display)
+    };
+    let key = appcontainer_key(&name);
+    let r = crate::registry::write(|d| {
+        if d.exists(&key) {
+            return Ok(false);
+        }
+        d.ensure(&key);
+        d.set(&key, "Moniker", 1, crate::registry::utf16z(&name));
+        d.set(&key, "DisplayName", 1, crate::registry::utf16z(&display));
+        Ok(true)
+    });
+    match r {
+        Ok(true) => 0,
+        Ok(false) => HR_ALREADY_EXISTS,
+        Err(e) => 0x8007_0000 | (e as u32 & 0xFFFF),
+    }
+}
+
+unsafe extern "win64" fn AppContainerUnregisterSid(sid: *const u8) -> u32 {
+    let Some((key, _)) = container_sid_subs(sid).and_then(container_by_subs) else {
+        return HR_NOT_FOUND;
+    };
+    match crate::registry::write(|d| Ok(d.delete_tree(&key))) {
+        Ok(_) => 0,
+        Err(e) => 0x8007_0000 | (e as u32 & 0xFFFF),
+    }
+}
+
+/// Le nom rendu se libère par AppContainerFreeMemory.
+unsafe extern "win64" fn AppContainerLookupMoniker(sid: *const u8, out: *mut usize) -> u32 {
+    if out.is_null() {
+        return HR_INVALIDARG;
+    }
+    crate::wow32::write_ptr(out as usize, 0);
+    let Some((_, moniker)) = container_sid_subs(sid).and_then(container_by_subs) else {
+        return HR_NOT_FOUND;
+    };
+    let wide: Vec<u16> = moniker.encode_utf16().chain(std::iter::once(0)).collect();
+    let p = libc::malloc(wide.len() * 2) as *mut u16;
+    if p.is_null() {
+        return 0x8007_000E;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
+    crate::wow32::write_ptr(out as usize, p as usize);
+    0
+}
+
+unsafe extern "win64" fn AppContainerFreeMemory(p: *mut libc::c_void) {
+    if !p.is_null() {
+        libc::free(p);
+    }
+}
+
 pub fn userenv_exports() -> crate::dlls::Exports {
     crate::exports! {
         "DeriveAppContainerSidFromAppContainerName" => fn DeriveAppContainerSidFromAppContainerName,
@@ -3227,6 +3360,7 @@ mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    frame: [0; 4],
                     painting: false,
                 },
             );
@@ -3347,6 +3481,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -3851,6 +3986,79 @@ mod tests {
                 DeriveAppContainerSidFromAppContainerName(empty.as_ptr(), &mut derived),
                 HR_INVALIDARG
             );
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("lock"));
+        match previous {
+            Some(v) => std::env::set_var("WINLUX_REGISTRY_PATH", v),
+            None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
+        }
+    }
+
+    /// #3169 : le registre des SID de conteneurs que le bac à sable de
+    /// Chromium prend dans kernelbase : S_OK puis ERROR_ALREADY_EXISTS,
+    /// nom retrouvé par le SID, SID oublié après Unregister ; un SID qui ne
+    /// correspond pas au nom est refusé.
+    #[test]
+    fn registre_des_sid_de_conteneurs_3169() {
+        let _teb = crate::process::test_teb();
+        let _lock = crate::registry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path =
+            std::env::temp_dir().join(format!("winlux-reg-acsid-{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+        std::env::set_var("WINLUX_REGISTRY_PATH", &path);
+        let w = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
+        let name = w("Chromium.Essai.Conteneur");
+        let other = w("Autre.Conteneur");
+        let display = w("Essai");
+        unsafe {
+            let mut sid = 0usize;
+            assert_eq!(
+                DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid),
+                0
+            );
+            let sid = sid as *const u8;
+            let mut out = 0usize;
+            assert_eq!(AppContainerLookupMoniker(sid, &mut out), HR_NOT_FOUND);
+            assert_eq!(out, 0);
+            assert_eq!(
+                AppContainerRegisterSid(sid, other.as_ptr(), display.as_ptr()),
+                HR_INVALIDARG
+            );
+            assert_eq!(
+                AppContainerRegisterSid(sid, name.as_ptr(), display.as_ptr()),
+                0
+            );
+            assert_eq!(
+                AppContainerRegisterSid(sid, name.as_ptr(), display.as_ptr()),
+                HR_ALREADY_EXISTS
+            );
+            assert_eq!(AppContainerLookupMoniker(sid, &mut out), 0);
+            assert_eq!(
+                crate::dlls::wstr(out as *const u16),
+                "Chromium.Essai.Conteneur"
+            );
+            AppContainerFreeMemory(out as *mut libc::c_void);
+            assert_eq!(AppContainerUnregisterSid(sid), 0);
+            assert_eq!(AppContainerLookupMoniker(sid, &mut out), HR_NOT_FOUND);
+            assert_eq!(AppContainerUnregisterSid(sid), HR_NOT_FOUND);
+            assert_eq!(
+                AppContainerLookupMoniker(std::ptr::null(), &mut out),
+                HR_NOT_FOUND
+            );
+        }
+        // Kernelbase seulement, comme le cherche Chromium.
+        for f in [
+            "AppContainerRegisterSid",
+            "AppContainerUnregisterSid",
+            "AppContainerLookupMoniker",
+            "AppContainerFreeMemory",
+        ] {
+            assert!(crate::dlls::KERNELBASE_ONLY.contains(&f), "{f}");
+            assert!(kernel32_exports().contains_key(f), "{f}");
         }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("lock"));

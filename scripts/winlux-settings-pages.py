@@ -260,6 +260,7 @@ _TR = {
     'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
     'Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.': ('Choose a network, enter its key, WPS, hidden networks and airplane mode.', 'Elegir una red, escribir su clave, WPS, redes ocultas y modo avión.', 'Netzwerk wählen, Schlüssel eingeben, WPS, verborgene Netzwerke und Flugzeugmodus.'),
     'Aucune imprimante pour l’instant.': ('No printer yet.', 'Todavía no hay impresoras.', 'Noch kein Drucker.'),
+    'Recherche des imprimantes…': ('Looking for printers…', 'Buscando impresoras…', 'Drucker werden gesucht…'),
     'Le service d’impression a refusé la recherche :': ('The print service refused the search:', 'El servicio de impresión rechazó la búsqueda:', 'Der Druckdienst hat die Suche abgelehnt:'),
     'Aucune imprimante trouvée. Vérifiez qu’elle est allumée et branchée.': ('No printer found. Check that it is on and connected.', 'No se encontró ninguna impresora. Compruebe que esté encendida y conectada.', 'Kein Drucker gefunden. Prüfen Sie, ob er eingeschaltet und verbunden ist.'),
     'Aucune version précédente conservée.': ('No previous version kept.', 'No se conserva ninguna versión anterior.', 'Keine vorherige Version gespeichert.'),
@@ -976,6 +977,11 @@ GLYPHS = {
     "users": '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 19c1.2-3.5 3.6-5.2 6.5-5.2s5.3 1.7 6.5 5.2"/><path d="M15 4.8a3.5 3.5 0 0 1 0 6.4M17.5 14c2 .7 3.3 2.4 4 5"/>',
     "key": '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2M14 9l2 2"/>',
     "backup": '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>',
+    # À propos de ce PC (#3053) : PC portable, puce, barrette de mémoire, carte graphique.
+    "pc": '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2.5 19h19M10 19l.5-3h3l.5 3"/>',
+    "cpu": '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9.5 3v3.5M14.5 3v3.5M9.5 17.5V21M14.5 17.5V21M3 9.5h3.5M3 14.5h3.5M17.5 9.5H21M17.5 14.5H21"/>',
+    "memory": '<rect x="3" y="7" width="18" height="9" rx="1"/><path d="M6.5 10v3M10 10v3M14 10v3M17.5 10v3M5 16v2.5M19 16v2.5M12 16v2.5"/>',
+    "gpu": '<rect x="3" y="6" width="18" height="11" rx="1.5"/><circle cx="9" cy="11.5" r="3"/><path d="M15 9.5h3M15 13.5h3M6 17v2.5M10 17v2.5"/>',
     "palette": '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.8 0-1.3-1-1.6-1-2.7 0-1 .8-1.6 1.8-1.6H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7" r="1"/>',
 }
 
@@ -2028,6 +2034,42 @@ class ExtraPages:
             try: self.select(self.nav, self.nav.get_selected_row())
             finally: self._rebuilding = False
         return False
+
+    def status_later(self, key, work, shown=None):
+        """État lent à obtenir (CUPS, relais root…) demandé hors du fil GTK
+        (#3021) : la page s'affiche aussitôt avec l'état connu (`shown`, ou
+        le dernier résultat de `work`, None au tout premier affichage), puis
+        se reconstruit si la réponse diffère. Une demande à la fois par clé ;
+        une reconstruction due à une réponse n'en relance aucune."""
+        import threading
+        later = self.__dict__.setdefault("_later", {"running": set(), "known": {}, "answering": False})
+        known = shown if shown is not None else later["known"].get(key)
+        if later["answering"] or key in later["running"]: return known
+        later["running"].add(key)
+        page = self.page
+
+        def finish(value):
+            later["running"].discard(key)
+            later["known"][key] = value
+            if value != known and self.page == page:
+                later["answering"] = True
+                try: self.extra_refresh()
+                finally: later["answering"] = False
+            return False
+
+        def work_then_finish():
+            try: value = work()
+            except Exception: value = None
+            GLib.idle_add(finish, value)
+        threading.Thread(target=work_then_finish, daemon=True).start()
+        return known
+
+    def control_status(self, action, path):
+        """Rafraîchit un fichier d'état par winlux-control sans la tournée
+        `status` complète qui suit chaque action (#3021) : la page ne lit que
+        ce fichier ; l'init relit l'état général toutes les 3 s."""
+        run(["winlux-control", action], timeout=5, env=dict(os.environ, WINLUX_CONTROL_NO_STATUS="1"))
+        return read(path)
 
     # ── Briques communes ──
 
@@ -3133,11 +3175,15 @@ class ExtraPages:
         if hardware is not None: hardware.cpu_section(self)
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
 
-    # ── À propos : « Votre PC », sous la version et le noyau ──
+    # ── À propos de ce PC ──
 
     def sections_about(self):
+        """En-tête du PC, tuiles du matériel, démarrage mesuré (#3053), puis
+        « Votre PC » ; affichée aussitôt, complétée hors du fil GTK."""
         hardware = hardware_page()
-        if hardware is not None: hardware.pc_section(self, self.status)
+        if hardware is None: return
+        accent = appearance().get("accent", "#6a3df0")
+        hardware.about_panel(self, self.status, accent, lambda glyph, size=24: svg_image(line_svg(glyph, accent), size))
 
     # ── Presse-papiers (Windows + V) ──
 
@@ -3888,14 +3934,22 @@ class ExtraPages:
 
     # ── Imprimantes et scanners (CUPS) ──
 
-    def page_printers(self):
+    @staticmethod
+    def printers_state():
+        """(imprimante par défaut, imprimantes) d'après CUPS ; lent quand
+        cupsd tarde à répondre, donc lu hors du fil GTK (#3021)."""
         default = run(["lpstat", "-d"], timeout=3)
         default = default.stdout.split(":", 1)[-1].strip() if default and ":" in default.stdout else ""
         listed = run(["lpstat", "-e"], timeout=3)
-        printers = [name for name in (listed.stdout.split() if listed else [])]
+        return default, tuple(listed.stdout.split() if listed else ())
+
+    def page_printers(self):
+        state = self.status_later("printers", self.printers_state)
+        default, printers = state or ("", ())
         self.section(_t("Imprimantes installées"))
         box = self.card()
-        if not printers: self.hint(_t("Aucune imprimante pour l’instant."), box)
+        if state is None: self.hint(_t("Recherche des imprimantes…"), box)
+        elif not printers: self.hint(_t("Aucune imprimante pour l’instant."), box)
         for name in printers:
             line = Gtk.Box(spacing=6)
             for title, args, show in ((_t("Par défaut"), ["lpoptions", "-d", name], name != default),
@@ -4286,8 +4340,9 @@ class ExtraPages:
         self.show_info(_t("Restauration lancée"), _t("Vos fichiers sont remis en place en arrière-plan. Les fichiers créés depuis la sauvegarde ne sont pas touchés."))
 
     def page_sharing(self):
-        if have("winlux-control"): run(["winlux-control", "share-status"], timeout=5)
         shares = read(RUN / "shares.txt")
+        if have("winlux-control"):
+            shares = self.status_later("share", lambda: self.control_status("share-status", RUN / "shares.txt"), shares)
         info = keyvals(shares)
         if info.get("available") == "1":
             self.section(_t("Dossiers partagés"), _t("Visibles des autres PC (Windows, Mac, Linux) du réseau privé."))
@@ -4315,8 +4370,9 @@ class ExtraPages:
             self.actions(box, [(_t("Partager un dossier…"), pick)])
             self.hint(_t("Droits par compte : clic droit sur le dossier › « Partager ce dossier… »."), box)
         if not have("winlux-transfer") and not run_file("transfer.txt").is_file(): return
-        if have("winlux-control"): run(["winlux-control", "transfer-status"], timeout=5)
         transfer = read(run_file("transfer.txt"))
+        if have("winlux-control"):
+            transfer = self.status_later("transfer", lambda: self.control_status("transfer-status", run_file("transfer.txt")), transfer)
         self.section(_t("Transférer mes réglages"), _t("Un fichier .wlxprofile emporte vos réglages vers un autre PC Winlux."))
         box = self.card()
         targets = [line[7:] for line in transfer.splitlines() if line.startswith("target=")]

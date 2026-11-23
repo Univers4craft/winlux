@@ -28,7 +28,6 @@ pub mod zip;
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use util::*;
 
@@ -136,10 +135,11 @@ impl Format {
                 let ok = tools::find(&[self.filter_tool().unwrap().0]).is_some();
                 (ok, ok)
             }
-            Format::SevenZ => (
-                tools::sevenzip().is_some() || tools::bsdtar().is_some(),
-                tools::sevenzip().is_some(),
-            ),
+            // bsdtar (libarchive) écrit aussi le 7z, sans chiffrement (#3063).
+            Format::SevenZ => {
+                let ok = tools::sevenzip().is_some() || tools::bsdtar().is_some();
+                (ok, ok)
+            }
             Format::Rar => (
                 tools::unrar().is_some()
                     || tools::sevenzip().is_some()
@@ -161,7 +161,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
     std::fs::create_dir_all(dest)?;
     let pw_arg = |prefix: &str| format!("{prefix}{}", pw.unwrap_or(""));
     if let Some(sz) = tools::sevenzip() {
-        let mut c = Command::new(sz);
+        let mut c = tools::archiver(&sz);
         c.arg("x")
             .arg("-y")
             .arg("-bsp1")
@@ -174,7 +174,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
     }
     if Format::from_name(&archive.to_string_lossy()) == Some(Format::Rar) {
         if let Some(u) = tools::unrar() {
-            let mut c = Command::new(u);
+            let mut c = tools::archiver(&u);
             c.arg("x").arg("-o+").arg("-y");
             c.arg(if pw.is_some() {
                 pw_arg("-p")
@@ -185,7 +185,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
             return tools::run_archiver(c, pw.is_some(), progress);
         }
         if let Some(u) = tools::unar() {
-            let mut c = Command::new(u);
+            let mut c = tools::archiver(&u);
             c.arg("-f").arg("-q").arg("-D").arg("-o").arg(dest);
             if let Some(p) = pw {
                 c.arg("-p").arg(p);
@@ -195,7 +195,7 @@ fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Pr
         }
     }
     if let Some(b) = tools::bsdtar() {
-        let mut c = Command::new(b);
+        let mut c = tools::archiver(&b);
         c.arg("-xf").arg(archive).arg("-C").arg(dest);
         if let Some(p) = pw {
             c.arg("--passphrase").arg(p);
@@ -409,9 +409,11 @@ pub fn create(out: &Path, sources: &[PathBuf], pw: Option<&str>, progress: &Prog
             Ok(())
         }
         Format::SevenZ => {
-            let sz = tools::sevenzip().ok_or(ArcError::ReadOnly)?;
+            let Some(sz) = tools::sevenzip() else {
+                return create_7z_bsdtar(out, sources, pw, progress);
+            };
             let _ = std::fs::remove_file(out);
-            let mut c = Command::new(sz);
+            let mut c = tools::archiver(&sz);
             c.arg("a").arg("-t7z").arg("-y").arg("-bsp1").arg("-bso0");
             if let Some(p) = pw {
                 c.arg(format!("-p{p}")).arg("-mhe=on");
@@ -424,6 +426,39 @@ pub fn create(out: &Path, sources: &[PathBuf], pw: Option<&str>, progress: &Prog
         }
         Format::Rar | Format::Other => Err(ArcError::ReadOnly),
     }
+}
+
+/// 7z écrit par bsdtar quand 7-Zip manque (l'ISO n'a que libarchive-tools,
+/// #3063). libarchive ne chiffre pas le 7z : un mot de passe est refusé
+/// plutôt qu'ignoré. Chaque source garde son seul nom à la racine.
+fn create_7z_bsdtar(
+    out: &Path,
+    sources: &[PathBuf],
+    pw: Option<&str>,
+    progress: &Progress,
+) -> Res<()> {
+    if pw.is_some() {
+        return Err(ArcError::Unsupported(
+            "7z avec mot de passe : 7-Zip requis".into(),
+        ));
+    }
+    let tool = tools::bsdtar().ok_or(ArcError::ReadOnly)?;
+    let _ = std::fs::remove_file(out);
+    let mut c = tools::archiver(&tool);
+    c.arg("--format").arg("7zip").arg("-cf").arg(out);
+    for s in sources {
+        let (Some(dir), Some(name)) = (s.parent(), s.file_name()) else {
+            return Err(ArcError::Unsupported("source sans nom".into()));
+        };
+        // Un nom commençant par « - » serait lu comme une option.
+        let mut entry = std::ffi::OsString::new();
+        if name.to_string_lossy().starts_with('-') {
+            entry.push("./");
+        }
+        entry.push(name);
+        c.arg("-C").arg(dir).arg(entry);
+    }
+    tools::run_archiver(c, false, progress)
 }
 
 // ---------- Cache des archives ouvertes ----------
@@ -813,7 +848,12 @@ mod tests {
         let src = d.join("projet");
         std::fs::create_dir_all(src.join("doc")).unwrap();
         std::fs::write(src.join("doc/a.txt"), "un").unwrap();
-        for ext in ["zip", "tar", "tar.gz"] {
+        // 7z : par 7-Zip ou bsdtar quand l'un des deux est là (#3063).
+        let sept = Format::SevenZ.support().1;
+        for ext in ["zip", "tar", "tar.gz", "7z"] {
+            if ext == "7z" && !sept {
+                continue;
+            }
             let arc = d.join(format!("p.{ext}"));
             create(&arc, std::slice::from_ref(&src), None, &Progress::default()).unwrap();
             let root = open(&arc, None, &Progress::default()).unwrap();
@@ -868,6 +908,108 @@ mod tests {
                 "{ext}"
             );
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #3063 : sans 7-Zip, bsdtar écrit un 7z que l'on relit à l'identique
+    /// (dossier, fichier, nom en « - ») ; un mot de passe est refusé.
+    #[test]
+    fn sept_z_ecrit_par_bsdtar_3063() {
+        if tools::bsdtar().is_none() {
+            eprintln!("bsdtar absent : test 3063 sauté");
+            return;
+        }
+        let d = tmp("7z-bsdtar");
+        let src = d.join("projet");
+        std::fs::create_dir_all(src.join("doc")).unwrap();
+        std::fs::write(src.join("doc/a.txt"), "un").unwrap();
+        let tiret = d.join("-notes.txt");
+        std::fs::write(&tiret, "deux").unwrap();
+        let arc = d.join("p.7z");
+        create_7z_bsdtar(
+            &arc,
+            &[src.clone(), tiret.clone()],
+            None,
+            &Progress::default(),
+        )
+        .unwrap();
+        let head = std::fs::read(&arc).unwrap();
+        assert_eq!(&head[..6], b"7z\xBC\xAF\x27\x1C", "signature 7z");
+        let out = d.join("out");
+        extract_to(&arc, &out, None, &Progress::default()).unwrap();
+        eprintln!(
+            "3063 : {:?}",
+            walk(&out)
+                .unwrap()
+                .iter()
+                .map(|e| e.rel.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join("projet/doc/a.txt")).unwrap(),
+            "un"
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join("-notes.txt")).unwrap(),
+            "deux"
+        );
+        assert!(matches!(
+            create_7z_bsdtar(
+                &d.join("q.7z"),
+                &[src],
+                Some("secret"),
+                &Progress::default()
+            ),
+            Err(ArcError::Unsupported(_))
+        ));
+        assert!(!d.join("q.7z").exists());
+        assert!(
+            Format::SevenZ.support().1,
+            "7z modifiable dès que bsdtar est là"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #3282 : un nom accentué traverse un 7z écrit puis relu par bsdtar,
+    /// quelle que soit la locale héritée. Le test tourne aussi sous
+    /// `LC_ALL=C` (scripts/test-all.d/3282-archives-locale-c.sh).
+    #[test]
+    fn sept_z_nom_accentue_locale_heritee_3282() {
+        let envs: Vec<_> = tools::archiver(Path::new("outil"))
+            .get_envs()
+            .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+            .collect();
+        assert_eq!(envs, [("LC_ALL".into(), Some("C.UTF-8".into()))]);
+        if tools::bsdtar().is_none() || tools::sevenzip().is_some() {
+            eprintln!("bsdtar seul requis : test 3282 sauté");
+            return;
+        }
+        let d = tmp("7z-accents");
+        let src = d.join("Photos d'été");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lisez-moi.txt"), "Bonjour").unwrap();
+        let arc = d.join("p.7z");
+        let ecrit = create_7z_bsdtar(&arc, &[src], None, &Progress::default());
+        let out = d.join("out");
+        let lu = ecrit
+            .as_ref()
+            .ok()
+            .map(|_| extract_to(&arc, &out, None, &Progress::default()));
+        let noms = walk(&out).map(|w| w.iter().map(|e| e.rel.clone()).collect::<Vec<_>>());
+        eprintln!(
+            "3282 : LC_ALL={:?} LANG={:?} écriture={:?} lecture={:?} noms={:?}",
+            std::env::var("LC_ALL"),
+            std::env::var("LANG"),
+            ecrit.as_ref().err().map(|e| e.to_string()),
+            lu.as_ref().map(|r| r.as_ref().err().map(|e| e.to_string())),
+            noms
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join("Photos d'été/lisez-moi.txt"))
+                .ok()
+                .as_deref(),
+            Some("Bonjour")
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

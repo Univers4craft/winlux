@@ -366,6 +366,17 @@ unsafe fn create_from_template(
     let mut rect = du_rect(base, t.x, t.y, t.cx, t.cy);
     let child = t.style & WS_CHILD != 0 || t.style & DS_CONTROL != 0;
     if !child {
+        // Le modèle donne la zone client : les contrôles y sont placés
+        // depuis son coin (0, 0). Depuis #2984, le rectangle d'une fenêtre
+        // de premier niveau comprend le cadre du gestionnaire ; la boîte est
+        // donc agrandie de ce cadre, comme le fait AdjustWindowRectEx, sinon
+        // le bas et la droite de la boîte (bouton OK compris) sortent de sa
+        // zone client (#3145). La barre de menus des boîtes n'est pas encore
+        // affichée : elle ne compte pas.
+        let (w, h) = (rect.width(), rect.height());
+        let mut outer = Rect::from_size(0, 0, w, h);
+        user32::adjust_window_rect_ex(&mut outer, t.style, 0, t.ex_style);
+        rect = Rect::from_size(rect.left, rect.top, outer.width(), outer.height());
         // Centrée sur la fenêtre propriétaire, ou sur l'écran.
         let around = if parent != 0 {
             gui::screen_rect(top_level(parent))
@@ -530,7 +541,7 @@ unsafe fn call_dlg_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
     controls::with_charset(wide, || gui::call_wndproc(proc_addr, hwnd, msg, wp, lp))
 }
 
-fn ensure_dialog_class() {
+pub(crate) fn ensure_dialog_class() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         gui::register_class(

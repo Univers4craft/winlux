@@ -4,6 +4,8 @@
 # par SendInput et keybd_event (clic, VK_A, « é », « € », molette), une fois
 # l'autorisation « input » accordée ; sans elle, SendInput rend 0 et
 # ERROR_ACCESS_DENIED, de même pendant une fenêtre de consentement (#1696).
+# Jamais décidée, la question part à côté et SendInput est refusé tout de
+# suite, sans attendre la fenêtre (#3099).
 # Sauté (code 0) sans runtime, clang ou xvfb-run.
 set -eu
 
@@ -52,12 +54,21 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/home"
 wrap=
+helper="$work/absent"
+# Fenêtre de demande qui met 10 s à répondre (#3099) : elle note la question.
+cat >"$work/lente" <<EOS
+#!/bin/sh
+echo "\$2" >>"$work/questions"
+sleep 10
+exit 0
+EOS
+chmod 755 "$work/lente"
 run() {
     exe=$1; shift
     set +e
     $wrap env HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" \
         XDG_CONFIG_HOME="$work/home/.config" WINLUX_LOCK_ROOT="$work" \
-        WINLUX_PERMISSIONS_FILE="$work/permissions.tsv" WINLUX_PERMISSION_HELPER="$work/absent" \
+        WINLUX_PERMISSIONS_FILE="$work/permissions.tsv" WINLUX_PERMISSION_HELPER="$helper" \
         WINLUX_CONSENT_LOCK="$work/consent.lock" \
         WINLUX_REGISTRY_PATH="$work/registre.tsv" TMPDIR="$work" \
         xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI -u WINLUX_PERMISSIONS \
@@ -75,6 +86,20 @@ for arch in 64 32; do
         echo "sendinput$arch.exe sans autorisation : le test n° $status a échoué" >&2
         exit 1
     }
+    # Jamais décidée, fenêtre lente : refusé tout de suite (test 8), la
+    # question est posée une fois, à côté (#3099).
+    rm -f "$work/questions"
+    helper="$work/lente"
+    run "$exe" refus
+    helper="$work/absent"
+    sleep 0.5
+    questions=$(cat "$work/questions" 2>/dev/null || true)
+    test "$status" -eq 0 && test "$questions" = "input" || {
+        tail -20 "$work/out.txt"
+        echo "sendinput$arch.exe sans décision : test n° $status, questions « $questions » (#3099)" >&2
+        exit 1
+    }
+    : >"$work/permissions.tsv"
     printf 'input\tallow\t%s\n' "$real" >"$work/permissions.tsv"
     # Fenêtre de consentement ouverte (verrou exclusif, #1696) : refus aussi.
     if command -v flock >/dev/null 2>&1; then
@@ -94,4 +119,4 @@ for arch in 64 32; do
         exit 1
     }
 done
-echo "sendinput : SendInput et keybd_event tapent dans la session en x64 et en x86 (clic, VK_A, é, €, molette) une fois autorisés, refusés sinon et pendant une fenêtre de consentement"
+echo "sendinput : SendInput et keybd_event tapent dans la session en x64 et en x86 (clic, VK_A, é, €, molette) une fois autorisés, refusés sinon, sans attendre la fenêtre de demande, et pendant une fenêtre de consentement"
