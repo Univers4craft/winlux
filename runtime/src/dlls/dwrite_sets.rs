@@ -2240,7 +2240,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("winlux-dwsets-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Tiny.ttf");
-        std::fs::write(&path, sfnt::tests::tiny_font()).unwrap();
+        // Écrite à côté puis renommée : un test qui lit la police pendant
+        // qu'un autre la réécrit voit toujours un fichier complet (#3241).
+        let tmp = dir.join(format!("Tiny.ttf.{:?}", std::thread::current().id()));
+        std::fs::write(&tmp, sfnt::tests::tiny_font()).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
         FaceInfo {
             family: "Winlux Tiny".into(),
             style: "Bold".into(),
