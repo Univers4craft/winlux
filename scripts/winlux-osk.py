@@ -15,7 +15,8 @@ fenêtre où l'on tapait, par xdotool.
     winlux-osk icon          icon=1 si l'icône de la barre doit apparaître
 
     winlux-osk set auto|always|never   réglage de l'icône (Paramètres)
-    winlux-osk tray          sortie genmon de l'icône (greffon n° 12)
+    winlux-osk tray          sortie genmon de l'icône (greffon n° 12 ; la barre
+                             la lit par `winlux-tray osk`, servie sans Python)
     winlux-osk panel         ajoute ou retire le greffon de la barre en cours
 
 Réglage (Paramètres > Clavier, souris et pavé tactile) : OSK_ICON=auto|always|never
@@ -462,6 +463,7 @@ def run_window(start_hidden=False):
 # ── Icône de la barre des tâches (greffon genmon n° 12) ────────────────────
 
 PLUGIN = 12
+TRAY_READER = Path("/usr/bin/winlux-tray")  # lecteur des sorties de winlux-tray serve (#3419)
 ICON = ('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
         '<rect x="2" y="6" width="20" height="12" rx="2" fill="none" stroke="#e7ddf5" stroke-width="1.5"/>'
         '<path d="M5.5 9.5h1m2.5 0h1m2.5 0h1m2.5 0h1m2.5 0h0M5.5 12h1m2.5 0h1m2.5 0h1m2.5 0h1M8 15h8" '
@@ -524,7 +526,14 @@ def set_panel(enabled):
         return False
     others = [number for number in panels if number != home and PLUGIN in lists[number]]
     if enabled:
-        command = "/usr/bin/winlux-osk tray" if Path("/usr/bin/winlux-osk").exists() else f"python3 {Path(__file__).resolve()} tray"
+        # Servi par le service de la barre (winlux-tray serve) quand il est
+        # installé : un Python neuf toutes les 5 s coûtait ≈ 1 % d'un cœur (#3419).
+        if TRAY_READER.exists():
+            command = f"{TRAY_READER} osk"
+        elif Path("/usr/bin/winlux-osk").exists():
+            command = "/usr/bin/winlux-osk tray"
+        else:
+            command = f"python3 {Path(__file__).resolve()} tray"
         for prop, kind, value in (("", "string", "genmon"), ("/command", "string", command),
                                   ("/use-label", "bool", "false"), ("/text", "string", ""),
                                   ("/update-period", "int", "5000")):

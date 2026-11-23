@@ -1476,7 +1476,45 @@ fn handle_in(all: &'static [Builtin], i: usize) -> usize {
     if b.handle != 0 {
         return b.handle;
     }
-    *images_in(all)[i].get_or_init(|| pe_image::build(b.name, &b.exports, i))
+    *images_in(all)[i].get_or_init(|| {
+        if b.name == "kernel32" {
+            pe_image::build(b.name, &kernel32_image_exports(all, &b.exports), i)
+        } else {
+            pe_image::build(b.name, &b.exports, i)
+        }
+    })
+}
+
+/// Table d'exports de l'image kernel32 : ses propres fonctions plus les
+/// noms que GetProcAddress(kernel32, …) fait suivre vers ntdll
+/// (`KERNEL32_FROM_NTDLL`) et advapi32 (`KERNEL32_REGISTRY`). Sans eux, un
+/// programme qui lit la table lui-même (PEImage du bac à sable Chromium)
+/// ne trouvait pas RegOpenKeyExW ni RtlFillMemory que GetProcAddress rend
+/// (#3338). Résolu sur `all` et non par `lookup` : l'image kernel32 est
+/// construite pendant l'initialisation de `builtins()`.
+fn kernel32_image_exports(all: &[Builtin], own: &Exports) -> Exports {
+    let of = |dll: &str, name: &str| {
+        all.iter()
+            .find(|b| b.name == dll)
+            .and_then(|b| b.exports.get(name).copied())
+    };
+    let mut e = own.clone();
+    for &name in KERNEL32_FROM_NTDLL {
+        if !e.contains_key(name) {
+            // Même repli que `lookup("ntdll", …)` : la CRT de ntdll.
+            if let Some(a) = of("ntdll", name).or_else(|| of("msvcrt", name)) {
+                e.insert(name, a);
+            }
+        }
+    }
+    for &name in KERNEL32_REGISTRY {
+        if !e.contains_key(name) {
+            if let Some(a) = of("advapi32", name) {
+                e.insert(name, a);
+            }
+        }
+    }
+    e
 }
 
 fn builtin_images() -> &'static [OnceLock<usize>] {
