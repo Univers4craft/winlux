@@ -3406,6 +3406,12 @@ pub trait GuiBackend: Send {
     /// Marque une fenêtre X où une chaîne d'échange Direct3D présente (#1374).
     fn mark_direct3d(&mut self, _xid: u64) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
+    /// Fenêtre de premier niveau posée hors du gestionnaire de fenêtres
+    /// (menu, bulle : override-redirect) : il ne la réduit pas avec sa
+    /// propriétaire, c'est à nous de la cacher (#3438).
+    fn is_unmanaged(&self, _hwnd: usize) -> bool {
+        false
+    }
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     /// Icône de la fenêtre au format _NET_WM_ICON (largeur, hauteur, pixels
     /// ARGB, une ou plusieurs tailles) ; vide : rien à publier (#2836).
@@ -4224,17 +4230,91 @@ fn geometry_win_events(hwnd: usize, size_kind: Option<usize>) {
             minimized.push(hwnd);
             drop(minimized);
             w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, hwnd);
+            hide_owned_with_owner(hwnd);
             return;
         }
         if was && !now {
             minimized.retain(|&h| h != hwnd);
             drop(minimized);
             w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, hwnd);
+            show_owned_with_owner(hwnd);
             // Restaurée : tout est à redessiner, comme sous Windows.
             request_paint(hwnd);
         }
     }
     w::notify_win_event(w::EVENT_OBJECT_LOCATIONCHANGE, hwnd);
+}
+
+/// Fenêtres possédées cachées avec leur propriétaire réduite : (propriétaire,
+/// possédée), pour les rendre à la restauration (#3438).
+static HIDDEN_WITH_OWNER: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Fenêtres de premier niveau visibles possédées par `owner` et posées hors
+/// du gestionnaire de fenêtres (`unmanaged`).
+fn owned_unmanaged(owner: usize, unmanaged: &dyn Fn(usize) -> bool) -> Vec<usize> {
+    const WS_CHILD: u32 = 0x4000_0000;
+    let candidates: Vec<usize> = lock(windows())
+        .iter()
+        .filter(|(&h, w)| h != owner && w.parent == owner && w.visible && w.style & WS_CHILD == 0)
+        .map(|(&h, _)| h)
+        .collect();
+    candidates.into_iter().filter(|&h| unmanaged(h)).collect()
+}
+
+/// Learn, Window Features › Owned Windows : « When an owner window is
+/// minimized, the system automatically hides the associated owned windows
+/// [...] the system sends the WM_SHOWWINDOW message to the owned windows
+/// before hiding or showing them. » Le gestionnaire réduit lui-même les
+/// fenêtres possédées qu'il gère (WM_TRANSIENT_FOR) ; restent celles posées
+/// hors gestionnaire, comme la bulle « Restaurer les pages ? » de Chromium,
+/// qui restait seule sur le bureau (#3438). Leur WS_VISIBLE est gardé : le
+/// programme les retrouve telles qu'il les a laissées.
+fn hide_owned_with_owner(owner: usize) {
+    let mut owned = Vec::new();
+    {
+        let candidates = owned_unmanaged(owner, &|_| true);
+        with_backend(|b| {
+            owned = candidates
+                .into_iter()
+                .filter(|&h| b.is_unmanaged(h))
+                .collect()
+        });
+    }
+    hide_owned_list(owner, &owned);
+}
+
+fn hide_owned_list(owner: usize, owned: &[usize]) {
+    const SW_PARENTCLOSING: isize = 1;
+    for &h in owned {
+        unsafe { crate::dlls::user32::send_message_w(h, WM_SHOWWINDOW, 0, SW_PARENTCLOSING) };
+        with_backend(|b| b.show_window(h, false));
+        lock(&HIDDEN_WITH_OWNER).push((owner, h));
+    }
+}
+
+/// Restaurée : les fenêtres cachées avec elle reviennent, si le programme
+/// ne les a ni détruites ni cachées entre-temps.
+fn show_owned_with_owner(owner: usize) -> Vec<usize> {
+    const SW_PARENTOPENING: isize = 3;
+    let mut back = Vec::new();
+    lock(&HIDDEN_WITH_OWNER).retain(|&(o, h)| {
+        if o == owner {
+            back.push(h);
+            false
+        } else {
+            true
+        }
+    });
+    back.retain(|&h| {
+        lock(windows())
+            .get(&h)
+            .is_some_and(|w| w.visible && w.parent == owner)
+    });
+    for &h in &back {
+        with_backend(|b| b.show_window(h, true));
+        unsafe { crate::dlls::user32::send_message_w(h, WM_SHOWWINDOW, 1, SW_PARENTOPENING) };
+    }
+    back
 }
 
 // ---------- Raccourcis globaux (RegisterHotKey) ----------
@@ -7363,6 +7443,43 @@ pub(crate) mod tests {
             destroy_window(h);
         }
         activate_top_for_focus(0);
+    }
+
+    /// #3438 : réduite, la propriétaire emporte ses fenêtres possédées hors
+    /// gestionnaire ; restaurée, elle les rend, sauf celle que le programme a
+    /// cachée entre-temps. Une fenêtre gérée, un enfant ou une fenêtre d'une
+    /// autre propriétaire ne bougent pas.
+    #[test]
+    fn possedees_hors_gestionnaire_cachees_avec_leur_proprietaire_3438() {
+        let principale = fenetre_de_test();
+        let bulle = fenetre_de_test();
+        let bulle2 = fenetre_de_test();
+        let geree = fenetre_de_test();
+        let enfant = fenetre_de_test();
+        let autre = fenetre_de_test();
+        for h in [bulle, bulle2, geree, enfant] {
+            set_window_parent(h, principale);
+        }
+        set_window_style(enfant, 0x4000_0000); // WS_CHILD
+        set_window_parent(autre, geree);
+        let hors = [bulle, bulle2, autre];
+        let unmanaged = |h: usize| hors.contains(&h);
+        let mut cachees = owned_unmanaged(principale, &unmanaged);
+        cachees.sort();
+        let mut attendu = vec![bulle, bulle2];
+        attendu.sort();
+        assert_eq!(cachees, attendu);
+        hide_owned_list(principale, &cachees);
+        assert!(is_window_visible(bulle), "WS_VISIBLE gardé");
+        lock(windows()).get_mut(&bulle2).unwrap().visible = false; // cachée par le programme
+        assert_eq!(show_owned_with_owner(principale), vec![bulle]);
+        assert!(
+            show_owned_with_owner(principale).is_empty(),
+            "rendues une seule fois"
+        );
+        for h in [autre, enfant, geree, bulle2, bulle, principale] {
+            destroy_window(h);
+        }
     }
 
     #[test]
