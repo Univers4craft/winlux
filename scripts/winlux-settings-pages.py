@@ -831,6 +831,21 @@ def _t(text):
 HOME = Path.home()
 START_STATE = HOME / ".config/winlux/start.json"
 
+def write_private_text(path, text):
+    """Fichier né en 0600 (#3082), jamais lisible par un autre compte, puis
+    substitué d'un bloc."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out: out.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try: tmp.unlink()
+        except OSError: pass
+        raise
+
+
 
 def taskbar_preferences():
     """STYLE (classic|floating) et SEARCH (box|icon|hidden) de la barre (#703)."""
@@ -859,9 +874,7 @@ def update_start_menu_state(**changes):
     state = start_menu_state()
     state.update(changes)
     START_STATE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = START_STATE.with_suffix(".settings.tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(START_STATE)
+    write_private_text(START_STATE, json.dumps(state, ensure_ascii=False))
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
 
 
