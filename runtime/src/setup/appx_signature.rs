@@ -1180,10 +1180,6 @@ fn format_dn(v: &[(String, String)]) -> String {
 //  Exécutables signés (Authenticode d'un PE)
 // ============================================================
 
-/// Taille au-delà de laquelle un exécutable n'est pas lu en entier pour
-/// vérifier sa signature (il est alors « éditeur inconnu »).
-const PE_MAX: u64 = 512 << 20;
-
 /// Signature Authenticode d'un exécutable ou d'une DLL : table de sécurité
 /// du PE (WIN_CERTIFICATE, PKCS #7 SignedData), selon la spécification
 /// publique « Windows Authenticode Portable Executable Signature Format ».
@@ -1198,22 +1194,25 @@ pub fn examine_pe(path: &Path) -> Signature {
 /// du signataire en tête (vide sans signature lisible) : WinVerifyTrust en
 /// tire ses données d'état (#1728).
 pub fn examine_pe_with_certs(path: &Path) -> (Signature, Vec<Vec<u8>>) {
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    if size == 0 || size > PE_MAX {
-        return (Signature::Absent, Vec::new());
-    }
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(e) => {
-            return (
-                Signature::Invalid(format!("{} : {e}", path.display())),
-                Vec::new(),
-            )
-        }
-    };
+    examine_pe_file(path).unwrap_or_else(|e| {
+        (
+            Signature::Invalid(format!("{} : {e}", path.display())),
+            Vec::new(),
+        )
+    })
+}
+
+/// Comme `examine_pe_with_certs`, mais un fichier illisible est une erreur,
+/// pas un verdict sur sa signature (#3215). Le fichier est projeté, pas lu,
+/// et son condensat est calculé par morceaux sur les plages couvertes : ni
+/// copie, ni limite de taille. Au-delà de 512 Mo, un .exe signé était dit
+/// « sans signature » sans avoir été examiné, et en deçà il coûtait deux
+/// fois sa taille en mémoire.
+pub fn examine_pe_file(path: &Path) -> std::io::Result<(Signature, Vec<Vec<u8>>)> {
+    let data = crate::loader::ImageFile::open(path)?;
     let mut certs = Vec::new();
     let sig = examine_pe_parts(&data, &mut certs);
-    (sig, certs)
+    Ok((sig, certs))
 }
 
 #[cfg(test)]
@@ -1295,18 +1294,20 @@ fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     if !(checksum + 4 <= entry && entry + 8 <= start && start + len <= d.len()) {
         return Signature::Invalid("disposition de l'image inattendue".into());
     }
-    let mut image = Vec::with_capacity(d.len());
-    image.extend_from_slice(&d[..checksum]);
-    image.extend_from_slice(&d[checksum + 4..entry]);
-    image.extend_from_slice(&d[entry + 8..start]);
-    image.extend_from_slice(&d[start + len..]);
+    let image = [
+        &d[..checksum],
+        &d[checksum + 4..entry],
+        &d[entry + 8..start],
+        &d[start + len..],
+    ];
     verify_blob(&table[8..cert_len], &image, certs)
 }
 
 /// Vérifie une signature Authenticode (ContentInfo SignedData DER) dont le
-/// `SpcIndirectDataContent` porte le condensat de `image` : signataire,
-/// condensat, puis chaîne. `certs` reçoit les certificats, signataire en tête.
-fn verify_blob(blob: &[u8], image: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
+/// `SpcIndirectDataContent` porte le condensat de `image` (ses plages mises
+/// bout à bout, sans copie) : signataire, condensat, puis chaîne. `certs`
+/// reçoit les certificats, signataire en tête.
+fn verify_blob(blob: &[u8], image: &[&[u8]], certs: &mut Vec<Vec<u8>>) -> Signature {
     let parsed = match parse_signed_data(blob) {
         Ok(p) => p,
         Err(e) => return Signature::Invalid(format!("signature illisible : {e}")),
@@ -1326,7 +1327,13 @@ fn verify_blob(blob: &[u8], image: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature
     if let Some(failure) = check_signer(&parsed, signer, &name) {
         return failure;
     }
-    match hostssl::digest(parsed.appx_md, image) {
+    let digest = hostssl::Hasher::new(parsed.appx_md).map(|mut h| {
+        for part in image {
+            h.update(part);
+        }
+        h.finish()
+    });
+    match digest {
         Some(h) if h == parsed.indirect => {}
         Some(_) => return Signature::Invalid("le fichier a été modifié après sa signature".into()),
         None => {
@@ -1366,9 +1373,9 @@ fn examine_cab_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     }
 }
 
-/// (signature ou erreur de disposition, octets couverts), ou None pour un
-/// cabinet sans signature.
-type CabParts<'a> = (Result<&'a [u8], String>, Vec<u8>);
+/// (signature ou erreur de disposition, plages couvertes, dans l'ordre), ou
+/// None pour un cabinet sans signature.
+type CabParts<'a> = (Result<&'a [u8], String>, Vec<&'a [u8]>);
 
 fn cab_signed_parts(d: &[u8]) -> Option<CabParts<'_>> {
     let u16_at = |o: usize| Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?));
@@ -1413,12 +1420,11 @@ fn cab_signed_parts(d: &[u8]) -> Option<CabParts<'_>> {
     } else {
         s2
     };
-    let mut image = Vec::with_capacity(cb_cabinet);
-    image.extend_from_slice(&d[..4]);
-    image.extend_from_slice(&d[8..36]);
+    let mut image = vec![&d[..4], &d[8..36]];
     if l1 != 0 || l2 != 0 {
-        image.extend_from_slice(&(l1 as u16).to_le_bytes());
-        image.extend_from_slice(s1);
+        // Longueur 1 (u16), telle qu'elle est écrite en tête de la réserve.
+        image.push(&reserve[..2]);
+        image.push(s1);
     }
     let mut pos = 40 + cb_header;
     for flag in [PREV_CABINET, NEXT_CABINET] {
@@ -1434,7 +1440,7 @@ fn cab_signed_parts(d: &[u8]) -> Option<CabParts<'_>> {
     }
     // Noms de cabinets voisins (zéro final compris), dossiers, fichiers et
     // blocs de données, jusqu'à cbCabinet.
-    image.extend_from_slice(&d[40 + cb_header..cb_cabinet]);
+    image.push(&d[40 + cb_header..cb_cabinet]);
     Some((Ok(blob), image))
 }
 
@@ -1562,13 +1568,17 @@ pub(crate) mod tests {
         let mut image = pe[..checksum].to_vec();
         image.extend_from_slice(&pe[checksum + 4..entry]);
         image.extend_from_slice(&pe[entry + 8..]);
-        let digest = hostssl::digest(c"SHA256", &image).unwrap();
+        spc_with_digest(&hostssl::digest(c"SHA256", &image).unwrap())
+    }
+
+    /// SpcIndirectDataContent qui porte le condensat SHA-256 `digest`.
+    fn spc_with_digest(digest: &[u8]) -> Vec<u8> {
         let oid_pe = der(
             0x06,
             &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F],
         );
         let attr = der(0x30, &[oid_pe, der(0x30, &der(0x03, &[0]))].concat());
-        let digest_info = der(0x30, &[sha256_alg(), der(0x04, &digest)].concat());
+        let digest_info = der(0x30, &[sha256_alg(), der(0x04, digest)].concat());
         der(0x30, &[attr, digest_info].concat())
     }
 
@@ -1624,6 +1634,122 @@ pub(crate) mod tests {
             0x30,
             &[raw(ci.body, &oid).to_vec(), der(0xA0, &sd)].concat(),
         )
+    }
+
+    /// #3215 : un .exe signé de plus de 512 Mo était dit « sans signature »
+    /// sans avoir été examiné (WinVerifyTrust : TRUST_E_NOSIGNATURE). Fichier
+    /// creux de 600 Mo, signé ici par une autorité de test (openssl) : la
+    /// signature est lue et son condensat concorde ; seule la chaîne, vers
+    /// une racine inconnue, reste non vérifiée.
+    #[test]
+    fn gros_exe_signe_examine_sans_limite_3215() {
+        if hostssl::ssl().is_none()
+            || std::process::Command::new("openssl")
+                .arg("version")
+                .output()
+                .is_err()
+        {
+            eprintln!("OpenSSL absent : grand .exe signé non testé");
+            return;
+        }
+        use std::io::{Seek, SeekFrom, Write};
+        let dir = std::env::temp_dir().join(format!("winlux-3215-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Gros.exe");
+        let head = pe_minimal();
+        let size = head.len() as u64 + (600 << 20);
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(&head).unwrap();
+            f.set_len(size).unwrap();
+        }
+        // Condensat de l'image, calculé sur la projection, par morceaux.
+        let (checksum, entry, _, _) = pe_layout(&head).unwrap();
+        let digest = {
+            let d = crate::loader::ImageFile::open(&path).unwrap();
+            let mut h = hostssl::Hasher::new(c"SHA256").unwrap();
+            for part in [&d[..checksum], &d[checksum + 4..entry], &d[entry + 8..]] {
+                h.update(part);
+            }
+            h.finish()
+        };
+        std::fs::write(dir.join("spc.der"), spc_with_digest(&digest)).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("openssl")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "openssl {args:?} : {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&[
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "k.key",
+            "-out",
+            "c.pem",
+            "-subj",
+            "/CN=Editeur 3215",
+            "-days",
+            "30",
+            "-addext",
+            "extendedKeyUsage=codeSigning",
+        ]);
+        run(&[
+            "cms",
+            "-sign",
+            "-binary",
+            "-nodetach",
+            "-outform",
+            "DER",
+            "-md",
+            "sha256",
+            "-econtent_type",
+            "1.3.6.1.4.1.311.2.1.4",
+            "-signer",
+            "c.pem",
+            "-inkey",
+            "k.key",
+            "-in",
+            "spc.der",
+            "-out",
+            "sig.der",
+        ]);
+        // Table des certificats à la fin, désignée par l'entrée « sécurité ».
+        let sig = std::fs::read(dir.join("sig.der")).unwrap();
+        let padded = (8 + sig.len()).div_ceil(8) * 8;
+        let mut table = (padded as u32).to_le_bytes().to_vec();
+        table.extend_from_slice(&0x0200u16.to_le_bytes());
+        table.extend_from_slice(&2u16.to_le_bytes());
+        table.extend_from_slice(&sig);
+        table.resize(padded, 0);
+        {
+            let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            f.seek(SeekFrom::End(0)).unwrap();
+            f.write_all(&table).unwrap();
+            f.seek(SeekFrom::Start(entry as u64)).unwrap();
+            f.write_all(&(size as u32).to_le_bytes()).unwrap();
+            f.write_all(&(padded as u32).to_le_bytes()).unwrap();
+        }
+        let found = examine_pe_file(&path).unwrap().0;
+        let missing = examine_pe_file(&dir.join("absent.exe"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(&found, Signature::Unverified { signer, reason }
+                if signer == "Editeur 3215" && !reason.contains("modifié")),
+            "{found:?}"
+        );
+        // Illisible : une erreur, pas un verdict.
+        assert!(missing.is_err());
     }
 
     /// #1387 : certificat expiré mais signature horodatée (jeton RFC 3161)
@@ -2020,6 +2146,7 @@ pub(crate) mod tests {
         let mut placed = cab.clone();
         placed[44..48].copy_from_slice(&(cab.len() as u32).to_le_bytes());
         let (blob, image) = cab_signed_parts(&placed).unwrap();
+        let image = image.concat();
         assert_eq!(blob, Ok(&[][..]));
         let mut attendu = cab[..4].to_vec();
         attendu.extend_from_slice(&cab[8..36]);

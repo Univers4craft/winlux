@@ -1,0 +1,37 @@
+Description: Winlux : une fenêtre affichée pendant le démarrage d'openbox n'attend plus
+ Au démarrage, openbox lit les événements X dans sa propre file (libobt,
+ obt/xqueue.c) quand il vérifie des fenêtres (xqueue_exists_local, appelé par
+ window_manage et screen.c), avant puis pendant window_manage_all. La source X
+ que libobt attache à la boucle GLib (xqueue_listen) ne regarde que
+ XPending(), c'est-à-dire la file de Xlib et la socket : un événement déjà
+ déplacé dans la file d'openbox n'y figure plus. Une fenêtre dont la
+ MapRequest arrive dans ce laps de temps restait donc non affichée
+ (IsUnMapped, absente de _NET_CLIENT_LIST) jusqu'au prochain événement X reçu
+ par openbox, indéfiniment sur un écran au repos (#3190). Openbox de Winlux se
+ lie à la libobt d'Ubuntu : le correctif est donc dans le programme. Après
+ window_manage_all, il réécrit une propriété de sa fenêtre de support ; le
+ PropertyNotify réveille la source X, qui vide toute la file locale.
+Author: Winlux
+Forwarded: not-needed
+--- a/openbox/openbox.c
++++ b/openbox/openbox.c
+@@ -340,6 +340,19 @@
+                 /* get all the existing windows */
+                 window_manage_all();
+ 
++                /* Winlux (#3190) : jusqu'ici, xqueue_exists_local() et la
++                   synchronisation de window_manage() ont pu lire dans la file
++                   locale d'openbox des événements arrivés pendant le
++                   démarrage, dont la MapRequest d'une fenêtre qui s'affiche à
++                   ce moment-là. La source X de libobt ne regarde que
++                   XPending() : ces événements attendaient le prochain
++                   événement X, indéfiniment sur un écran au repos. Une
++                   propriété réécrite sur la fenêtre de support (qui suit
++                   PropertyChange) en produit un, et la boucle vide alors
++                   toute la file locale. */
++                OBT_PROP_SETS(screen_support_win, NET_WM_NAME, "Openbox");
++                XFlush(obt_display);
++
+                 /* focus what was focused if a wm was already running */
+                 if (OBT_PROP_GET32(obt_root(ob_screen),
+                                    NET_ACTIVE_WINDOW, WINDOW, &xid) &&
