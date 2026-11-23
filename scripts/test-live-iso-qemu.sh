@@ -15,10 +15,19 @@ command -v timeout >/dev/null 2>&1 || { echo "timeout est requis" >&2; exit 1; }
 test -f "$iso" || { echo "ISO absente : $iso" >&2; exit 1; }
 mkdir -p "$(dirname -- "$log")"
 
+# KVM quand le runner l'offre, comme test-browsers-vm.sh et
+# test-install-vm-guest.sh (#3317) : en TCG, le démarrage bios mangeait
+# 141 à 179 s des 180 s de budget. uefi32 reste en TCG tant que la panique
+# intermittente de #3199, vue seulement en TCG, n'est pas expliquée.
+accel=tcg
+if test "$mode" != uefi32 && test -r /dev/kvm && test -w /dev/kvm; then accel=kvm; fi
+accel=${WINLUX_QEMU_ACCEL:-$accel}
+case "$accel" in kvm|tcg) ;; *) echo "accélérateur invalide : $accel" >&2; exit 1 ;; esac
+
 set -- qemu-system-x86_64 \
     -m "${WINLUX_QEMU_MEMORY:-2048}" \
     -smp "${WINLUX_QEMU_CPUS:-2}" -cpu "${WINLUX_QEMU_CPU:-max}" \
-    -accel tcg \
+    -accel "$accel" \
     -display none \
     -nic none \
     -monitor none \
@@ -61,7 +70,8 @@ esac
 echo "Test QEMU $mode de $iso"
 # Diagnostic de #3199 (panique uefi32 en CI, jamais vue en QEMU 8.2) : version
 # de QEMU et processeur émulé réellement utilisés. À retirer avec le diagnostic.
-echo "QEMU : $(qemu-system-x86_64 --version | head -n 1) ; -cpu ${WINLUX_QEMU_CPU:-max} ; -accel tcg"
+echo "QEMU : $(qemu-system-x86_64 --version | head -n 1) ; -cpu ${WINLUX_QEMU_CPU:-max} ; -accel $accel"
+started=$(date +%s)
 set +e
 # Select GRUB's diagnostic hotkey while the hidden menu is waiting. Repeating
 # covers BIOS and slower UEFI firmware without changing the delivered ISO;
@@ -71,6 +81,7 @@ set +e
 ) | timeout "$timeout_seconds" "$@" >"$log" 2>&1
 qemu_status=$?
 set -e
+echo "Démarrage QEMU $mode ($accel) : $(( $(date +%s) - started )) s sur $timeout_seconds s de budget"
 
 if [ "$qemu_status" -ne 0 ]; then
     echo "QEMU a échoué (code $qemu_status), journal : $log" >&2
@@ -92,4 +103,5 @@ do
     fi
 done
 
+grep -a "WINLUX_LIVE_TERMINAL_TIME=" "$log" || true
 echo "ISO validée sous QEMU ($mode), journal : $log"
