@@ -176,12 +176,29 @@ namespace System.Threading
             return QueueUserWorkItem(callBack, state);
         }
 
-        public static bool SetMinThreads(int workerThreads, int completionPortThreads) { return true; }
+        // Minimum retenu (MS Learn, « ThreadPool.SetMinThreads ») : par défaut
+        // le nombre de processeurs ; une valeur négative ou au-dessus du
+        // maximum rend false sans rien changer. Notre pool donne un fil à
+        // chaque élément dès sa mise en file : il n'a jamais moins de fils
+        // prêts que ce minimum, qui n'a donc rien d'autre à changer (#3289).
+        private static int s_minFils = -1, s_minPorts = -1;
+
+        public static bool SetMinThreads(int workerThreads, int completionPortThreads)
+        {
+            int maxFils, maxPorts;
+            GetMaxThreads(out maxFils, out maxPorts);
+            if (workerThreads < 0 || completionPortThreads < 0
+                || workerThreads > maxFils || completionPortThreads > maxPorts)
+                return false;
+            s_minFils = workerThreads;
+            s_minPorts = completionPortThreads;
+            return true;
+        }
 
         public static void GetMinThreads(out int workerThreads, out int completionPortThreads)
         {
-            workerThreads = 4;
-            completionPortThreads = 4;
+            workerThreads = s_minFils >= 0 ? s_minFils : Environment.ProcessorCount;
+            completionPortThreads = s_minPorts >= 0 ? s_minPorts : Environment.ProcessorCount;
         }
 
         public static void GetMaxThreads(out int workerThreads, out int completionPortThreads)

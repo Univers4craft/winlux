@@ -516,6 +516,17 @@ type SentJob = Box<dyn FnOnce() -> isize + Send>;
 /// comme avant #2885, plutôt que de rester bloqué pour toujours.
 const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
 
+thread_local! {
+    /// Profondeur des messages envoyés par un autre fil en cours de
+    /// traitement sur ce fil (InSendMessage, InSendMessageEx, #3104).
+    static IN_SENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Le fil traite-t-il un message envoyé par un autre fil ?
+pub fn in_sent_message() -> bool {
+    IN_SENT.with(|d| d.get()) > 0
+}
+
 /// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
 /// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
 /// les attentes de messages et l'attente d'un SendMessage inter-fils.
@@ -530,7 +541,9 @@ pub fn deliver_sent() {
         };
         let job = lock(&sent.job).take();
         if let Some(job) = job {
+            IN_SENT.with(|d| d.set(d.get() + 1));
             let r = job();
+            IN_SENT.with(|d| d.set(d.get() - 1));
             *lock(&sent.result) = Some(r);
             sent.done.notify_all();
         }
@@ -1504,6 +1517,7 @@ pub fn window_from_dc(hdc: usize) -> usize {
 pub fn free_dc(hdc: usize) {
     lock(dcs()).remove(&hdc);
     lock(clips()).remove(&hdc);
+    super::gdi32_bounds::forget_dc(hdc);
 }
 
 // ---------- Découpage (clipping) des DC ----------
@@ -3810,6 +3824,10 @@ fn change_active_top(new_top: usize) {
             crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
             new_top,
         );
+        crate::dlls::user32_more::notify_shell_hook(
+            crate::dlls::user32_more::HSHELL_WINDOWACTIVATED,
+            new_top,
+        );
     }
 }
 
@@ -4336,6 +4354,23 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     q.wake.drain();
     deliver_sent();
     true
+}
+
+/// Descripteurs qui signalent un message pour le fil appelant : la
+/// connexion X11 et l'éveil de sa file. `None` en headless, où rien n'arrive
+/// de l'hôte. Vrai aussi : un événement déjà lu de la connexion attend.
+pub fn message_wake_fds() -> Option<([i32; 2], bool)> {
+    let (fd, pending) = {
+        let mut b = lock(backend());
+        let fd = b.event_fd()?;
+        (fd, b.poll_pending())
+    };
+    Some(([fd, current_queue().wake.0], pending))
+}
+
+/// Vide l'éveil de la file du fil appelant après un sommeil.
+pub fn drain_queue_wake() {
+    current_queue().wake.drain();
 }
 
 /// Attend que l'un des descripteurs soit lisible (au plus `timeout_ms`) ;
@@ -5564,8 +5599,18 @@ fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
 
 /// Renvoie le style WS_* de la fenêtre.
+/// Style d'une fenêtre. WS_VISIBLE y suit l'état visible, comme sous
+/// Windows où ShowWindow et SetWindowPos posent et ôtent ce bit (Learn,
+/// « Window Styles », #3247).
 pub fn window_style(hwnd: usize) -> Option<u32> {
-    lock(windows()).get(&hwnd).map(|w| w.style)
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    lock(windows()).get(&hwnd).map(|w| {
+        if w.visible {
+            w.style | WS_VISIBLE
+        } else {
+            w.style & !WS_VISIBLE
+        }
+    })
 }
 
 /// Enfant transparent qui laisse voir son parent : WS_CHILD et
@@ -7202,7 +7247,11 @@ pub(crate) mod tests {
         let q = current_queue();
         assert!(pending_paint(hwnd, 0, 0).is_none());
         request_paint(hwnd);
-        let m = take_message(&q, hwnd, 0, 0).expect("WM_PAINT en file");
+        // Filtré sur WM_PAINT : un test voisin qui fait passer le programme
+        // au premier plan poste WM_ACTIVATEAPP à toutes ses fenêtres de
+        // premier niveau, celle-ci comprise, comme Windows le fait pour
+        // toutes les fenêtres de premier niveau de l'application.
+        let m = take_message(&q, hwnd, WM_PAINT, WM_PAINT).expect("WM_PAINT en file");
         assert_eq!(m.message, WM_PAINT);
         // Sans BeginPaint, la zone reste invalidée : WM_PAINT revient dès que
         // la file est vide, mais pas pour un filtre qui l'exclut.
@@ -7213,13 +7262,13 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // BeginPaint valide aussi.
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         let (hdc, _) = begin_paint(hwnd).unwrap();
         end_paint(hwnd, hdc);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // DefWindowProc valide lui-même (comme BeginPaint/EndPaint sous Windows).
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         def_window_proc(hwnd, WM_PAINT, 0, 0);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);

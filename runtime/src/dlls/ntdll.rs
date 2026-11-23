@@ -1685,13 +1685,45 @@ pub unsafe extern "win64" fn nt_query_information_process(
 
 /// `NtQueryInformationThread` : stub.
 pub unsafe extern "win64" fn nt_query_information_thread(
-    _handle: usize,
-    _info_class: u32,
-    _info: *mut c_void,
-    _length: u32,
-    _return_length: *mut u32,
+    handle: usize,
+    info_class: u32,
+    info: *mut c_void,
+    length: u32,
+    return_length: *mut u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    match info_class {
+        0 => {
+            // ThreadBasicInformation, 48 octets en x64 : ExitStatus (et
+            // remplissage), TebBaseAddress, ClientId (UniqueProcess,
+            // UniqueThread), AffinityMask, Priority, BasePriority. Disposition
+            // de crashpad (util/win/process_structs.h, Apache 2.0), qui lit
+            // ainsi le TEB de chaque fil d'un processus planté (#2024).
+            let Some((status, teb, pid, tid, prio)) =
+                crate::dlls::kernel32::thread_basic_info(handle)
+            else {
+                return STATUS_INVALID_HANDLE;
+            };
+            let cpus = std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(64);
+            let mask = if cpus == 64 {
+                u64::MAX
+            } else {
+                (1u64 << cpus) - 1
+            };
+            let mut b = Vec::with_capacity(48);
+            b.extend_from_slice(&(status as u64).to_le_bytes());
+            b.extend_from_slice(&(teb as u64).to_le_bytes());
+            b.extend_from_slice(&(pid as u64).to_le_bytes());
+            b.extend_from_slice(&(tid as u64).to_le_bytes());
+            b.extend_from_slice(&mask.to_le_bytes());
+            // Priorité : classe normale (8) plus la priorité relative.
+            b.extend_from_slice(&(8 + prio).to_le_bytes());
+            b.extend_from_slice(&prio.to_le_bytes());
+            write_info(info, length, return_length, &b)
+        }
+        _ => STATUS_NOT_IMPLEMENTED,
+    }
 }
 
 /// `NtSetInformationThread` : stub (souvent appelé pour changer la priorité).
@@ -2466,6 +2498,97 @@ pub unsafe extern "win64" fn nt_wait_for_single_object(
     }
 }
 
+/// Délai NT (centaines de ns, négatif = relatif) en millisecondes.
+unsafe fn timeout_ms(timeout: *const i64) -> u32 {
+    if timeout.is_null() {
+        return u32::MAX;
+    }
+    let d = *timeout;
+    (d.unsigned_abs() / 10_000).min(u32::MAX as u64 - 1) as u32
+}
+
+/// `NtSignalAndWaitForSingleObject(HandleToSignal, HandleToWait, BOOLEAN
+/// Alertable, PLARGE_INTEGER Timeout)` (signature : `nt_internals.h` du bac
+/// à sable de Chromium, BSD) : l'équivalent NT de SignalObjectAndWait, que
+/// nous servons déjà. Le bac à sable d'Acrobat la résout dans ntdll avant
+/// de préparer son moteur de rendu (#3327).
+pub unsafe extern "win64" fn nt_signal_and_wait_for_single_object(
+    to_signal: usize,
+    to_wait: usize,
+    alertable: u8,
+    timeout: *const i64,
+) -> i32 {
+    let r = crate::dlls::kernel32::signal_object_and_wait(
+        to_signal,
+        to_wait,
+        timeout_ms(timeout),
+        alertable as i32,
+    );
+    match r {
+        0 => STATUS_SUCCESS,
+        0x102 => STATUS_TIMEOUT,
+        _ => STATUS_INVALID_HANDLE,
+    }
+}
+
+/// `RtlCreateUserThread(Process, SecurityDescriptor, BOOLEAN
+/// CreateSuspended, ZeroBits, MaximumStackSize, CommittedStackSize,
+/// StartAddress, Parameter, PHANDLE Thread, PCLIENT_ID ClientId)`
+/// (signature : `nt_internals.h` de Chromium, BSD ; importée par son bac à
+/// sable, #3327). Un fil du processus courant passe par CreateThread ; un
+/// autre processus n'est pas servi : STATUS_NOT_IMPLEMENTED, journalisé
+/// une fois avec file:line.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn rtl_create_user_thread(
+    process: usize,
+    _security: usize,
+    suspended: u8,
+    _zero_bits: u32,
+    max_stack: usize,
+    committed_stack: usize,
+    start: usize,
+    param: usize,
+    thread: *mut usize,
+    client_id: *mut usize,
+) -> i32 {
+    let own = process == usize::MAX
+        || crate::dlls::kernel32::get_process_id(process) == std::process::id();
+    if !own {
+        static VU: std::sync::Once = std::sync::Once::new();
+        VU.call_once(|| {
+            eprintln!(
+                "winlux[ntdll] RtlCreateUserThread dans un autre processus : STATUS_NOT_IMPLEMENTED ({}:{})",
+                file!(),
+                line!()
+            )
+        });
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    if start == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mut tid = 0u32;
+    let h = crate::dlls::kernel32::create_thread(
+        0,
+        max_stack.max(committed_stack),
+        start,
+        param,
+        if suspended != 0 { 4 } else { 0 },
+        &mut tid,
+    );
+    if h == 0 {
+        return status_of_last_error(STATUS_UNSUCCESSFUL);
+    }
+    if !thread.is_null() {
+        *thread = h;
+    }
+    if !client_id.is_null() {
+        *client_id = std::process::id() as usize;
+        *client_id.add(1) = tid as usize;
+    }
+    STATUS_SUCCESS
+}
+
 /// `NtFlushBuffersFile` : stub (flush un fichier par handle).
 pub unsafe extern "win64" fn nt_flush_buffers_file(_handle: usize, _io: *mut c_void) -> i32 {
     STATUS_SUCCESS
@@ -2592,6 +2715,30 @@ pub unsafe extern "win64" fn nt_open_process_token_ex(
     nt_open_process_token(process, access, token)
 }
 
+/// `NtQueryInformationToken` (Learn, ntifs.h) : `(TokenHandle,
+/// TokenInformationClass, TokenInformation, TokenInformationLength,
+/// ReturnLength) -> NTSTATUS`, la même lecture que GetTokenInformation
+/// (#3310 : 28e interception du courtier d'Acrobat).
+/// Learn : STATUS_BUFFER_TOO_SMALL avec la taille requise dans
+/// ReturnLength ; une classe non servie rend STATUS_INVALID_INFO_CLASS.
+pub unsafe extern "win64" fn nt_query_information_token(
+    token: usize,
+    class: u32,
+    info: *mut u8,
+    len: u32,
+    ret: *mut u32,
+) -> i32 {
+    crate::process::set_last_error(0);
+    if crate::dlls::security::GetTokenInformation(token, class, info, len, ret) != 0 {
+        return STATUS_SUCCESS;
+    }
+    match crate::process::last_error() {
+        122 => STATUS_BUFFER_TOO_SMALL,
+        87 => STATUS_INVALID_INFO_CLASS,
+        _ => status_of_last_error(STATUS_UNSUCCESSFUL),
+    }
+}
+
 /// `NtOpenThreadToken` : STATUS_NO_TOKEN si le thread n'emprunte aucune
 /// identité, comme sous Windows.
 pub unsafe extern "win64" fn nt_open_thread_token(
@@ -2658,6 +2805,72 @@ pub unsafe extern "win64" fn nt_open_event(
         return status_of_last_error(STATUS_OBJECT_NAME_NOT_FOUND);
     }
     *handle = h;
+    STATUS_SUCCESS
+}
+
+/// `NtOpenMutant` : ouverture d'un mutex nommé (#3252). Exportée par ntdll
+/// (mingw-w64, ntdll.def.in). Learn ne la documente pas. **Inférence
+/// nommée** : elle a la forme de ZwOpenEvent (Learn, wdm.h) et l'effet
+/// d'OpenMutexW sur le nom désigné par OBJECT_ATTRIBUTES.
+pub unsafe extern "win64" fn nt_open_mutant(
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let Some(nt) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let mut w: Vec<u16> = object_name_for_kernel32(&nt).encode_utf16().collect();
+    w.push(0);
+    let h = crate::dlls::kernel32_legacy::open_mutex_w(access, oa_inherit(attrs), w.as_ptr());
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+    *handle = h;
+    STATUS_SUCCESS
+}
+
+/// `NtCreateMutant` : création (ou ouverture, si le nom existe déjà) d'un
+/// mutex, nommé ou non (#3270). Exportée par ntdll (mingw-w64,
+/// ntdll.def.in). Learn ne la documente pas. **Inférence nommée** : elle a
+/// la forme de ZwCreateEvent (Learn, wdm.h) avec un seul BOOLEAN,
+/// `(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES optionnel, BOOLEAN
+/// InitialOwner) -> NTSTATUS`, et l'effet de CreateMutexW (Learn).
+pub unsafe extern "win64" fn nt_create_mutant(
+    handle: *mut usize,
+    _access: u32,
+    attrs: *const c_void,
+    initial_owner: u8,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let name: Option<Vec<u16>> = oa_path(attrs).map(|nt| {
+        object_name_for_kernel32(&nt)
+            .encode_utf16()
+            .chain([0])
+            .collect()
+    });
+    crate::process::set_last_error(0);
+    let h = crate::dlls::kernel32::create_mutex_w(
+        0,
+        (initial_owner != 0) as i32,
+        name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()),
+    );
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_INVALID_PARAMETER);
+    }
+    *handle = h;
+    // ERROR_ALREADY_EXISTS : Windows rend STATUS_OBJECT_NAME_EXISTS, un
+    // succès (Learn, « Using NTSTATUS Values » : sévérité informative).
+    if crate::process::last_error() == 183 {
+        return STATUS_OBJECT_NAME_EXISTS;
+    }
     STATUS_SUCCESS
 }
 
@@ -2838,10 +3051,23 @@ pub fn exports() -> crate::dlls::Exports {
         "NtOpenThread" => fn nt_open_thread,
         "NtCreateLowBoxToken" => fn crate::dlls::security::nt_create_low_box_token,
         "NtOpenProcessToken" => fn nt_open_process_token,
+        "NtQueryInformationToken" => fn nt_query_information_token,
+        "NtSignalAndWaitForSingleObject" => fn nt_signal_and_wait_for_single_object,
+        "RtlCreateUserThread" => fn rtl_create_user_thread,
+        // Fonctions de la CRT que ntdll exporte : le bac à sable de Chromium
+        // les résout dans la table d'exports de ntdll (#3327).
+        "_strnicmp" => fn crate::dlls::crt::strnicmp,
+        "strlen" => fn crate::dlls::msvcrt::strlen,
+        "wcslen" => fn crate::dlls::crt::wcslen,
+        "memcpy" => fn crate::dlls::msvcrt::memcpy,
+        // Recherché juste après memcpy par le même courtier (Acrobat, i20, #3367).
+        "_wcsnicmp" => fn crate::dlls::crt_ucrt::wcsnicmp,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
         "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
         "NtOpenEvent" => fn nt_open_event,
+        "NtOpenMutant" => fn nt_open_mutant,
+        "NtCreateMutant" => fn nt_create_mutant,
         "NtRaiseHardError" => fn nt_raise_hard_error,
     }
 }
@@ -3155,12 +3381,490 @@ mod process_information_tests {
     }
 }
 
+/// Fonctions de la CRT que ntdll.dll exporte sous Windows x64 : noms de
+/// mingw-w64 `mingw-w64-crt/lib-common/ntdllcrt.def.in` (domaine public),
+/// sans les entrées propres à i386/ARM ni les données (`_fltused`). Ceux que
+/// notre CRT sert vont dans la table d'exports de l'image ntdll
+/// (`dlls::add_ntdll_crt`) : un programme qui lit la table lui-même (courtier
+/// du bac à sable Chromium, BSD) les trouve, comme GetProcAddress les
+/// trouvait déjà par le repli vers msvcrt (#3389). Triée.
+pub const CRT_REEXPORTS: &[&str] = &[
+    "__C_specific_handler",
+    "__isascii",
+    "__iscsym",
+    "__iscsymf",
+    "__misaligned_access",
+    "__toascii",
+    "_atoi64",
+    "_errno",
+    "_i64toa",
+    "_i64toa_s",
+    "_i64tow",
+    "_i64tow_s",
+    "_itoa",
+    "_itoa_s",
+    "_itow",
+    "_itow_s",
+    "_lfind",
+    "_local_unwind",
+    "_ltoa",
+    "_ltoa_s",
+    "_ltow",
+    "_ltow_s",
+    "_makepath_s",
+    "_memccpy",
+    "_memicmp",
+    "_setjmp",
+    "_setjmpex",
+    "_snprintf",
+    "_snprintf_s",
+    "_snscanf_s",
+    "_snwprintf",
+    "_snwprintf_s",
+    "_snwscanf_s",
+    "_splitpath",
+    "_splitpath_s",
+    "_strcmpi",
+    "_stricmp",
+    "_strlwr",
+    "_strlwr_s",
+    "_strnicmp",
+    "_strnset_s",
+    "_strset_s",
+    "_strupr",
+    "_strupr_s",
+    "_swprintf",
+    "_tolower",
+    "_toupper",
+    "_ui64toa",
+    "_ui64toa_s",
+    "_ui64tow",
+    "_ui64tow_s",
+    "_ultoa",
+    "_ultoa_s",
+    "_ultow",
+    "_ultow_s",
+    "_vscprintf",
+    "_vscwprintf",
+    "_vsnprintf",
+    "_vsnprintf_s",
+    "_vsnwprintf",
+    "_vsnwprintf_s",
+    "_vswprintf",
+    "_wcsicmp",
+    "_wcslwr",
+    "_wcslwr_s",
+    "_wcsnicmp",
+    "_wcsnset_s",
+    "_wcsset_s",
+    "_wcstoi64",
+    "_wcstoui64",
+    "_wcsupr",
+    "_wcsupr_s",
+    "_wmakepath_s",
+    "_wsplitpath_s",
+    "_wtoi",
+    "_wtoi64",
+    "_wtol",
+    "abs",
+    "atan",
+    "atan2",
+    "atoi",
+    "atol",
+    "bsearch",
+    "bsearch_s",
+    "ceil",
+    "cos",
+    "fabs",
+    "floor",
+    "isalnum",
+    "isalpha",
+    "iscntrl",
+    "isdigit",
+    "isgraph",
+    "islower",
+    "isprint",
+    "ispunct",
+    "isspace",
+    "isupper",
+    "iswalnum",
+    "iswalpha",
+    "iswascii",
+    "iswctype",
+    "iswdigit",
+    "iswgraph",
+    "iswlower",
+    "iswprint",
+    "iswspace",
+    "iswxdigit",
+    "isxdigit",
+    "labs",
+    "log",
+    "longjmp",
+    "mbstowcs",
+    "memchr",
+    "memcmp",
+    "memcpy",
+    "memcpy_s",
+    "memmove",
+    "memmove_s",
+    "memset",
+    "pow",
+    "qsort",
+    "qsort_s",
+    "sin",
+    "sprintf",
+    "sprintf_s",
+    "sqrt",
+    "sscanf",
+    "sscanf_s",
+    "strcat",
+    "strcat_s",
+    "strchr",
+    "strcmp",
+    "strcpy",
+    "strcpy_s",
+    "strcspn",
+    "strlen",
+    "strlwr",
+    "strncat",
+    "strncat_s",
+    "strncmp",
+    "strncpy",
+    "strncpy_s",
+    "strnlen",
+    "strpbrk",
+    "strrchr",
+    "strspn",
+    "strstr",
+    "strtok_s",
+    "strtol",
+    "strtoul",
+    "swprintf",
+    "swprintf_s",
+    "swscanf_s",
+    "tan",
+    "tolower",
+    "toupper",
+    "towlower",
+    "towupper",
+    "vsprintf",
+    "vsprintf_s",
+    "vswprintf_s",
+    "wcscat",
+    "wcscat_s",
+    "wcschr",
+    "wcscmp",
+    "wcscpy",
+    "wcscpy_s",
+    "wcscspn",
+    "wcslen",
+    "wcslwr",
+    "wcsncat",
+    "wcsncat_s",
+    "wcsncmp",
+    "wcsncpy",
+    "wcsncpy_s",
+    "wcsnlen",
+    "wcspbrk",
+    "wcsrchr",
+    "wcsspn",
+    "wcsstr",
+    "wcstok_s",
+    "wcstol",
+    "wcstombs",
+    "wcstoul",
+];
+
 #[cfg(test)]
 mod ouvertures_tests {
     use super::*;
 
     /// Fonctions que le bac à sable de Chromium intercepte dans chaque enfant
     /// (#767) : toutes exportées par ntdll, avec un relais de service.
+    /// NtCreateMutant crée un mutex nommé ou non ; un nom existant rend
+    /// STATUS_OBJECT_NAME_EXISTS avec un handle, et NtOpenMutant le
+    /// retrouve (#3270).
+    /// Les imports de ntdll que le bac à sable de Chromium (BSD) résout
+    /// dans la table d'exports : `InitGlobalNt` de `policy_broker.cc`
+    /// (60.0.3112.113) et de `sandbox_nt_util.cc` (actuel), plus ceux
+    /// observés chez Acrobat (passe i19, #3327).
+    #[test]
+    fn imports_ntdll_du_bac_a_sable_3327() {
+        let e = &crate::dlls::builtins()
+            .iter()
+            .find(|b| b.name == "ntdll")
+            .expect("ntdll intégrée")
+            .exports;
+        for name in [
+            "NtAllocateVirtualMemory",
+            "NtCreateFile",
+            "NtCreateSection",
+            "NtClose",
+            "NtDuplicateObject",
+            "NtFreeVirtualMemory",
+            "NtMapViewOfSection",
+            "NtOpenThread",
+            "NtOpenProcessTokenEx",
+            "NtProtectVirtualMemory",
+            "NtQueryAttributesFile",
+            "NtQueryFullAttributesFile",
+            "NtQueryInformationProcess",
+            "NtQueryObject",
+            "NtQuerySection",
+            "NtQueryVirtualMemory",
+            "NtSetInformationFile",
+            "NtSignalAndWaitForSingleObject",
+            "NtUnmapViewOfSection",
+            "NtWaitForSingleObject",
+            "NtOpenDirectoryObject",
+            "RtlAllocateHeap",
+            "RtlAnsiStringToUnicodeString",
+            "RtlCompareUnicodeString",
+            "RtlCreateHeap",
+            "RtlCreateUserThread",
+            "RtlDestroyHeap",
+            "RtlFreeHeap",
+            "RtlNtStatusToDosError",
+            "_strnicmp",
+            "strlen",
+            "wcslen",
+            "memcpy",
+        ] {
+            assert!(e.contains_key(name), "{name} absent de la table de ntdll");
+        }
+    }
+
+    /// #3389 : toute la CRT que ntdll exporte sous Windows et que notre CRT
+    /// sert est dans la table d'exports de l'image ntdll, lue comme le
+    /// courtier du bac à sable de Chromium la lit ; ce qui n'est servi
+    /// nulle part n'y est pas (pas d'export inventé).
+    #[test]
+    fn crt_de_ntdll_dans_l_image_3389() {
+        assert!(super::CRT_REEXPORTS.windows(2).all(|w| w[0] < w[1]));
+        let base = crate::dlls::module_handle("ntdll").expect("ntdll");
+        let rd32 = |a: usize| unsafe { (a as *const u32).read_unaligned() } as usize;
+        let pe = base + rd32(base + 0x3c);
+        assert_eq!(rd32(pe), 0x4550);
+        let dir = base + rd32(pe + 24 + 112);
+        let noms: Vec<&[u8]> = (0..rd32(dir + 24))
+            .map(|i| {
+                let p = base + rd32(base + rd32(dir + 32) + 4 * i);
+                unsafe { std::ffi::CStr::from_ptr(p as *const std::ffi::c_char) }.to_bytes()
+            })
+            .collect();
+        let dans_l_image = |n: &str| noms.binary_search(&n.as_bytes()).is_ok();
+        // Acrobat, passe i21 : cherché juste après _wcsnicmp.
+        assert!(
+            dans_l_image("swprintf_s"),
+            "ntdll!swprintf_s absent de l'image"
+        );
+        for &n in super::CRT_REEXPORTS {
+            let servi = crate::dlls::lookup("msvcrt", n).is_some();
+            assert_eq!(
+                dans_l_image(n),
+                servi,
+                "ntdll!{n} : image et repli divergent"
+            );
+        }
+    }
+
+    /// #3367 : `_wcsnicmp` est dans la table d'exports de l'image ntdll, lue
+    /// comme le courtier du bac à sable de Chromium la lit (en-têtes PE,
+    /// répertoire d'exports, recherche par nom) et non par GetProcAddress
+    /// ni par le repli de `lookup` vers la CRT, qui le trouvaient déjà.
+    #[test]
+    fn wcsnicmp_dans_l_image_ntdll_3367() {
+        let base = crate::dlls::module_handle("ntdll").expect("ntdll");
+        let rd32 = |a: usize| unsafe { (a as *const u32).read_unaligned() } as usize;
+        let rd16 = |a: usize| unsafe { (a as *const u16).read_unaligned() } as usize;
+        assert_eq!(rd16(base), 0x5A4D);
+        let pe = base + rd32(base + 0x3c);
+        assert_eq!(rd32(pe), 0x4550);
+        let dir = base + rd32(pe + 24 + 112);
+        let noms: Vec<&[u8]> = (0..rd32(dir + 24))
+            .map(|i| {
+                let p = base + rd32(base + rd32(dir + 32) + 4 * i);
+                unsafe { std::ffi::CStr::from_ptr(p as *const std::ffi::c_char) }.to_bytes()
+            })
+            .collect();
+        // La table est triée : le courtier y cherche par dichotomie.
+        assert!(
+            noms.windows(2).all(|w| w[0] < w[1]),
+            "table de ntdll non triée"
+        );
+        for name in ["_wcsnicmp", "_strnicmp", "memcpy", "wcslen", "strlen"] {
+            assert!(
+                noms.binary_search(&name.as_bytes()).is_ok(),
+                "ntdll!{name} absent de la table de l'image"
+            );
+        }
+        // Et le nom mène à la fonction : comparaison sans casse bornée.
+        let a: Vec<u16> = "AbCdX\0".encode_utf16().collect();
+        let b: Vec<u16> = "aBcDy\0".encode_utf16().collect();
+        let f = crate::dlls::lookup("ntdll", "_wcsnicmp").expect("_wcsnicmp");
+        let f: unsafe extern "win64" fn(*const u16, *const u16, usize) -> i32 =
+            unsafe { std::mem::transmute(f) };
+        assert_eq!(unsafe { f(a.as_ptr(), b.as_ptr(), 4) }, 0);
+        assert!(unsafe { f(a.as_ptr(), b.as_ptr(), 5) } < 0);
+    }
+
+    #[test]
+    fn nt_signal_and_wait_et_rtl_create_user_thread_3327() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            use crate::dlls::kernel32::{create_event_w, wait_for_single_object};
+            // Signale le premier événement, attend le second déjà signalé.
+            let a = create_event_w(0, 1, 0, std::ptr::null());
+            let b = create_event_w(0, 1, 1, std::ptr::null());
+            let zero = 0i64;
+            assert_eq!(
+                nt_signal_and_wait_for_single_object(a, b, 0, &zero),
+                STATUS_SUCCESS
+            );
+            assert_eq!(wait_for_single_object(a, 0), 0, "le premier est signalé");
+            // Attente sur un événement non signalé : délai écoulé.
+            let c = create_event_w(0, 1, 0, std::ptr::null());
+            let court = -10_000i64; // 1 ms
+            assert_eq!(
+                nt_signal_and_wait_for_single_object(a, c, 0, &court),
+                STATUS_TIMEOUT
+            );
+
+            // RtlCreateUserThread dans le processus courant.
+            static VU: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            unsafe extern "win64" fn fil(p: usize) -> u32 {
+                VU.store(p, std::sync::atomic::Ordering::SeqCst);
+                0
+            }
+            let mut h = 0usize;
+            let mut cid = [0usize; 2];
+            let st = rtl_create_user_thread(
+                usize::MAX,
+                0,
+                0,
+                0,
+                0,
+                0,
+                fil as usize,
+                0x3327,
+                &mut h,
+                cid.as_mut_ptr(),
+            );
+            assert_eq!(st, STATUS_SUCCESS);
+            assert_ne!(h, 0);
+            assert_eq!(cid[0], std::process::id() as usize);
+            assert_ne!(cid[1], 0);
+            assert_eq!(wait_for_single_object(h, 5000), 0);
+            assert_eq!(VU.load(std::sync::atomic::Ordering::SeqCst), 0x3327);
+        }
+    }
+
+    #[test]
+    fn nt_query_information_token_lit_le_jeton_3310() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let mut token = 0usize;
+            assert_eq!(
+                nt_open_process_token(usize::MAX, 0x8, &mut token),
+                STATUS_SUCCESS
+            );
+            // TokenUser (1) : taille requise d'abord, puis la lecture.
+            let mut besoin = 0u32;
+            assert_eq!(
+                nt_query_information_token(token, 1, std::ptr::null_mut(), 0, &mut besoin),
+                STATUS_BUFFER_TOO_SMALL
+            );
+            assert!(besoin >= 16, "taille requise {besoin}");
+            let mut buf = vec![0u8; besoin as usize];
+            let mut lu = 0u32;
+            assert_eq!(
+                nt_query_information_token(token, 1, buf.as_mut_ptr(), besoin, &mut lu),
+                STATUS_SUCCESS
+            );
+            assert_eq!(lu, besoin);
+            // TOKEN_USER : le pointeur de SID désigne le tampon lui-même.
+            let sid = std::ptr::read_unaligned(buf.as_ptr() as *const usize);
+            assert!(sid >= buf.as_ptr() as usize && sid < buf.as_ptr() as usize + buf.len());
+            assert_eq!(
+                nt_query_information_token(token, 0xFFFF, buf.as_mut_ptr(), besoin, &mut lu),
+                STATUS_INVALID_INFO_CLASS
+            );
+        }
+    }
+
+    #[test]
+    fn nt_create_mutant_cree_un_mutex_3270() {
+        // GetLastError (183 si le nom existait) vit dans le TEB.
+        let _teb = crate::process::test_teb();
+        let nom = format!("winlux-3270-{}", std::process::id());
+        let nt: Vec<u16> = format!("\\Sessions\\1\\BaseNamedObjects\\{nom}")
+            .encode_utf16()
+            .collect();
+        let mut us = [0u8; 16];
+        let octets = (nt.len() * 2) as u16;
+        us[0..2].copy_from_slice(&octets.to_le_bytes());
+        us[2..4].copy_from_slice(&octets.to_le_bytes());
+        us[8..16].copy_from_slice(&(nt.as_ptr() as u64).to_le_bytes());
+        let mut oa = [0u8; 0x30];
+        oa[0..4].copy_from_slice(&0x30u32.to_le_bytes());
+        oa[0x10..0x18].copy_from_slice(&(us.as_ptr() as u64).to_le_bytes());
+        let (mut cree, mut encore, mut ouvert, mut anonyme) = (0usize, 0usize, 0usize, 0usize);
+        let st_cree = unsafe { nt_create_mutant(&mut cree, 0x001F_0001, oa.as_ptr().cast(), 1) };
+        let st_encore =
+            unsafe { nt_create_mutant(&mut encore, 0x001F_0001, oa.as_ptr().cast(), 0) };
+        let st_ouvert = unsafe { nt_open_mutant(&mut ouvert, 0x0010_0000, oa.as_ptr().cast()) };
+        let st_anonyme =
+            unsafe { nt_create_mutant(&mut anonyme, 0x001F_0001, std::ptr::null(), 0) };
+        let st_nul = unsafe { nt_create_mutant(std::ptr::null_mut(), 0, std::ptr::null(), 0) };
+        eprintln!(
+            "      création {st_cree:#x}, recréation {st_encore:#x}, ouverture {st_ouvert:#x}, \
+             anonyme {st_anonyme:#x}, handle nul {st_nul:#x}"
+        );
+        assert_eq!(st_cree, STATUS_SUCCESS);
+        assert_ne!(cree, 0);
+        assert_eq!(st_encore, STATUS_OBJECT_NAME_EXISTS);
+        assert_ne!(encore, 0);
+        assert_eq!(st_ouvert, STATUS_SUCCESS);
+        assert_ne!(ouvert, 0);
+        assert_eq!(st_anonyme, STATUS_SUCCESS);
+        assert_ne!(anonyme, 0);
+        assert_eq!(st_nul, STATUS_INVALID_PARAMETER);
+        assert!(exports().contains_key("NtCreateMutant"));
+    }
+
+    /// NtOpenMutant ouvre un mutex nommé créé par CreateMutexW, et rend
+    /// STATUS_OBJECT_NAME_NOT_FOUND pour un nom absent (#3252).
+    #[test]
+    fn nt_open_mutant_ouvre_un_mutex_nomme_3252() {
+        let nom = format!("winlux-3252-{}", std::process::id());
+        let w: Vec<u16> = nom.encode_utf16().chain([0]).collect();
+        let cree = unsafe { crate::dlls::kernel32::create_mutex_w(0, 0, w.as_ptr()) };
+        assert_ne!(cree, 0);
+        let ouvrir = |nt: &str| -> (i32, usize) {
+            let buf: Vec<u16> = nt.encode_utf16().collect();
+            let mut us = [0u8; 16];
+            let octets = (buf.len() * 2) as u16;
+            us[0..2].copy_from_slice(&octets.to_le_bytes());
+            us[2..4].copy_from_slice(&octets.to_le_bytes());
+            us[8..16].copy_from_slice(&(buf.as_ptr() as u64).to_le_bytes());
+            let mut oa = [0u8; 0x30];
+            oa[0..4].copy_from_slice(&0x30u32.to_le_bytes());
+            oa[0x10..0x18].copy_from_slice(&(us.as_ptr() as u64).to_le_bytes());
+            let mut h = 0usize;
+            let st = unsafe { nt_open_mutant(&mut h, 0x0010_0000, oa.as_ptr().cast()) };
+            (st, h)
+        };
+        let (st, h) = ouvrir(&format!("\\Sessions\\1\\BaseNamedObjects\\{nom}"));
+        eprintln!("      NtOpenMutant({nom}) = {st:#x}, handle {h:#x}");
+        assert_eq!(st, STATUS_SUCCESS);
+        assert_ne!(h, 0);
+        let (absent, h2) = ouvrir("\\Sessions\\1\\BaseNamedObjects\\winlux-3252-absent");
+        assert_eq!(absent, STATUS_OBJECT_NAME_NOT_FOUND);
+        assert_eq!(h2, 0);
+        assert!(exports().contains_key("NtOpenMutant"));
+    }
+
     #[test]
     fn interceptions_de_base_du_bac_a_sable() {
         let e = &crate::dlls::builtins()
@@ -3188,7 +3892,18 @@ mod ouvertures_tests {
             "NtOpenKeyEx",
             "NtCreateEvent",
             "NtOpenEvent",
+            "NtOpenMutant",
+            "NtCreateMutant",
             "NtCreateSection",
+            "NtAddAtom",
+            "NtAddAtomEx",
+            "NtFindAtom",
+            "NtDeleteAtom",
+            "NtQueryInformationAtom",
+            "NtQueryInformationToken",
+            // Les 27 noms cherchés par le courtier d'Acrobat (passe i17, #3304).
+            "NtOpenSection",
+            "NtDeleteValueKey",
         ] {
             assert!(e.contains_key(name), "{name} absent de ntdll");
         }

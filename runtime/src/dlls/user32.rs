@@ -326,6 +326,9 @@ unsafe fn create_window_common(
     if let Some(d) = diag {
         eprintln!("winlux[fenetre] creer {d} -> {hwnd:#x}");
     }
+    if hwnd != 0 {
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_WINDOWCREATED, hwnd);
+    }
     hwnd
 }
 
@@ -1034,9 +1037,11 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
 /// Chromium ne recalcule sa zone cliente (et la taille de sa surface de
 /// rendu) que sur WM_WINDOWPOSCHANGED : sans lui, Claude agrandi gardait son
 /// contenu en 1000x800 dans un coin, le reste noir, et ses boutons ne
-/// répondaient plus (#1476).
+/// répondaient plus (#1476). Un programme 32 bits le reçoit aussi :
+/// wow32::user traduit WINDOWPOS en disposition x86 à l'aller et au retour
+/// (#3394).
 unsafe fn geometry_changed(hwnd: usize, message: u32) {
-    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+    if gui::window_parent(hwnd).unwrap_or(0) != 0 {
         return;
     }
     let Some(rect) = gui::window_rect(hwnd) else {
@@ -1489,6 +1494,7 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
     // la détruire ; sans ce retour, la fenêtre de VLC restait inactive et sa
     // barre de menus gardait les libellés grisés de l'attente (#1311).
     let owner = owner_to_refocus(hwnd);
+    super::user32_more::shell_hook_window_destroyed(hwnd);
     if gui::destroy_window(hwnd) {
         if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
             crate::thunks::api_note(&format!(
@@ -1611,6 +1617,7 @@ unsafe fn activate_for_focus(hwnd: usize, state: usize) {
     }
     deliver(top, gui::WM_NCACTIVATE, 1, 0);
     deliver(top, gui::WM_ACTIVATE, state, prev as isize);
+    super::user32_more::notify_shell_hook(super::user32_more::HSHELL_WINDOWACTIVATED, top);
 }
 
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
@@ -1806,22 +1813,13 @@ pub unsafe extern "win64" fn set_window_pos(
         restack_child(hwnd, _insert_after);
     }
 
-    let mut visibility_changed = false;
-    if flags & SWP_SHOWWINDOW != 0 {
-        visibility_changed = !gui::set_visible(hwnd, true);
-        let map = !empty_top_level(hwnd);
-        with_backend(|backend| backend.show_window(hwnd, map));
-        if map {
-            sync_frame(hwnd);
-        }
+    let visibility_changed = if flags & SWP_SHOWWINDOW != 0 {
+        set_visibility(hwnd, true)
     } else if flags & SWP_HIDEWINDOW != 0 {
-        visibility_changed = gui::set_visible(hwnd, false);
-        with_backend(|backend| backend.show_window(hwnd, false));
-    }
-
-    if visibility_changed {
-        publish_shared(hwnd);
-    }
+        set_visibility(hwnd, false)
+    } else {
+        false
+    };
 
     if flags & SWP_FRAMECHANGED != 0 {
         frame_changed(hwnd, rect, flags);
@@ -2021,12 +2019,15 @@ struct NcCalcSizeParams {
 /// fenêtres est alors retiré, sinon deux barres de titre se superposent
 /// (#1131). Il revient si la fenêtre rend plus tard la main à DefWindowProc.
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
-    // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
-    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+    // Programme 32 bits : la procédure x86 reçoit NCCALCSIZE_PARAMS en
+    // disposition x86 (trois RECT puis un pointeur 32 bits de WINDOWPOS),
+    // traduit à l'aller et au retour par wow32::user (recv_conv), comme
+    // WM_WINDOWPOSCHANGING. Seules les fenêtres filles n'ont pas de cadre
+    // du gestionnaire à retirer.
+    if gui::window_parent(hwnd).unwrap_or(0) != 0 {
         if window_diag() {
             eprintln!(
-                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
-                crate::wow32::pointer_size() * 8,
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé (fenêtre fille de {:#x}) (#3205)",
                 gui::window_parent(hwnd).unwrap_or(0)
             );
         }
@@ -2228,6 +2229,7 @@ pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> 
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
         publish_shared(hwnd);
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_REDRAW, hwnd);
         1
     } else {
         0
@@ -2240,6 +2242,7 @@ pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) ->
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
         publish_shared(hwnd);
+        super::user32_more::notify_shell_hook(super::user32_more::HSHELL_REDRAW, hwnd);
         1
     } else {
         0
@@ -2431,6 +2434,10 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         // cocher et boutons radio à 96 ppp. wxWidgets l'ajoute à la largeur
         // du libellé ; à 0, ses libellés finissaient en « … » (#842).
         71 | 72 => 15,
+        // SM_CONVERTIBLESLATEMODE : 0 en mode tablette, non nul sinon
+        // (Learn, GetSystemMetrics). Un PC sans interrupteur mode tablette
+        // n'est jamais en mode tablette (#1933).
+        0x2003 => crate::dlls::evdev::slate_mode_metric(),
         90 => 96, // LOGPIXELSX
         91 => 96, // LOGPIXELSY
         _ => 0,
@@ -2669,13 +2676,33 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
     }
 }
 
+/// Montre ou cache la fenêtre sans message ni activation, comme
+/// SWP_SHOWWINDOW et SWP_HIDEWINDOW.
+/// Rend vrai si la visibilité a changé.
+fn set_visibility(hwnd: usize, show: bool) -> bool {
+    let was = gui::set_visible(hwnd, show);
+    if show {
+        let map = !empty_top_level(hwnd);
+        with_backend(|backend| backend.show_window(hwnd, map));
+        if map {
+            sync_frame(hwnd);
+        }
+    } else {
+        with_backend(|backend| backend.show_window(hwnd, false));
+    }
+    if was != show {
+        publish_shared(hwnd);
+    }
+    was != show
+}
+
 unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
         GWL_STYLE => {
-            if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+            let style = value as u32;
+            if gui::set_window_style(hwnd, style).is_some_and(|o| o != style) {
                 publish_shared(hwnd);
-                let style = value as u32;
                 if style & WS_CHILD == 0 {
                     with_backend(|b| {
                         b.set_resizable(hwnd, !fixed_size_frame(style));
@@ -2683,6 +2710,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
                         b.set_caption_buttons(hwnd, minimize, maximize);
                     });
                 }
+            }
+            // WS_VISIBLE posé ou ôté : IsWindowVisible suit le style (Learn,
+            // « IsWindowVisible », #3247).
+            let show = style & 0x1000_0000 != 0; // WS_VISIBLE
+            if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
+                set_visibility(hwnd, show);
             }
         }
         GWL_EXSTYLE => {
@@ -5055,8 +5088,25 @@ pub extern "win64" fn reply_message(_result: isize) -> i32 {
     1
 }
 
+/// `InSendMessage` : vrai pendant le traitement d'un message envoyé par un
+/// autre fil (Learn, InSendMessage).
 pub extern "win64" fn in_send_message() -> i32 {
-    0
+    gui::in_sent_message() as i32
+}
+
+/// `InSendMessageEx` (#3104) : ISMEX_NOSEND (0) hors d'un message envoyé
+/// par un autre fil, ISMEX_SEND (1) pendant (Learn, InSendMessageEx).
+/// **Inférence nommée** : nos envois inter-fils viennent tous de
+/// SendMessage et attendent la réponse ; ISMEX_NOTIFY, ISMEX_CALLBACK et
+/// ISMEX_REPLIED ne sont pas encore distingués.
+pub extern "win64" fn in_send_message_ex(_reserved: usize) -> u32 {
+    const ISMEX_NOSEND: u32 = 0;
+    const ISMEX_SEND: u32 = 1;
+    if gui::in_sent_message() {
+        ISMEX_SEND
+    } else {
+        ISMEX_NOSEND
+    }
 }
 
 /// `WaitMessage` : dort jusqu'à ce qu'un message, un WM_PAINT ou un
@@ -5102,7 +5152,10 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
     let start = std::time::Instant::now();
+    // Inscrite avant toute lecture : un signal postérieur réveille le fil.
+    let mut objects = crate::dlls::kernel32::ObjectWait::new(&hs);
     loop {
+        objects.arm();
         // 1. Les objets. Une socket associée par WSAEventSelect rend son
         //    événement prêt : PuTTY attend ainsi le réseau (avant, on
         //    répondait toujours « un message attend » et il tournait à vide).
@@ -5139,6 +5192,7 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
         //    Les rappels SetWinEventHook en attente sont appelés pendant
         //    l'attente, comme sous Windows.
+        gui::deliver_sent();
         if wake_mask != 0 {
             super::chromium_win32::deliver_win_events();
         }
@@ -5155,11 +5209,40 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         } else {
             timeout - elapsed
         };
-        // Tranches courtes : les objets et les sockets n'ont pas de
-        // descripteur commun avec la connexion X11.
-        let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
-        if !gui::wait_backend(slice) {
-            std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+        // 4. Le sommeil (#3170) : dans poll(2), jusqu'au signal d'un objet,
+        //    à l'arrivée d'un message (connexion X11, éveil de la file) ou
+        //    au prochain minuteur. Borne de sûreté de 500 ms, comme
+        //    GetMessage ; 10 ms pour les sockets WSAAsyncSelect sondées.
+        //    En headless, sans descripteur de messages, tranches de 10 ms.
+        let wake = if wake_mask != 0 {
+            gui::message_wake_fds()
+        } else {
+            Some(([-1, -1], false))
+        };
+        match wake {
+            Some((_, true)) => continue,
+            Some((fds, false)) => {
+                let cap = if super::ws2_32::async_active() {
+                    10
+                } else {
+                    500
+                };
+                let timer = if wake_mask != 0 {
+                    gui::next_timer_ms(0).unwrap_or(cap)
+                } else {
+                    cap
+                };
+                objects.block(&fds, left.min(timer).min(cap));
+                if wake_mask != 0 {
+                    gui::drain_queue_wake();
+                }
+            }
+            None => {
+                let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
+                if !gui::wait_backend(slice) {
+                    std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+                }
+            }
         }
     }
 }
@@ -5179,9 +5262,22 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(
     handles: *const usize,
     timeout: u32,
     wake_mask: u32,
-    _flags: u32,
+    flags: u32,
 ) -> u32 {
-    msg_wait_for_multiple_objects(count, handles, 0, timeout, wake_mask)
+    // Learn (MsgWaitForMultipleObjectsEx) : MWMO_WAITALL attend tous les
+    // objets ; MWMO_ALERTABLE rend aussi la main quand une APC est mise en
+    // file pour le fil (QueueUserAPC, routine de complétion), après l'avoir
+    // exécutée, avec WAIT_IO_COMPLETION. Ignorer ces drapeaux laissait un
+    // fil qui reçoit son travail par APC attendre pour toujours (#3281).
+    const MWMO_WAITALL: u32 = 0x1;
+    const MWMO_ALERTABLE: u32 = 0x2;
+    let wait_all = i32::from(flags & MWMO_WAITALL != 0);
+    if flags & MWMO_ALERTABLE != 0 {
+        return crate::dlls::kernel32::alertable_wait(timeout, |slice| {
+            msg_wait_for_multiple_objects(count, handles, wait_all, slice, wake_mask)
+        });
+    }
+    msg_wait_for_multiple_objects(count, handles, wait_all, timeout, wake_mask)
 }
 
 // ---------- Scroll bar stubs ----------
@@ -5622,6 +5718,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterWindowMessageW"=>fn register_window_message_w,
         "GetMessagePos"=>fn get_message_pos, "GetMessageTime"=>fn get_message_time,
         "ReplyMessage"=>fn reply_message, "InSendMessage"=>fn in_send_message,
+        "InSendMessageEx"=>fn in_send_message_ex,
         "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,
@@ -6345,6 +6442,71 @@ mod tests {
                 "exécutée sur le fil de la fenêtre"
             );
             destroy_window(hwnd);
+        }
+    }
+
+    /// InSendMessage et InSendMessageEx : ISMEX_SEND pendant un message
+    /// envoyé par un autre fil, ISMEX_NOSEND sinon (Learn, #3104).
+    #[test]
+    fn in_send_message_ex_distingue_l_envoi_d_un_autre_fil_3104() {
+        use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+        static VU: AtomicI64 = AtomicI64::new(-1);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == 0x0400 + 0x3104 {
+                let ex = in_send_message_ex(0) as i64;
+                let simple = in_send_message() as i64;
+                VU.store(ex * 10 + simple, Ordering::SeqCst);
+                return 1;
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let ex =
+            crate::dlls::lookup("user32", "InSendMessageEx").expect("InSendMessageEx exportée");
+        assert_eq!(ex, in_send_message_ex as *const () as usize);
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_long_ptr_w(hwnd, GWL_WNDPROC, proc_ as *const () as isize);
+            send_message_w(hwnd, 0x0400 + 0x3104, 0, 0);
+            let meme_fil = VU.swap(-1, Ordering::SeqCst);
+            static FINI: AtomicBool = AtomicBool::new(false);
+            let autre = std::thread::spawn(move || {
+                let r = send_message_w(hwnd, 0x0400 + 0x3104, 0, 0);
+                FINI.store(true, Ordering::SeqCst);
+                r
+            });
+            let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let mut m: Msg = std::mem::zeroed();
+            while !FINI.load(Ordering::SeqCst) && std::time::Instant::now() < limite {
+                peek_message_w(&mut m, 0, 0, 0, 0);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(autre.join().unwrap(), 1);
+            let autre_fil = VU.load(Ordering::SeqCst);
+            let apres = (in_send_message_ex(0), in_send_message());
+            destroy_window(hwnd);
+            eprintln!(
+                "      même fil (Ex, simple) = {:?}, autre fil = {:?}, après = {apres:?}",
+                (meme_fil / 10, meme_fil % 10),
+                (autre_fil / 10, autre_fil % 10)
+            );
+            assert_eq!(meme_fil, 0, "même fil : ISMEX_NOSEND, FALSE");
+            assert_eq!(autre_fil, 11, "autre fil : ISMEX_SEND, TRUE");
+            assert_eq!(apres, (0, 0));
         }
     }
 
@@ -7239,6 +7401,95 @@ mod tests {
         }
     }
 
+    /// #3330 : RegisterShellHookWindow. La fenêtre inscrite reçoit le
+    /// message « SHELLHOOK » (wParam = HSHELL_*, lParam = fenêtre) pour les
+    /// fenêtres de premier niveau sans propriétaire seulement : création,
+    /// activation, titre, destruction. Rien pour une fenêtre possédée ou
+    /// fille, rien après DeregisterShellHookWindow.
+    #[test]
+    fn crochet_du_shell_recoit_les_hshell_3330() {
+        use super::super::user32_more as m;
+        unsafe {
+            let name: Vec<u16> = "Winlux3330Crochet".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: def_window_proc_w as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let creer = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    style,
+                    0,
+                    0,
+                    200,
+                    100,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let register = |h: usize| m::register_shell_hook_window(h);
+            let deregister = |h: usize| m::deregister_shell_hook_window(h);
+            // Fenêtre inexistante : refus (ERROR_INVALID_WINDOW_HANDLE, sans
+            // TEB dans un test).
+            assert_eq!(register(0x3330_0000), 0);
+
+            let crochet = creer(0x8000_0000, 0);
+            assert_ne!(crochet, 0);
+            assert_eq!(register(crochet), 1);
+            let shellhook = register_window_message("SHELLHOOK".into());
+            let recus = |a_moi: &[usize]| {
+                let mut out = Vec::new();
+                let mut msg = Msg::new(0, 0, 0, 0);
+                while peek_message_w(&mut msg, crochet, shellhook, shellhook, 1) != 0 {
+                    // Les autres tests créent leurs fenêtres en parallèle.
+                    if a_moi.contains(&(msg.lparam as usize)) {
+                        out.push((msg.wparam, msg.lparam as usize));
+                    }
+                }
+                out
+            };
+
+            let a = creer(0x80C0_0000, 0); // WS_POPUP | WS_CAPTION, sans propriétaire
+            let possedee = creer(0x80C0_0000, a);
+            let fille = creer(0x4000_0000, a);
+            assert!(a != 0 && possedee != 0 && fille != 0);
+            let title: Vec<u16> = "Nouveau titre".encode_utf16().chain([0]).collect();
+            set_window_text_w(a, title.as_ptr());
+            set_window_text_w(possedee, title.as_ptr());
+            let toutes = [a, possedee, fille];
+            assert_eq!(
+                recus(&toutes),
+                [(m::HSHELL_WINDOWCREATED, a), (m::HSHELL_REDRAW, a)]
+            );
+
+            destroy_window(fille);
+            destroy_window(possedee);
+            destroy_window(a);
+            assert_eq!(recus(&toutes), [(m::HSHELL_WINDOWDESTROYED, a)]);
+
+            // Désinscrite : plus rien, et une seconde désinscription échoue.
+            assert_eq!(deregister(crochet), 1);
+            assert_eq!(deregister(crochet), 0);
+            let b = creer(0x80C0_0000, 0);
+            destroy_window(b);
+            assert!(recus(&[b]).is_empty());
+            destroy_window(crochet);
+        }
+    }
+
     static WIN_EVENTS_1498: std::sync::Mutex<Vec<(u32, usize)>> = std::sync::Mutex::new(Vec::new());
 
     unsafe extern "win64" fn crochet_1498(
@@ -7323,6 +7574,102 @@ mod tests {
                 258
             );
             kill_timer(0, id);
+        }
+    }
+
+    /// #3281 : MsgWaitForMultipleObjectsEx suit ses drapeaux (Learn).
+    /// MWMO_ALERTABLE : une APC en file tourne et l'attente rend
+    /// WAIT_IO_COMPLETION, y compris une APC mise en file par un autre fil
+    /// pendant l'attente ; sans le drapeau, elle ne tourne pas.
+    /// MWMO_WAITALL : un seul objet signalé ne suffit pas.
+    #[test]
+    fn msg_wait_ex_alertable_et_attendre_tout_3281() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static APPELS: AtomicU32 = AtomicU32::new(0);
+        extern "win64" fn apc(_param: usize) {
+            APPELS.fetch_add(1, Ordering::Relaxed);
+        }
+        extern "win64" fn routine(_arg: usize, _low: u32, _high: u32) {
+            APPELS.fetch_add(1, Ordering::Relaxed);
+        }
+        use crate::dlls::kernel32 as k;
+        unsafe {
+            let moi = k::get_current_thread();
+            assert_eq!(k::queue_user_apc(apc as *const () as usize, moi, 0), 1);
+            // Sans MWMO_ALERTABLE : délai écoulé, APC toujours en file.
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 30, 0x04FF, 0),
+                258
+            );
+            assert_eq!(
+                APPELS.load(Ordering::Relaxed),
+                0,
+                "APC hors attente alertable"
+            );
+            // Avec : elle tourne, WAIT_IO_COMPLETION.
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 1000, 0x04FF, 0x2),
+                0xC0
+            );
+            assert_eq!(APPELS.load(Ordering::Relaxed), 1);
+            // APC mise en file par un autre fil (minuteur) pendant l'attente.
+            let t = k::create_waitable_timer_a(0, 0, std::ptr::null());
+            let due: i64 = -200_000; // 20 ms, relatif
+            assert_eq!(
+                k::set_waitable_timer(t, &due, 0, routine as *const () as usize, 0, 0),
+                1
+            );
+            let debut = std::time::Instant::now();
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 5000, 0x04FF, 0x2),
+                0xC0
+            );
+            assert!(
+                debut.elapsed().as_millis() < 2000,
+                "APC pas servie pendant l'attente"
+            );
+            assert_eq!(APPELS.load(Ordering::Relaxed), 2);
+            k::close_handle(t);
+            // QueueUserAPC depuis un autre fil, sur un fil déjà entré dans
+            // l'attente sans délai (Discord : « Voice » vers « aecdump »).
+            let _ = k::current_thread_object(); // fil de test inscrit comme fil Windows
+            let tid = k::get_current_thread_id();
+            let autre = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                let h = k::open_thread(0x0010, 0, tid); // THREAD_SET_CONTEXT
+                assert_ne!(h, 0);
+                let ok = k::queue_user_apc(apc as *const () as usize, h, 0);
+                k::close_handle(h);
+                ok
+            });
+            let debut = std::time::Instant::now();
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(0, std::ptr::null(), 3000, 0x04FF, 0x2),
+                0xC0,
+                "attente alertable non réveillée par QueueUserAPC"
+            );
+            assert!(debut.elapsed().as_millis() < 2000);
+            assert_eq!(autre.join().unwrap(), 1);
+            assert_eq!(APPELS.load(Ordering::Relaxed), 3);
+            // MWMO_WAITALL : un objet sur deux ne suffit pas.
+            let a = k::create_event_a(0, 1, 1, std::ptr::null());
+            let b = k::create_event_a(0, 1, 0, std::ptr::null());
+            let hs = [a, b];
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(2, hs.as_ptr(), 30, 0, 0x1),
+                258
+            );
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(2, hs.as_ptr(), 30, 0, 0),
+                0
+            );
+            k::set_event(b);
+            assert_eq!(
+                msg_wait_for_multiple_objects_ex(2, hs.as_ptr(), 30, 0, 0x1),
+                0
+            );
+            k::close_handle(a);
+            k::close_handle(b);
         }
     }
 

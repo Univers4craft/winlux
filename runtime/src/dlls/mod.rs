@@ -122,6 +122,7 @@ pub mod ftp_apps;
 pub mod gamemode;
 pub mod games_win32;
 pub mod gdi32;
+pub mod gdi32_bounds;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
@@ -292,6 +293,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod taskschd_dll;
 pub mod teams_win32;
+pub mod textserv;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -789,6 +791,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_bounds::exports());
                     for (name, addr) in user32_releve::gdi32_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -1084,16 +1087,17 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
-            // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
-            // charger (LoadLibrary de wxWidgets, #795).
+            // sont fournies par controls::richedit (LoadLibrary de wxWidgets,
+            // #795). msftedit et riched20 servent aussi les Text Services sans
+            // fenêtre, avec les mêmes IID (#3268).
             Builtin {
                 name: "msftedit",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {
                 name: "riched20",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {
@@ -1441,6 +1445,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             });
         }
+        add_ntdll_crt(&mut all);
         all
     });
     // ntdll et kernel32 tout de suite, comme avant le Gain #3050 : le bac à
@@ -1551,6 +1556,25 @@ fn add_psapi(all: &mut Vec<Builtin>) {
         exports,
         handle: 0,
     });
+}
+
+/// La CRT que ntdll exporte sous Windows (`ntdll::CRT_REEXPORTS`) entre dans
+/// la table de ntdll quand notre msvcrt la sert : `lookup("ntdll", …)` la
+/// trouvait déjà par repli, la table de l'image non (#3389). Appelé une fois
+/// toutes les DLL complétées, pour reprendre exactement ce que le repli rend.
+fn add_ntdll_crt(all: &mut [Builtin]) {
+    let Some(crt) = all.iter().find(|b| b.name == "msvcrt") else {
+        return;
+    };
+    let found: Vec<(&'static str, usize)> = ntdll::CRT_REEXPORTS
+        .iter()
+        .filter_map(|&n| crt.exports.get(n).map(|&a| (n, a)))
+        .collect();
+    if let Some(nt) = all.iter_mut().find(|b| b.name == "ntdll") {
+        for (n, a) in found {
+            nt.exports.entry(n).or_insert(a);
+        }
+    }
 }
 
 /// Fonctions de base (win32_basics) : elles complètent chaque DLL sans

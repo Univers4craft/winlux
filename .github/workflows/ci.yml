@@ -570,6 +570,8 @@ jobs:
           sudo apt-get install -y -q $deps || { sudo apt-get update -q && sudo apt-get install -y -q $deps; }
           sh scripts/build-openbox.sh build/openbox
           WINLUX_OPENBOX=build/openbox/openbox /usr/bin/python3 -B scripts/test-openbox-boutons.py
+          # Fenêtre affichée pendant le démarrage d'openbox, jamais gérée (#3190).
+          WINLUX_OPENBOX=build/openbox/openbox /usr/bin/python3 -B scripts/test-openbox-demarrage.py
 
       - name: Mémoire au lancement d'un gros .exe (#997)
         run: python3 -B scripts/test-image-memory.py
@@ -669,6 +671,14 @@ jobs:
 
       - name: Programmes Windows 32 bits (#232)
         run: sh scripts/test-wow32.sh
+
+      - name: Cadre maison d'un programme 32 bits, WM_NCCALCSIZE sur SWP_FRAMECHANGED (#3353)
+        run: sh scripts/test-cadre-maison32.sh
+
+      - name: Programme 32 bits agrandi par openbox, WM_WINDOWPOSCHANGED avant WM_SIZE (#3394)
+        run: |
+          sudo apt-get install -y -q openbox wmctrl x11-utils xdotool || { sudo apt-get update -q && sudo apt-get install -y -q openbox wmctrl x11-utils xdotool; }
+          sh scripts/test-agrandie32.sh
 
       - name: winlux --inspect projette un gros .exe au lieu de le copier (#2918)
         run: sh scripts/test-inspect-projete.sh
@@ -831,8 +841,14 @@ jobs:
       - name: Menu Démarrer préchargé, ouverture indépendante de l'historique (mesure, #2858)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-ouverture.py
 
+      - name: Menu Démarrer, liste construite une fois par ouverture (#3217)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-rendu-unique.py
+
       - name: Menu Démarrer fermé tant que l'écran est verrouillé (#2994)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-verrou.py
+
+      - name: Fond Aurore animé coupé dès qu'on ne le voit pas (#3079)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-fond-anime.py
 
       - name: Menu Démarrer, catalogue des applications relu sur signal de GIO, pas à chaque ouverture (#3121)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-catalogue.py
@@ -877,6 +893,9 @@ jobs:
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
 
+      - name: Ancrage au repos, aucun réveil souris immobile (#3279)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-ancrage-repos.py
+
       - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py
 
@@ -885,6 +904,9 @@ jobs:
 
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py
+
+      - name: Fenêtre affichée pendant le démarrage d'openbox gérée grâce à winlux-wm-reveil (#3190)
+        run: /usr/bin/python3 -B scripts/test-wm-reveil.py
 
       - name: Windows + X au-dessus du bouton Démarrer sous openbox réel
         run: /usr/bin/python3 -B scripts/test-quick-menu-position.py
