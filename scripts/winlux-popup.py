@@ -564,7 +564,7 @@ class Popup(Gtk.Application):
         self.kind=self.KINDS[kind]
         super().__init__(application_id="org.winlux.Popup."+self.kind,flags=Gio.ApplicationFlags.FLAGS_NONE)
         self.window=None;self.timer=0;self.child=None;self.backend=None
-        self.updating=False;self.anchor=None;self.modes_busy=False
+        self.updating=False;self.anchor=None;self.modes_busy=False;self.refresh_source=0
 
     # ── Ouverture, ancrage et fermeture ─────────────────────────────────────
 
@@ -594,6 +594,7 @@ class Popup(Gtk.Application):
         self.on_open()
         self.window.show_all()
         self.refresh()
+        self.start_refresh()
         self.window.present()
         display=self.window.get_display()
         monitor=display.get_monitor_at_point(*display.get_default_seat().get_pointer().get_position()[1:])
@@ -647,7 +648,6 @@ class Popup(Gtk.Application):
         self.panels=[]
         getattr(self,"build_"+self.kind)()
         self.window.connect("size-allocate",self.shape)
-        GLib.timeout_add_seconds(1,self.refresh)
 
     def panel(self,width=360):
         frame=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=0)
@@ -701,9 +701,16 @@ class Popup(Gtk.Application):
         except OSError:pass
 
     def refresh(self):
-        if not self.window or not self.window.get_visible():return True
+        # Rafraîchi chaque seconde tant que le panneau est ouvert ; caché, le
+        # minuteur s'arrête : le processus résident ne se réveille plus (#3315).
+        if not self.window or not self.window.get_visible():
+            self.refresh_source=0
+            return False
         getattr(self,"refresh_"+self.kind)()
         return True
+
+    def start_refresh(self):
+        if not self.refresh_source:self.refresh_source=GLib.timeout_add_seconds(1,self.refresh)
 
     # ── Son ─────────────────────────────────────────────────────────────────
 
