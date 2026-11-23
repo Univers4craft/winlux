@@ -5985,6 +5985,10 @@ fn frame_kind(style: u32, ex_style: u32) -> Option<u8> {
         Some(0) => None,
         Some(_) => Some(gui::FRAME_BORDER),
         None if captioned_tool_window(style, ex_style) => Some(gui::FRAME_TOOL),
+        // Même cadre que celui que la fenêtre recevra : une fenêtre fixe
+        // perd la poignée de redimensionnement (set_resizable), son bas
+        // n'est donc pas celui d'une fenêtre normale (#3222).
+        None if fixed_size_frame(style) => Some(gui::FRAME_FIXED),
         None => Some(gui::FRAME_NORMAL),
     }
 }
@@ -6076,6 +6080,24 @@ mod tests {
         assert!(!fixed_size_frame(0x8000_0000));
         // Enfant à barre de titre (MDI).
         assert!(!fixed_size_frame(0x40C0_0000));
+    }
+
+    /// #3222 : AdjustWindowRectEx annonce pour un dialogue fixe le cadre
+    /// d'une fenêtre fixe (sans poignée), celui que la fenêtre recevra ; une
+    /// fenêtre redimensionnable garde le cadre normal.
+    #[test]
+    fn cadre_annonce_d_un_dialogue_fixe_3222() {
+        use super::frame_kind;
+        // Boîte Redimensionner de Paint.NET : WS_CAPTION | WS_SYSMENU |
+        // WS_CLIPCHILDREN, WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT.
+        assert_eq!(frame_kind(0x02C8_0000, 0x0001_0001), Some(gui::FRAME_FIXED));
+        // MessageBox.
+        assert_eq!(frame_kind(0x80C8_0080, 0x0000_0001), Some(gui::FRAME_FIXED));
+        // WS_OVERLAPPEDWINDOW, et barre de titre avec Agrandir.
+        assert_eq!(frame_kind(0x00CF_0000, 0), Some(gui::FRAME_NORMAL));
+        assert_eq!(frame_kind(0x00C9_0000, 0), Some(gui::FRAME_NORMAL));
+        // Palette flottante : reste une fenêtre outil.
+        assert_eq!(frame_kind(0x02CC_0000, 0x0001_0180), Some(gui::FRAME_TOOL));
     }
 
     /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une

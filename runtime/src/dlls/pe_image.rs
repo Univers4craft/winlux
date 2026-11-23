@@ -226,23 +226,62 @@ fn put64(img: &mut [u8], at: usize, v: u64) {
     img[at..at + 8].copy_from_slice(&v.to_le_bytes());
 }
 
+/// Noms exportés triés, ordinal de chacun, et ordinaux occupés
+/// (ordinal → adresse, rang du premier nom qui y mène).
+///
+/// Une clé « #N » est l'ordinal publié N (#3424) : elle n'entre pas dans la
+/// table des noms, et le nom qui mène à la même fonction (SHCreateMemStream
+/// pour « #12 » de shlwapi) reçoit cet ordinal. Les autres noms prennent, par
+/// ordre alphabétique, les ordinaux qui suivent le plus grand ordinal publié ;
+/// sans ordinal publié, l'ordinal d'un nom reste son rang plus 1.
+type Slots = std::collections::BTreeMap<u16, (usize, Option<usize>)>;
+fn layout(exports: &super::Exports) -> (Vec<(&'static str, usize)>, Vec<u16>, Slots) {
+    let mut names: Vec<(&'static str, usize)> = Vec::new();
+    let mut published: std::collections::BTreeMap<u16, usize> = Default::default();
+    for (&k, &a) in exports.iter().filter(|(_, &a)| is_code(a)) {
+        match k.strip_prefix('#').map(str::parse::<u16>) {
+            Some(Ok(o)) if o > 0 => {
+                published.insert(o, a);
+            }
+            _ => names.push((k, a)),
+        }
+    }
+    names.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let mut next = published.keys().next_back().map_or(1, |&o| o + 1);
+    let mut slots = Slots::new();
+    let mut name_slots = Vec::with_capacity(names.len());
+    for (i, &(_, a)) in names.iter().enumerate() {
+        let ord = match published.iter().find(|&(_, &pa)| pa == a) {
+            Some((&o, _)) => o,
+            None => {
+                let o = next;
+                next = next.saturating_add(1);
+                o
+            }
+        };
+        slots.entry(ord).or_insert((a, Some(i)));
+        name_slots.push(ord);
+    }
+    for (&o, &a) in &published {
+        slots.entry(o).or_insert((a, None));
+    }
+    (names, name_slots, slots)
+}
+
 /// Construit l'image de `dll` (nom sans « .dll ») et renvoie son adresse.
 /// `slot` : rang de la DLL parmi les DLL intégrées (case d'adresse fixe).
 pub fn build(dll: &str, exports: &super::Exports, slot: usize) -> usize {
-    let mut names: Vec<(&str, usize)> = exports
-        .iter()
-        .filter(|(_, &a)| is_code(a))
-        .map(|(&n, &a)| (n, a))
-        .collect();
-    names.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let (names, name_slots, slots) = layout(exports);
     let n = names.len();
+    // Base des ordinaux 1 : la case k de AddressOfFunctions est l'ordinal k + 1.
+    let nf = slots.keys().next_back().map_or(0, |&o| o as usize);
     let dll_name = format!("{dll}.dll");
 
     // Disposition : en-têtes (1 page), puis répertoire d'exports et tables,
     // puis noms, puis relais alignés sur 16 octets.
     let dir = PAGE;
     let funcs = dir + 40;
-    let name_ptrs = funcs + 4 * n;
+    let name_ptrs = funcs + 4 * nf;
     let ords = name_ptrs + 4 * n;
     let mut strings = ords + 2 * n;
     let dll_name_rva = strings;
@@ -254,7 +293,7 @@ pub fn build(dll: &str, exports: &super::Exports, slot: usize) -> usize {
     }
     let export_end = strings;
     let stubs = (export_end + 15) & !15;
-    let size = (stubs + STUB * n).div_ceil(PAGE) * PAGE;
+    let size = (stubs + STUB * slots.len()).div_ceil(PAGE) * PAGE;
 
     let base = map_image(size, slot);
     if base == libc::MAP_FAILED {
@@ -309,32 +348,35 @@ pub fn build(dll: &str, exports: &super::Exports, slot: usize) -> usize {
     // Répertoire d'exports.
     put32(img, dir + 12, dll_name_rva as u32);
     put32(img, dir + 16, 1); // Base des ordinaux
-    put32(img, dir + 20, n as u32);
+    put32(img, dir + 20, nf as u32);
     put32(img, dir + 24, n as u32);
     put32(img, dir + 28, funcs as u32);
     put32(img, dir + 32, name_ptrs as u32);
     put32(img, dir + 36, ords as u32);
     img[dll_name_rva..dll_name_rva + dll_name.len()].copy_from_slice(dll_name.as_bytes());
-    let mut services = Vec::new();
-    for (i, ((name, addr), name_rva)) in names.iter().zip(&name_rvas).enumerate() {
-        let stub = stubs + STUB * i;
-        put32(img, funcs + 4 * i, stub as u32);
+    for (i, ((name, _), name_rva)) in names.iter().zip(&name_rvas).enumerate() {
         put32(img, name_ptrs + 4 * i, *name_rva as u32);
-        put16(img, ords + 2 * i, i as u16);
+        put16(img, ords + 2 * i, name_slots[i] - 1);
         img[*name_rva..*name_rva + name.len()].copy_from_slice(name.as_bytes());
-        if is_service(dll, name) {
-            // Service N = rang de l'export : identique dans chaque processus.
+    }
+    let mut services = Vec::new();
+    for (k, (&ord, &(addr, rank))) in slots.iter().enumerate() {
+        let stub = stubs + STUB * k;
+        put32(img, funcs + 4 * (ord as usize - 1), stub as u32);
+        if let Some(i) = rank.filter(|&i| is_service(dll, names[i].0)) {
+            // Service N = rang alphabétique de l'export : identique dans
+            // chaque processus.
             if services.len() <= i {
                 services.resize(i + 1, 0);
             }
-            services[i] = *addr;
+            services[i] = addr;
             img[stub..stub + STUB].copy_from_slice(&service_stub(i as u32));
             continue;
         }
         // jmp qword ptr [rip+2] ; ud2 ; .quad addr
         img[stub..stub + 6].copy_from_slice(&[0xFF, 0x25, 0x02, 0, 0, 0]);
         img[stub + 6..stub + 8].copy_from_slice(&[0x0F, 0x0B]);
-        put64(img, stub + 8, *addr as u64);
+        put64(img, stub + 8, addr as u64);
     }
     if !services.is_empty() {
         let _ = SERVICES.set(services);
@@ -473,6 +515,40 @@ mod tests {
         }
     }
 
+    /// #3338 : la table d'exports de l'image kernel32 porte aussi les noms
+    /// que GetProcAddress(kernel32, …) fait suivre vers advapi32 (Reg*) et
+    /// ntdll (RtlFillMemory) : un programme qui lit la table les trouve.
+    #[test]
+    fn kernel32_table_avec_registre_et_rtl_3338() {
+        let h = super::super::module_handle("kernel32").expect("kernel32");
+        unsafe {
+            for name in ["RegOpenKeyExW", "RegQueryValueExW", "RtlFillMemory"] {
+                assert!(
+                    manual_lookup(h, name).is_some(),
+                    "kernel32!{name} absent de la table"
+                );
+            }
+            for &name in super::super::KERNEL32_REGISTRY {
+                assert_eq!(
+                    manual_lookup(h, name).is_some(),
+                    super::super::kernel32_proc(name, false).is_some(),
+                    "kernel32!{name} : table et GetProcAddress divergent"
+                );
+            }
+            // Tout ce que GetProcAddress rend, sauf RaiseException, dont le
+            // relais vit hors du binaire (voir #3348).
+            for name in super::super::kernel32_surface() {
+                if name == "RaiseException" {
+                    continue;
+                }
+                assert!(
+                    manual_lookup(h, name).is_some(),
+                    "kernel32!{name} : GetProcAddress le rend, la table non"
+                );
+            }
+        }
+    }
+
     /// Lecture de la table d'exports comme le fait le bac à sable de
     /// Chromium : en-têtes PE, répertoire, recherche par nom.
     unsafe fn manual_lookup(base: usize, wanted: &str) -> Option<usize> {
@@ -501,6 +577,98 @@ mod tests {
 
     extern "win64" fn add(a: u32, b: u32) -> u32 {
         a + b
+    }
+
+    /// Lecture par ordinal, comme un programme qui parcourt la table :
+    /// case (ordinal - Base) de AddressOfFunctions, puis cible du relais
+    /// `jmp [rip+2]` (0 pour une case vide).
+    unsafe fn by_ordinal(base: usize, ord: usize) -> Option<usize> {
+        let rd32 = |a: usize| (a as *const u32).read_unaligned() as usize;
+        let dir = base + rd32(base + rd32(base + 0x3c) + 24 + 112);
+        let idx = ord.checked_sub(rd32(dir + 16))?;
+        if idx >= rd32(dir + 20) {
+            return None;
+        }
+        let rva = rd32(base + rd32(dir + 28) + 4 * idx);
+        if rva == 0 {
+            return None;
+        }
+        Some(((base + rva + 8) as *const usize).read_unaligned())
+    }
+
+    unsafe fn names_of(base: usize) -> Vec<String> {
+        let rd32 = |a: usize| (a as *const u32).read_unaligned() as usize;
+        let dir = base + rd32(base + rd32(base + 0x3c) + 24 + 112);
+        (0..rd32(dir + 24))
+            .map(|i| {
+                let p = base + rd32(base + rd32(dir + 32) + 4 * i);
+                std::ffi::CStr::from_ptr(p as *const std::ffi::c_char)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    extern "win64" fn un() -> u32 {
+        1
+    }
+    extern "win64" fn deux() -> u32 {
+        2
+    }
+    extern "win64" fn trois() -> u32 {
+        3
+    }
+
+    /// Les exports par ordinal sont à leur numéro dans la table de l'image,
+    /// le nom qui mène à la même fonction reçoit cet ordinal, et aucun
+    /// « #N » n'apparaît parmi les noms (#3424).
+    #[test]
+    fn ordinaux_publies_a_leur_numero_dans_la_table_3424() {
+        let (f1, f2, f3, f4) = (
+            add as *const () as usize,
+            un as *const () as usize,
+            deux as *const () as usize,
+            trois as *const () as usize,
+        );
+        let mut e: super::super::Exports = std::collections::HashMap::new();
+        e.insert("Alpha", f1);
+        e.insert("SHCreateMemStream", f2);
+        e.insert("#12", f2);
+        e.insert("#5", f3);
+        e.insert("Zeta", f4);
+        let base = super::build("winluxord", &e, usize::MAX);
+        unsafe {
+            assert_eq!(by_ordinal(base, 12), Some(f2));
+            assert_eq!(by_ordinal(base, 5), Some(f3));
+            assert_eq!(by_ordinal(base, 6), None);
+            assert_eq!(names_of(base), ["Alpha", "SHCreateMemStream", "Zeta"]);
+            // Le nom renvoie à l'ordinal publié, par la table des ordinaux.
+            let stub = manual_lookup(base, "SHCreateMemStream").unwrap();
+            assert_eq!(((stub + 8) as *const usize).read_unaligned(), f2);
+            assert_eq!(by_ordinal(base, 13), Some(f1));
+            assert_eq!(by_ordinal(base, 14), Some(f4));
+        }
+        // Sans ordinal publié, l'ordinal d'un nom reste son rang plus 1.
+        let mut e: super::super::Exports = std::collections::HashMap::new();
+        e.insert("B", f2);
+        e.insert("A", f1);
+        let base = super::build("winluxord2", &e, usize::MAX);
+        unsafe {
+            assert_eq!(by_ordinal(base, 1), Some(f1));
+            assert_eq!(by_ordinal(base, 2), Some(f2));
+        }
+    }
+
+    /// L'image intégrée de shlwapi sert SHCreateMemStream à l'ordinal 12 de
+    /// sa table, comme GetProcAddress (#3424).
+    #[test]
+    fn shlwapi_ordinal_12_lu_dans_l_image_3424() {
+        let h = super::super::module_handle("shlwapi").expect("HMODULE");
+        let want = super::super::lookup("shlwapi", "SHCreateMemStream").expect("servie");
+        unsafe {
+            assert_eq!(by_ordinal(h, 12), Some(want));
+            assert!(names_of(h).iter().all(|n| !n.starts_with('#')));
+        }
     }
 
     #[test]
