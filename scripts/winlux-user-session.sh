@@ -100,6 +100,9 @@ else
 fi
 wm_pid=$!
 pids="$pids $wm_pid"
+# Une fenêtre affichée pendant le démarrage d'openbox ne doit pas attendre un
+# autre événement X (#3190) : réveils tant qu'il démarre.
+if test -x /usr/bin/winlux-wm-reveil; then (/usr/bin/winlux-wm-reveil "$wm_pid" </dev/null >/dev/null 2>&1 &); fi
 # Son (#115) : PipeWire du compte, un flux par programme (volume par appli).
 if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber && ! pgrep -u "$uid" -x pipewire >/dev/null 2>&1; then
     start pipewire.log /usr/bin/pipewire
@@ -471,6 +474,8 @@ while kill -0 "$wm_pid" 2>/dev/null; do
                 done
                 sleep 1
                 kill -USR1 "$compositor_pid" 2>/dev/null || true
+                # Fond Aurore animé (#3079), seulement s'il est activé dans Paramètres.
+                if test -x /usr/bin/winlux-fond-anime; then /usr/bin/winlux-fond-anime ensure; fi
             ) </dev/null >/dev/null 2>&1 &
         fi
         # Attente sans « sleep 1 » à chaque seconde (#3297) : avec un piège
