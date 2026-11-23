@@ -174,6 +174,45 @@ def background(w, h, light=False):
     return Image.fromarray(img.clip(0, 255).astype(np.uint8), "RGB")
 
 
+def aurora_stars():
+    """Étoiles du fond « Aurore » sombre : (x, y relatifs, éclat ajouté).
+    Le même tirage sert à l'image et à winlux-fond-anime (#3079), qui fait
+    scintiller les plus brillantes exactement là où l'image les a posées."""
+    rng = np.random.default_rng(3)
+    n = 230
+    su, sv = rng.uniform(0, 1, n), rng.uniform(0, 0.5, n) ** 1.2
+    glow = rng.uniform(40, 150, n)
+    return list(zip(su.tolist(), sv.tolist(), glow.tolist()))
+
+
+# Points où winlux-fond-anime reconnaît l'image Aurore sombre par son contenu,
+# quel que soit son nom (l'installation pose une copie wallpaper.bmp, #3079) :
+# loin des étoiles et du logo, couleur moyenne d'un carré de 1 % de la hauteur.
+FINGERPRINT_POINTS = [(u, v) for v in (0.15, 0.55, 0.72, 0.9) for u in (0.1, 0.3, 0.5, 0.7, 0.9)]
+
+
+def aurora_fingerprint(img):
+    a = np.asarray(img.convert("RGB"), dtype=np.float64)
+    h, w = a.shape[:2]
+    half = max(2, round(h * 0.005))
+    out = []
+    for u, v in FINGERPRINT_POINTS:
+        x, y = round(u * (w - 1)), round(v * (h - 1))
+        block = a[max(0, y - half):y + half + 1, max(0, x - half):x + half + 1].reshape(-1, 3).mean(0)
+        out.append((u, v, *block))
+    return out
+
+
+def aurora_stars_text(img):
+    lines = ["# Étoiles de winlux-prisme-aurore (render-brand.py) : x y éclat, x et y",
+             "# relatifs à l'image (0 à 1), éclat de 40 à 150. Lu par winlux-fond-anime.",
+             "# Lignes « empreinte x y r g b » : couleur moyenne de l'image Aurore sombre",
+             "# en ces points, pour la reconnaître quel que soit le nom du fichier."]
+    lines += [f"{a:.6f} {b:.6f} {g:.1f}" for a, b, g in aurora_stars()]
+    lines += [f"empreinte {u:.2f} {v:.2f} {r:.1f} {g:.1f} {b:.1f}" for u, v, r, g, b in aurora_fingerprint(img)]
+    return "\n".join(lines) + "\n"
+
+
 def aurora_background(w, h, light=False):
     """Fond « Aurore » : rideaux de lumière violet → cyan au-dessus de
     collines, ciel étoilé la nuit. Tout est proportionnel à la hauteur, si
@@ -214,12 +253,8 @@ def aurora_background(w, h, light=False):
         del base, above, prof, rays, m, t, col
     if not light:
         # Étoiles fixes (même tirage, positions relatives) au-dessus des rideaux.
-        rng = np.random.default_rng(3)
-        n = 230
-        su, sv = rng.uniform(0, 1, n), rng.uniform(0, 0.5, n) ** 1.2
-        glow = rng.uniform(40, 150, n)
         rad = max(1, round(h / 1080))
-        for a, b, g in zip(su, sv, glow):
+        for a, b, g in aurora_stars():
             cx, cy = int(a * w), int(b * h)
             img[max(cy - rad + 1, 0):cy + rad, max(cx - rad + 1, 0):cx + rad] += g
     rng = np.random.default_rng(7)
@@ -317,6 +352,7 @@ def main():
     for name, light in AURORA_NAMES:
         for w, h, suffix in AURORA_SIZES:
             aurora_wallpaper(w, h, light).save(WALL / f"{name}{suffix}.png", optimize=True)
+    (WALL / "winlux-prisme-aurore.etoiles").write_text(aurora_stars_text(Image.open(WALL / "winlux-prisme-aurore.png")))
     print("identité Winlux rendue dans", BRAND, "et", WALL)
 
 
