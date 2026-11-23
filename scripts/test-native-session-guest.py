@@ -582,8 +582,15 @@ def fast_user_switch():
 try:
     fast_user_switch()
 except Exception:
-    logs = sorted(Path("/run/winlux").glob("session-invite.log")) + sorted(Path("/run/user").glob("*/winlux/*.log"))
-    for path in logs + sorted(Path("/run/winlux").glob("Xorg.[1-9].log")):
+    # Journaux de la session du second compte : session et Xorg dans le
+    # dossier à root de winlux-sessions (#633), ceux du bureau (openbox,
+    # native-config…) dans son XDG_RUNTIME_DIR (#3447).
+    session_logs = Path("/run/winlux/session-logs")
+    logs = (sorted(session_logs.glob("session-invite.log")) + sorted(Path("/run/user").glob("*/winlux/*.log"))
+            + sorted(session_logs.glob("Xorg.[1-9].log")))
+    if not logs:
+        print(f"--- aucun journal de session trouvé ({session_logs}, /run/user/*/winlux)", flush=True)
+    for path in logs:
         print(f"--- {path}", flush=True)
         print("\n".join(path.read_text(errors="replace").splitlines()[-25:]), flush=True)
     raise
