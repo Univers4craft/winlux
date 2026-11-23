@@ -378,6 +378,15 @@ pub fn program_of(pid_dir: &Path) -> Option<PathBuf> {
 
 /// Programmes en écoute et leurs ports.
 pub fn listening_programs() -> BTreeMap<PathBuf, BTreeSet<Listen>> {
+    listening_programs_and_owners().0
+}
+
+/// Programmes en écoute et leurs ports, plus le programme de chaque
+/// processus qui tient une socket en écoute (pid → programme), pour voir
+/// au tour suivant, sans tout reparcourir, si l'un d'eux a changé (#3266).
+fn listening_programs_and_owners() -> (BTreeMap<PathBuf, BTreeSet<Listen>>, BTreeMap<u32, PathBuf>)
+{
+    let mut owners = BTreeMap::new();
     let mut by_inode = BTreeMap::new();
     for (file, udp) in [
         ("tcp", false),
@@ -391,20 +400,15 @@ pub fn listening_programs() -> BTreeMap<PathBuf, BTreeSet<Listen>> {
     }
     let mut out: BTreeMap<PathBuf, BTreeSet<Listen>> = BTreeMap::new();
     if by_inode.is_empty() {
-        return out;
+        return (out, owners);
     }
     let Ok(procs) = std::fs::read_dir(admin::path("proc")) else {
-        return out;
+        return (out, owners);
     };
     for p in procs.flatten() {
-        if !p
-            .file_name()
-            .to_string_lossy()
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-        {
+        let Ok(pid) = p.file_name().to_string_lossy().parse::<u32>() else {
             continue;
-        }
+        };
         let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else {
             continue;
         };
@@ -426,11 +430,20 @@ pub fn listening_programs() -> BTreeMap<PathBuf, BTreeSet<Listen>> {
         }
         if !found.is_empty() {
             if let Some(prog) = program_of(&p.path()) {
+                owners.insert(pid, prog.clone());
                 out.entry(prog).or_default().extend(found);
             }
         }
     }
-    out
+    (out, owners)
+}
+
+/// Un processus qui tenait une socket en écoute a disparu ou a changé de
+/// programme (exec) : quelques readlink, un par processus concerné.
+fn owners_changed(owners: &BTreeMap<u32, PathBuf>) -> bool {
+    owners
+        .iter()
+        .any(|(pid, prog)| program_of(&admin::path(&format!("proc/{pid}"))).as_ref() != Some(prog))
 }
 
 /// Les services système ne déclenchent pas d'alerte (comme sous Windows,
@@ -1676,7 +1689,7 @@ pub fn daemon() -> ! {
     let mut kmsg = Kmsg::open();
     let mut cfg = Config::load();
     let mut stamp = config_stamp();
-    let mut apps = listening_programs();
+    let (mut apps, mut owners) = listening_programs_and_owners();
     if let Err(e) = apply(&cfg, &apps) {
         eprintln!("winlux-firewall : {e}");
     }
@@ -1697,11 +1710,16 @@ pub fn daemon() -> ! {
         // processus. Ce parcours ne se refait que si une socket en écoute
         // est apparue ou a disparu, et au plus tard toutes les minutes
         // (#3266 : 1,87 % d'un cœur au repos, deux parcours toutes les 2 s).
+        // Une socket qui s'ouvre ou se ferme, ou un processus qui en tient
+        // une et qui fait exec ou se termine, relance le parcours au tour
+        // même : les règles par programme suivent aussi vite qu'avant.
         let key = listening_inodes();
-        let rescan = needs_rescan(&key, listen_key.as_ref(), tick);
+        let rescan = needs_rescan(&key, listen_key.as_ref(), tick) || owners_changed(&owners);
         listen_key = Some(key);
         let new_apps = if rescan {
-            listening_programs()
+            let (found, holders) = listening_programs_and_owners();
+            owners = holders;
+            found
         } else {
             apps.clone()
         };
@@ -1737,9 +1755,10 @@ pub fn daemon() -> ! {
 }
 
 /// Parcours complet des propriétaires de sockets au plus tard toutes les
-/// `RESCAN_TICKS` secondes, même sans socket en écoute nouvelle : un
-/// processus qui fait exec ou cède sa socket à un enfant garde le même
-/// inode (choix nommé : une minute de retard au pire pour ce cas).
+/// `RESCAN_TICKS` secondes, même sans changement vu : seule une socket en
+/// écoute passée par SCM_RIGHTS à un autre programme, qui la garde sous le
+/// même inode pendant que le premier la tient encore, n'est vue qu'ici
+/// (choix nommé : une minute au pire pour ce seul cas).
 const RESCAN_TICKS: u64 = 60;
 
 /// Inodes de toutes les sockets en écoute (boucle locale comprise, pour la
@@ -1897,6 +1916,39 @@ mod tests {
             "ports.txt écrit même sans écoute"
         );
         assert!(!super::needs_rescan(&vide, Some(&vide), 4));
+    }
+
+    /// #3266 : sans reparcourir tous les fd, un processus qui tenait une
+    /// socket en écoute et qui fait exec (autre programme) ou se termine
+    /// est vu au tour suivant.
+    #[test]
+    fn proprietaire_d_une_socket_qui_fait_exec_ou_se_termine_3266() {
+        use std::collections::BTreeMap;
+        // Racine d'administration exclusive (d'autres tests la déplacent),
+        // dont /proc est le vrai.
+        let root = crate::admin::test_root::Root::new("fw-3266");
+        std::os::unix::fs::symlink("/proc", root.dir.join("proc")).unwrap();
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 0.5; exec sleep 30"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+        let avant = super::program_of(&dir).unwrap();
+        let owners: BTreeMap<u32, std::path::PathBuf> = [(pid, avant.clone())].into();
+        println!("avant exec : {}", avant.display());
+        assert!(!super::owners_changed(&owners), "rien n'a changé");
+        let t0 = std::time::Instant::now();
+        while super::program_of(&dir).as_ref() == Some(&avant) {
+            assert!(t0.elapsed().as_secs() < 5, "exec attendu");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        println!("après exec : {:?}", super::program_of(&dir));
+        assert!(super::owners_changed(&owners), "exec vu");
+        let _ = child.kill();
+        let _ = child.wait();
+        let apres: BTreeMap<u32, std::path::PathBuf> = [(pid, avant)].into();
+        assert!(super::owners_changed(&apres), "processus terminé vu");
     }
 
     /// Datagramme fanotify : deux événements à la suite, version vérifiée.

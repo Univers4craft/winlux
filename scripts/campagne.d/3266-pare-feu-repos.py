@@ -6,3 +6,7 @@ ok(
     "fn parcours_des_fd_seulement_si_les_sockets_changent_3266" in t,
     "pare-feu au repos : parcours des fd seulement si les sockets en écoute changent (#3266)",
 )
+ok(
+    "fn proprietaire_d_une_socket_qui_fait_exec_ou_se_termine_3266" in t,
+    "pare-feu au repos : exec ou fin d'un processus en écoute vus au tour suivant (#3266)",
+)
