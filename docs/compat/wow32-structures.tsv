@@ -13,6 +13,7 @@ composition.rs	Factory	a-verifier
 composition.rs	Handler	a-verifier	
 composition.rs	Slot	a-verifier	
 controls.rs	DrawItemStruct	a-verifier	
+controls.rs	MeasureItemStruct	x86	WM_MEASUREITEM traduit par wow32/comctl.rs (MEASUREITEMSTRUCT, 24 octets en x86 : itemData en ULONG_PTR de 4 octets)
 controls/bars.rs	CbeItem	a-verifier	
 controls/bars.rs	NmHdr	a-verifier	
 controls/bars.rs	NmToolbar	a-verifier	
@@ -242,6 +243,7 @@ oleaut32_picture.rs	Picture	a-verifier	objet COM du lot C (#1511), vtable x64 ; 
 oleaut32_record.rs	RecordInfo	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 oleaut32_typelib.rs	InfoObj	x86	ITypeInfo vu par un programme x86 par le mandataire ITYPEINFO de wow32/com.rs ; TYPEATTR et FUNCDESC traduits par wow32/com_typeinfo.rs (#2796) ; ICreateTypeInfo2 reste x64 (CreateTypeLib2 refusé si wow32 actif)
 oleaut32_typelib.rs	LibObj	x86	ITypeLib vu par un programme x86 par le mandataire ITYPELIB de wow32/com.rs (LoadRegTypeLib, #2796 ; TLIBATTR sans pointeur, même disposition) ; ICreateTypeLib2 reste x64 (CreateTypeLib2 refusé si wow32 actif)
+quartz.rs	DevEnum	interne	objet COM ICreateDevEnum (#3296), x64 seulement : le programme ne lit que sa table, et sans mandataire x86 dans wow32/com.rs l'interface est refusée à un programme 32 bits (#2428)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 rtti.rs	StdException	interne	std::bad_typeid lancée par __RTtypeid en x64 seulement (x86 : avertissement, rien n'est lancé)
@@ -263,6 +265,8 @@ storage_settings.rs	KidsIter	a-verifier	parcours WinRT de ApplicationDataContain
 taskbarlist_com.rs	Obj	a-verifier	
 taskschd.rs	Obj	a-verifier	
 teams_win32.rs	AssocReg	a-verifier	
+textserv.rs	Hote	interne	test unitaire (hôte factice du module tests)
+textserv.rs	TextServices	interne	objet COM x64 seulement : create_text_services refuse (E_NOTIMPL, file:line) si wow32::active(), avant d'écrire ppUnk ; jamais remis à un programme 32 bits (#3268)
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe

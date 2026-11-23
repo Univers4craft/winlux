@@ -208,15 +208,7 @@ pub fn extract<R: Read>(mut r: R, dest: &Path, progress: &Progress) -> Res<()> {
             _ => skip(&mut r, size + padding(size))?,
         }
     }
-    for (rel, target) in links {
-        if symlink_stays_inside(&rel, &target) {
-            let p = dest.join(&rel);
-            if let Some(d) = p.parent() {
-                std::fs::create_dir_all(d)?;
-            }
-            let _ = std::os::unix::fs::symlink(&target, p);
-        }
-    }
+    create_links(dest, links)?;
     Ok(())
 }
 
@@ -392,5 +384,40 @@ mod tests {
         extract(&data[..], &d.join("out"), &Progress::default()).unwrap();
         assert!(!d.join("evil.txt").exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+    /// #3062 : `a → .` puis `x → a/..` (dans les deux ordres) : `x` mènerait
+    /// au parent du dossier d'extraction. Il doit être retiré, `a` et un lien
+    /// sain restent.
+    #[test]
+    fn lien_enchaine_hors_du_dossier_retire_3062() {
+        for (n, order) in [[0usize, 1, 2], [1, 0, 2]].iter().enumerate() {
+            let d =
+                std::env::temp_dir().join(format!("winlux-tar-3062-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            let entries: [(&[u8], &[u8]); 3] =
+                [(b"a", b"."), (b"x", b"a/.."), (b"sain", b"a/f.txt")];
+            let mut data = Vec::new();
+            data.extend_from_slice(&header(b"f.txt", b'0', 2, 0o644, 0, b""));
+            data.extend_from_slice(b"ok");
+            data.extend_from_slice(&[0u8; 510]);
+            for &k in order {
+                data.extend_from_slice(&header(entries[k].0, b'2', 0, 0o777, 0, entries[k].1));
+            }
+            data.extend_from_slice(&[0u8; 1024]);
+            let out = d.join("out");
+            extract(&data[..], &out, &Progress::default()).unwrap();
+            let x = std::fs::symlink_metadata(out.join("x"));
+            eprintln!(
+                "ordre {order:?} : x {:?}",
+                x.as_ref().map(|m| m.file_type())
+            );
+            assert!(x.is_err(), "x → a/.. sort du dossier et doit être retiré");
+            assert_eq!(
+                std::fs::read_link(out.join("a")).unwrap(),
+                std::path::PathBuf::from(".")
+            );
+            assert_eq!(std::fs::read_to_string(out.join("sain")).unwrap(), "ok");
+            let _ = std::fs::remove_dir_all(&d);
+        }
     }
 }

@@ -94,6 +94,11 @@ jobs:
             clang lld llvm \
             dotnet-runtime-10.0
           sudo apt-get install -y -q openbox wmctrl xdotool x11-utils
+          # Openbox de Winlux (#3064), construit par build-live-iso.sh.
+          sudo apt-get install -y -q autoconf automake libtool gettext autopoint pkg-config \
+            libglib2.0-dev libxml2-dev libpango1.0-dev libx11-dev libxft-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libstartup-notification0-dev libsm-dev libxext-dev \
+            libimlib2-dev librsvg2-dev libxi-dev
           # UEFI 32 bits pour QEMU : Ubuntu 26.04 n a plus ovmf-ia32 (paquet 24.04 vérifié par SHA-256).
           ovmf32=$(sh scripts/fetch-ovmf-ia32.sh "$RUNNER_TEMP/ovmf-ia32")
           echo "WINLUX_OVMF32=$ovmf32/OVMF32_CODE_4M.fd" >>"$GITHUB_ENV"
@@ -137,6 +142,7 @@ jobs:
           ls -l /dev/kvm || true
 
       - name: Construire l'ISO
+        id: iso
         run: |
           # The runner boots a cloud (Azure) kernel without built-in virtio
           # disk support; the APT base VM and real PCs need the generic one.
@@ -188,17 +194,34 @@ jobs:
           WINLUX_QEMU_MEMORY: 4096
         run: sh scripts/test-native-session-vm.sh
 
-      - name: Valider l'ISO et l'installation avant publication
+      # Une étape par démarrage et une pour l'installation (#3250) : chacune
+      # tourne dès que l'ISO est construite, même si une autre a échoué, et
+      # le job reste rouge au moindre échec. Une panique uefi32 (#3199) ne
+      # masque plus le test d'installation.
+      - name: Valider l'ISO au démarrage (bios)
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
         env:
           WINLUX_QEMU_MEMORY: 4096
-        run: |
-          if [ "$SKIP_ISO" = "false" ]; then
-            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" bios
-            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi
-            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi32
-            # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
-            WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
-          fi
+        run: sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" bios
+
+      - name: Valider l'ISO au démarrage (uefi)
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
+        env:
+          WINLUX_QEMU_MEMORY: 4096
+        run: sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi
+
+      - name: Valider l'ISO au démarrage (uefi32)
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
+        env:
+          WINLUX_QEMU_MEMORY: 4096
+        run: sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi32
+
+      - name: Valider l'installation avant publication
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
+        env:
+          # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
+          WINLUX_QEMU_MEMORY: 6144
+        run: sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
 
       # ISO de validation (PR et lancement manuel) en artefact : le fil de test
       # ne peut pas construire d'ISO sur son hôte (base noble) et la récupère
@@ -245,11 +268,15 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      # Gardés aussi quand le run est vert (#3203) : sans un démarrage réussi
+      # (qemu-uefi32.log…) on ne peut rien comparer à un démarrage qui panique.
       - name: Conserver les journaux de validation
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: validation-logs
+          name: validation-logs-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
           path: |
             build/apt-base/bootstrap.log
             build/browser-vm.*/serial.log

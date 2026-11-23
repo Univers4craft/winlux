@@ -347,7 +347,7 @@ fn running_elsewhere(name: &str) -> Option<u32> {
 
 /// Processus vivant du compte dont l'environnement porte
 /// `WINLUX_SERVICE_NAME=<name>` (casse ignorée, comme les noms de service).
-fn service_process(proc_dir: &std::path::Path, name: &str) -> Option<u32> {
+pub(crate) fn service_process(proc_dir: &std::path::Path, name: &str) -> Option<u32> {
     let me = std::process::id();
     let wanted = format!("WINLUX_SERVICE_NAME={name}").to_ascii_lowercase();
     std::fs::read_dir(proc_dir)

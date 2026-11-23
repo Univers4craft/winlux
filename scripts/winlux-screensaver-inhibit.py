@@ -31,6 +31,7 @@ journaux de session ($WINLUX_SESSION_LOGS ou $XDG_RUNTIME_DIR/winlux, #750).
 """
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -47,9 +48,74 @@ XML = f'''<node><interface name="{NAME}">
 <method name="GetActiveTime"><arg type="u" direction="out"/></method>
 <method name="SetActive"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
 </interface></node>'''
+INTROSPECTABLE = "org.freedesktop.DBus.Introspectable"
 POKE_SECONDS = 50
 INHIBIT_DIR = Path(os.environ.get("WINLUX_POWER_INHIBIT_DIR", "/run/winlux/power-inhibit"))
 IDLE_EXIT_SECONDS = 600
+
+
+class BusReply:
+    """Réponse à un appel reçu par le filtre de la connexion (#3341) : mêmes
+    noms que Gio.DBusMethodInvocation, dont PyGObject garde chaque instance
+    servie par register_object (environ 2 Ko par appel, sans plafond)."""
+    __slots__ = ("connection", "message")
+
+    def __init__(self, connection, message):
+        self.connection, self.message = connection, message
+
+    def send(self, reply):
+        from gi.repository import Gio
+        if not self.message.get_flags() & Gio.DBusMessageFlags.NO_REPLY_EXPECTED:
+            self.connection.send_message(reply, Gio.DBusSendMessageFlags.NONE)
+
+    def return_value(self, value):
+        reply = self.message.new_method_reply()
+        if value is not None:
+            reply.set_body(value)
+        self.send(reply)
+
+    def return_dbus_error(self, name, text):
+        self.send(self.message.new_method_error_literal(name, text))
+
+
+def bus_filter(methods, call):
+    """Filtre de connexion qui sert les appels de NAME sur PATHS dans la boucle
+    principale (#3341) ; tout autre message suit son chemin normal.
+    methods : nom → signature d'entrée."""
+    from gi.repository import Gio, GLib
+
+    def dispatch(connection, message):
+        interface, member = message.get_interface(), message.get_member()
+        reply = BusReply(connection, message)
+        if interface is None:
+            interface = INTROSPECTABLE if member == "Introspect" else NAME
+        if interface == INTROSPECTABLE:
+            if member == "Introspect" and message.get_signature() == "":
+                reply.return_value(GLib.Variant("(s)", (XML,)))
+            else:
+                reply.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", f"Méthode inconnue : {member}")
+            return False
+        signature = methods.get(member)
+        if signature is None:
+            reply.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", f"Méthode inconnue : {interface}.{member}")
+        elif message.get_signature() != signature:
+            reply.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs",
+                                    f"Signature « {message.get_signature()} » au lieu de « {signature} »")
+        else:
+            call(connection, message.get_sender(), message.get_path(), interface, member,
+                 message.get_body() or GLib.Variant("()", ()), reply)
+        return False
+
+    def incoming(connection, message, received):
+        interface, member = message.get_interface(), message.get_member()
+        if (received and message.get_message_type() == Gio.DBusMessageType.METHOD_CALL
+                and message.get_path() in PATHS
+                and (interface in (NAME, INTROSPECTABLE)
+                     or interface is None and (member in methods or member == "Introspect"))):
+            GLib.idle_add(dispatch, connection, message, priority=GLib.PRIORITY_DEFAULT)
+            return None
+        return message
+    return incoming
 
 
 def log(message, error=False):
@@ -263,6 +329,14 @@ def saver_processes(proc="/proc", uid=None):
     return daemons, init
 
 
+def saver_alive(pid, proc="/proc"):
+    """Le démon XScreenSaver déjà connu tourne-t-il encore ? Un seul fichier
+    lu, au lieu du cmdline de tous les processus (#3291)."""
+    try: argv0 = Path(proc, str(pid), "cmdline").read_bytes().split(b"\0")[0]
+    except OSError: return False
+    return os.path.basename(argv0.decode(errors="replace")) == "xscreensaver"
+
+
 def dpms_wanted(path=None):
     """Choix de l'utilisateur dans ~/.xscreensaver (Winlux : actif par défaut)."""
     path = Path(path) if path else Path.home() / ".xscreensaver"
@@ -283,13 +357,19 @@ class SaverDpms:
 
     WINDOW = 60
 
-    def __init__(self, xset=_xset, processes=saver_processes, wanted=dpms_wanted, held=None, clock=time.monotonic):
-        self.xset, self.processes, self.wanted, self.clock = xset, processes, wanted, clock
+    def __init__(self, xset=_xset, processes=saver_processes, wanted=dpms_wanted, held=None, clock=time.monotonic,
+                 alive=saver_alive):
+        self.xset, self.processes, self.wanted, self.clock, self.alive = xset, processes, wanted, clock, alive
         self.held = held or (lambda: DisplayHold(xset=lambda *_: "").held_by_other())
         self.daemon = None
         self.until = 0
 
     def tick(self):
+        # Hors de la minute qui suit son apparition, le démon connu n'appelle
+        # plus rien : on vérifie seulement qu'il vit encore. Le parcours de
+        # tout /proc ne revient que s'il a disparu (relance d'XScreenSaver).
+        if self.daemon is not None and self.clock() > self.until and self.alive(self.daemon):
+            return True
         daemons, init = self.processes()
         if not daemons:
             self.daemon = None
@@ -305,11 +385,35 @@ class SaverDpms:
         return True
 
 
-def update_busy():
-    tool = shutil.which("winlux-update")
-    if tool is None: return False
-    try: return subprocess.run([tool, "--busy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
-    except (OSError, subprocess.SubprocessError): return False
+def update_busy(root="/"):
+    """Même réponse que `winlux-update --busy` (branche du moteur APT, à garder
+    synchronisée : scripts/test-veille-repos.py rejoue cette branche du shell
+    sur les mêmes cas et échoue si les deux réponses divergent), sans lancer de programme
+    (#3291 : 30 ms de CPU et une dizaine de processus toutes les 15 s).
+    Installation en cours : drapeau de root /run/winlux/update-inhibit dont le
+    processus vit, ou verrou POSIX d'APT/dpkg posé (/proc/locks)."""
+    flag = Path(root, "run/winlux/update-inhibit")
+    try:
+        info = os.lstat(flag)
+        if stat.S_ISREG(info.st_mode) and info.st_uid == 0:
+            pid = flag.read_text(errors="replace").rstrip("\n")   # comme $(cat …)
+            if pid.isascii() and pid.isdigit() and pid != "0" and Path(root, "proc", pid).is_dir():
+                return True
+    except OSError:
+        pass
+    inodes = set()
+    for name in ("lock-frontend", "lock"):
+        try: inodes.add(os.stat(Path(root, "var/lib/dpkg", name)).st_ino)
+        except OSError: pass
+    if not inodes: return False
+    try: locks = Path(root, "proc/locks").read_text(errors="replace").splitlines()
+    except OSError: return False
+    for line in locks:
+        # « 1: POSIX  ADVISORY  WRITE 1234 08:02:131 0 EOF », ou « 1: -> POSIX … »
+        # pour une attente : même lecture que `grep " POSIX .*:$inode "`.
+        found = re.search(r" POSIX .*:(\d+) ", line)
+        if found and int(found.group(1)) in inodes: return True
+    return False
 
 
 def watch_updates(interval=None):
@@ -336,7 +440,10 @@ def watch_updates(interval=None):
     def uninhibit(cookie):
         bus.call_sync(NAME, PATHS[0], NAME, "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 10000, None)
 
-    watcher = UpdateWatch(update_busy, inhibit, uninhibit)
+    # WINLUX_UPDATE_ROOT : racine lue par update_busy, pour les tests qui
+    # simulent une installation sans être root (test-boot-journaux.py).
+    root = os.environ.get("WINLUX_UPDATE_ROOT", "/")
+    watcher = UpdateWatch(lambda: update_busy(root), inhibit, uninhibit)
     watcher.tick()
     GLib.timeout_add_seconds(interval or int(os.environ.get("WINLUX_UPDATE_WATCH_SECONDS", "15")), watcher.tick)
     GLib.MainLoop().run()
@@ -395,9 +502,10 @@ def main():
         return True
 
     node = Gio.DBusNodeInfo.new_for_xml(XML)
+    methods = {method.name: "".join(arg.signature for arg in method.in_args) for method in node.interfaces[0].methods}
     def acquired(connection, _name):
-        for path in PATHS:
-            connection.register_object(path, node.interfaces[0], call, None, None)
+        # Pas de register_object (#3341) : PyGObject y garde chaque invocation.
+        connection.add_filter(bus_filter(methods, call))
     Gio.bus_own_name(Gio.BusType.SESSION, NAME,
                      Gio.BusNameOwnerFlags.ALLOW_REPLACEMENT | Gio.BusNameOwnerFlags.REPLACE,
                      acquired, None, lambda *_: loop.quit())

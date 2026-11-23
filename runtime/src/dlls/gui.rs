@@ -516,6 +516,17 @@ type SentJob = Box<dyn FnOnce() -> isize + Send>;
 /// comme avant #2885, plutôt que de rester bloqué pour toujours.
 const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
 
+thread_local! {
+    /// Profondeur des messages envoyés par un autre fil en cours de
+    /// traitement sur ce fil (InSendMessage, InSendMessageEx, #3104).
+    static IN_SENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Le fil traite-t-il un message envoyé par un autre fil ?
+pub fn in_sent_message() -> bool {
+    IN_SENT.with(|d| d.get()) > 0
+}
+
 /// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
 /// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
 /// les attentes de messages et l'attente d'un SendMessage inter-fils.
@@ -530,7 +541,9 @@ pub fn deliver_sent() {
         };
         let job = lock(&sent.job).take();
         if let Some(job) = job {
+            IN_SENT.with(|d| d.set(d.get() + 1));
             let r = job();
+            IN_SENT.with(|d| d.set(d.get() - 1));
             *lock(&sent.result) = Some(r);
             sent.done.notify_all();
         }
@@ -1504,6 +1517,7 @@ pub fn window_from_dc(hdc: usize) -> usize {
 pub fn free_dc(hdc: usize) {
     lock(dcs()).remove(&hdc);
     lock(clips()).remove(&hdc);
+    super::gdi32_bounds::forget_dc(hdc);
 }
 
 // ---------- Découpage (clipping) des DC ----------
@@ -3435,6 +3449,11 @@ pub trait GuiBackend: Send {
     /// WS_MAXIMIZEBOX, #3011) : le gestionnaire retire son bouton Agrandir.
     /// Le programme garde le droit de changer lui-même sa taille.
     fn set_resizable(&mut self, _hwnd: usize, _resizable: bool) {}
+    /// Boutons Réduire et Agrandir de la barre de titre d'une fenêtre de
+    /// premier niveau (WS_MINIMIZEBOX et WS_MAXIMIZEBOX avec WS_SYSMENU,
+    /// #3064). Sans aucun des deux, Fermer seul ; avec un seul, le
+    /// gestionnaire montre l'autre grisé, comme Windows (KB Q130760).
+    fn set_caption_buttons(&mut self, _hwnd: usize, _minimize: bool, _maximize: bool) {}
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
@@ -3805,6 +3824,10 @@ fn change_active_top(new_top: usize) {
             crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
             new_top,
         );
+        crate::dlls::user32_more::notify_shell_hook(
+            crate::dlls::user32_more::HSHELL_WINDOWACTIVATED,
+            new_top,
+        );
     }
 }
 
@@ -4086,9 +4109,7 @@ pub fn pump_backend() {
         // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
         // la boîte Tonalité y laissait un geste à moitié fait, et la piste
         // générée n'était plus jamais redessinée (#1120).
-        let mouse = (0x0200..=0x020E).contains(&e.message)
-            || (0x00A0..=0x00AD).contains(&e.message)
-            || (0x0245..=0x024A).contains(&e.message);
+        let mouse = is_mouse_message(e.message);
         // Souris sur une autre fenêtre (hors molette, livrée à la fenêtre
         // qui a le focus), ou sortie de la fenêtre signalée par le backend.
         if e.message == WM_MOUSELEAVE {
@@ -4167,7 +4188,13 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: if geometry { BACKEND_GEOMETRY } else { promoted },
+            l_private: if geometry {
+                BACKEND_GEOMETRY
+            } else if promoted == 0 && (mouse || (0x0100..=0x0109).contains(&e.message)) {
+                BACKEND_INPUT
+            } else {
+                promoted
+            },
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -4333,6 +4360,23 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     true
 }
 
+/// Descripteurs qui signalent un message pour le fil appelant : la
+/// connexion X11 et l'éveil de sa file. `None` en headless, où rien n'arrive
+/// de l'hôte. Vrai aussi : un événement déjà lu de la connexion attend.
+pub fn message_wake_fds() -> Option<([i32; 2], bool)> {
+    let (fd, pending) = {
+        let mut b = lock(backend());
+        let fd = b.event_fd()?;
+        (fd, b.poll_pending())
+    };
+    Some(([fd, current_queue().wake.0], pending))
+}
+
+/// Vide l'éveil de la file du fil appelant après un sommeil.
+pub fn drain_queue_wake() {
+    current_queue().wake.drain();
+}
+
 /// Attend que l'un des descripteurs soit lisible (au plus `timeout_ms`) ;
 /// les descripteurs négatifs sont ignorés par `poll`.
 fn poll_fds(fds: &[i32], timeout_ms: u32) {
@@ -4415,6 +4459,17 @@ const SYSTEM_PAINT: u32 = 0x5750;
 /// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
 /// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
 pub const BACKEND_GEOMETRY: u32 = 0x5751;
+/// `l_private` d'un message clavier ou souris venu du serveur X, et non
+/// posté par un programme : GetCurrentInputMessageSource le rattache à son
+/// appareil (#1932).
+pub const BACKEND_INPUT: u32 = 0x5752;
+
+/// Messages souris de la zone client et du cadre, et WM_POINTER*.
+pub fn is_mouse_message(message: u32) -> bool {
+    (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message)
+}
 /// Message interne du backend : le cadre du gestionnaire autour d'une
 /// fenêtre a changé (lParam : gauche, droite, haut, bas sur 16 bits). Jamais
 /// distribué au programme (#2984).
@@ -5555,8 +5610,18 @@ fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
 
 /// Renvoie le style WS_* de la fenêtre.
+/// Style d'une fenêtre. WS_VISIBLE y suit l'état visible, comme sous
+/// Windows où ShowWindow et SetWindowPos posent et ôtent ce bit (Learn,
+/// « Window Styles », #3247).
 pub fn window_style(hwnd: usize) -> Option<u32> {
-    lock(windows()).get(&hwnd).map(|w| w.style)
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    lock(windows()).get(&hwnd).map(|w| {
+        if w.visible {
+            w.style | WS_VISIBLE
+        } else {
+            w.style & !WS_VISIBLE
+        }
+    })
 }
 
 /// Enfant transparent qui laisse voir son parent : WS_CHILD et
@@ -5653,9 +5718,10 @@ pub fn enum_top_level_windows() -> Vec<usize> {
 /// Fenêtres de premier niveau de **tous** les processus du compte, du
 /// sommet vers le fond (EnumWindows, GetWindow, FindWindow, #2046), sans
 /// les fenêtres message-only. L'ordre est celui du gestionnaire de fenêtres
-/// (`_NET_CLIENT_LIST_STACKING`) ; viennent ensuite les fenêtres qu'il ne
-/// gère pas (cachées) : celles de ce processus dans son ordre Z, puis celles
-/// des autres, la plus récente d'abord.
+/// (`_NET_CLIENT_LIST_STACKING`), sous nos fenêtres surgissantes visibles
+/// qu'il ne gère pas (override-redirect, #3110) ; viennent ensuite les
+/// fenêtres qu'il ne gère pas (cachées) : celles de ce processus dans son
+/// ordre Z, puis celles des autres, la plus récente d'abord.
 pub fn all_top_level_windows() -> Vec<usize> {
     let own: Vec<usize> = enum_top_level_windows()
         .into_iter()
@@ -5668,15 +5734,24 @@ pub fn all_top_level_windows() -> Vec<usize> {
         stacking = b.client_stacking();
         own_tops = own.iter().map(|&h| b.native_top_window(h)).collect();
     });
-    merge_z_order(&stacking, &own, &own_tops, &foreign)
+    let own_shown: Vec<bool> = own.iter().map(|&h| is_window_visible(h)).collect();
+    merge_z_order(&stacking, &own, &own_tops, &own_shown, &foreign)
 }
 
 /// Fusion de l'ordre Z (voir `all_top_level_windows`). `stacking` va du
-/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`.
+/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`,
+/// `own_shown[i]` dit si elle est visible.
+///
+/// Une fenêtre à nous visible mais absente de la pile du gestionnaire est
+/// une fenêtre surgissante override-redirect (menu, liste déroulante) :
+/// affichée au-dessus des fenêtres gérées, elle passe en tête. Classée
+/// après elles, WindowFromPoint rendait la fenêtre principale pour un point
+/// du menu de Qt, qui livrait le clic à la mauvaise fenêtre (#3110).
 fn merge_z_order(
     stacking: &[u64],
     own: &[usize],
     own_tops: &[Option<u64>],
+    own_shown: &[bool],
     foreign: &[super::gui_shared::Listed],
 ) -> Vec<usize> {
     let rank: HashMap<u64, usize> = stacking
@@ -5685,8 +5760,9 @@ fn merge_z_order(
         .filter(|(_, &x)| x != 0)
         .map(|(i, &x)| (x, i))
         .collect();
-    // Clé : (0, sommet d'abord) pour les fenêtres gérées, (1, ordre) pour
-    // les nôtres non gérées, (2, HWND décroissant) pour les autres.
+    // Clé : (0, ordre) pour les nôtres visibles non gérées (surgissantes),
+    // (1, sommet d'abord) pour les fenêtres gérées, (2, ordre) pour les
+    // nôtres cachées, (3, HWND décroissant) pour les autres.
     let mut keyed: Vec<((u8, usize), usize)> = Vec::with_capacity(own.len() + foreign.len());
     for (i, &h) in own.iter().enumerate() {
         let key = match own_tops
@@ -5695,16 +5771,17 @@ fn merge_z_order(
             .flatten()
             .and_then(|x| rank.get(&x))
         {
-            Some(&r) => (0, usize::MAX - r),
-            None => (1, i),
+            Some(&r) => (1, usize::MAX - r),
+            None if own_shown.get(i).copied().unwrap_or(false) => (0, i),
+            None => (2, i),
         };
         keyed.push((key, h));
     }
     for l in foreign {
         let top = if l.f.top != 0 { l.f.top } else { l.f.xid };
         let key = match rank.get(&top) {
-            Some(&r) => (0, usize::MAX - r),
-            None => (2, usize::MAX - l.hwnd),
+            Some(&r) => (1, usize::MAX - r),
+            None => (3, usize::MAX - l.hwnd),
         };
         keyed.push((key, l.hwnd));
     }
@@ -7181,7 +7258,11 @@ pub(crate) mod tests {
         let q = current_queue();
         assert!(pending_paint(hwnd, 0, 0).is_none());
         request_paint(hwnd);
-        let m = take_message(&q, hwnd, 0, 0).expect("WM_PAINT en file");
+        // Filtré sur WM_PAINT : un test voisin qui fait passer le programme
+        // au premier plan poste WM_ACTIVATEAPP à toutes ses fenêtres de
+        // premier niveau, celle-ci comprise, comme Windows le fait pour
+        // toutes les fenêtres de premier niveau de l'application.
+        let m = take_message(&q, hwnd, WM_PAINT, WM_PAINT).expect("WM_PAINT en file");
         assert_eq!(m.message, WM_PAINT);
         // Sans BeginPaint, la zone reste invalidée : WM_PAINT revient dès que
         // la file est vide, mais pas pour un filtre qui l'exclut.
@@ -7192,13 +7273,13 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // BeginPaint valide aussi.
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         let (hdc, _) = begin_paint(hwnd).unwrap();
         end_paint(hwnd, hdc);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // DefWindowProc valide lui-même (comme BeginPaint/EndPaint sous Windows).
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         def_window_proc(hwnd, WM_PAINT, 0, 0);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
@@ -7677,14 +7758,32 @@ mod tests_survol {
             listed(0x5_0002, 0),
             listed(0x5_0003, 0x77),
         ];
+        let hidden = [false; 4];
         assert_eq!(
-            merge_z_order(&stacking, &own, &own_tops, &foreign),
+            merge_z_order(&stacking, &own, &own_tops, &hidden, &foreign),
             vec![0x4_0002, 0x5_0001, 0x4_0001, 0x4_0003, 0x4_0004, 0x5_0003, 0x5_0002]
         );
         // Sans serveur X : notre ordre, puis les autres.
         assert_eq!(
-            merge_z_order(&[], &own[..2], &[None, None], &foreign[..1]),
+            merge_z_order(&[], &own[..2], &[None, None], &hidden[..2], &foreign[..1]),
             vec![0x4_0001, 0x4_0002, 0x5_0001]
+        );
+    }
+
+    /// #3110 : un menu override-redirect visible (absent de la pile du
+    /// gestionnaire) passe au-dessus de la fenêtre principale gérée ; une
+    /// fenêtre cachée non gérée reste dessous.
+    #[test]
+    fn menu_surgissant_visible_au_dessus_des_fenetres_gerees() {
+        use super::merge_z_order;
+        let stacking = [0x10, 0x11];
+        // Principale gérée, menu visible non géré, fenêtre cachée.
+        let own = [0x4_0001, 0x4_0002, 0x4_0003];
+        let own_tops = [Some(0x11), None, None];
+        let shown = [true, true, false];
+        assert_eq!(
+            merge_z_order(&stacking, &own, &own_tops, &shown, &[]),
+            vec![0x4_0002, 0x4_0001, 0x4_0003]
         );
     }
 

@@ -24,6 +24,7 @@ colonnes, quatre quarts.
     winlux-snap ontop [FENÊTRE]          Windows + Ctrl + T : toujours au premier plan
     winlux-snap watch                    ancrage à la souris (lancé avec la session)
     winlux-snap restore-group FENÊTRE    remet le groupe d'ancrage de FENÊTRE au premier plan
+    winlux-snap resnap                   replace les fenêtres ancrées (écran changé, lancé par watch)
 
 À la souris (winlux-snap watch) : une fenêtre glissée par sa barre de titre
 jusqu'au bord gauche ou droit prend la moitié de l'écran, jusqu'à un coin un
@@ -353,6 +354,21 @@ def keep_on_screen(window, area, rect):
     x, y = inside_position(last, area)
     if (x, y) != last[:2]:
         _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},-1,-1"])
+
+
+def resnap():
+    """Replace chaque fenêtre ancrée dans sa case, recalculée pour la zone de
+    travail actuelle : après un changement de définition ou d'écran, une
+    moitié reste une moitié (#2908)."""
+    areas = work_areas()
+    for line in _run(["wmctrl", "-l"]).splitlines():
+        window = line.split(None, 1)[0] if line.strip() else ""
+        zone = get_prop(window, "_WINLUX_SNAP") if window else ""
+        if zone not in ZONES: continue
+        geometry = window_geometry(window)
+        center = (geometry[0] + geometry[2] // 2, geometry[1] + geometry[3] // 2) if geometry else (0, 0)
+        snap(window, zone, pick_area(areas, center))
+    return 0
 
 
 def leave_snap(window):
@@ -1229,6 +1245,65 @@ class _X:
         return found
 
 
+
+class _RawInput:
+    """Réveil sur la souris seulement (#3279) : événements XInput2 bruts (mouvement,
+    appui, relâchement) sélectionnés sur la racine, sur une connexion X à part.
+    Aucune requête X tant que la souris ne bouge pas. Le contenu des événements
+    n'est jamais lu, ni aucun événement clavier demandé. None si XI 2.2 manque."""
+
+    class Mask(ctypes.Structure):
+        _fields_ = [("deviceid", ctypes.c_int), ("mask_len", ctypes.c_int), ("mask", ctypes.POINTER(ctypes.c_ubyte))]
+
+    RAW_BUTTON_PRESS, RAW_BUTTON_RELEASE, RAW_MOTION = 15, 16, 17
+    ALL_MASTER_DEVICES = 1
+
+    @classmethod
+    def open(cls):
+        try:
+            return cls()
+        except OSError:
+            return None
+
+    def __init__(self):
+        x11 = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+        xi = ctypes.CDLL(ctypes.util.find_library("Xi") or "libXi.so.6")
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x11.XConnectionNumber.argtypes = [ctypes.c_void_p]
+        x11.XPending.argtypes = [ctypes.c_void_p]
+        x11.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        xi.XIQueryVersion.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+        xi.XISelectEvents.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_RawInput.Mask), ctypes.c_int]
+        self.x11 = x11
+        self.display = x11.XOpenDisplay(None)
+        if not self.display: raise OSError("pas d'affichage X")
+        major, minor = ctypes.c_int(2), ctypes.c_int(2)
+        if xi.XIQueryVersion(self.display, ctypes.byref(major), ctypes.byref(minor)) != 0 or (major.value, minor.value) < (2, 2):
+            x11.XCloseDisplay(self.display)
+            raise OSError("XInput 2.2 absent")
+        bits = (ctypes.c_ubyte * 3)()
+        for event in (self.RAW_BUTTON_PRESS, self.RAW_BUTTON_RELEASE, self.RAW_MOTION):
+            bits[event >> 3] |= 1 << (event & 7)
+        mask = _RawInput.Mask(self.ALL_MASTER_DEVICES, len(bits), bits)
+        xi.XISelectEvents(self.display, x11.XDefaultRootWindow(self.display), ctypes.byref(mask), 1)
+        x11.XFlush(self.display)
+        self._event = ctypes.create_string_buffer(192)  # XEvent : 24 « long »
+        self.fd = x11.XConnectionNumber(self.display)
+
+    def drain(self):
+        """Vide la file sans lire les événements ; True s'il y en avait."""
+        seen = False
+        while self.x11.XPending(self.display):
+            self.x11.XNextEvent(self.display, self._event)
+            seen = True
+        return seen
+
+
 BUTTON1, ALT = 1 << 8, 1 << 3
 
 
@@ -1446,7 +1521,27 @@ def watch():
         # Après la fin du déplacement par openbox (il applique la dernière position au relâchement).
         GLib.timeout_add(60, lambda: subprocess.Popen(args, stdout=subprocess.DEVNULL, start_new_session=True) and False)
 
+    raw = _RawInput.open()
+    timer = {"id": 0}
+
+    def schedule(delay):
+        """Un seul tour en attente à la fois, au plus tôt dans « delay » ms."""
+        if not timer["id"]:
+            timer["id"] = GLib.timeout_add(delay, run_tick)
+
+    def run_tick():
+        timer["id"] = 0
+        tick()
+        return False
+
+    def raw_event(*_):
+        # Même cadence qu'avant pendant que la souris bouge : un tour par 100 ms.
+        if raw.drain():
+            schedule(max(0, min(100, 100 - int((time.monotonic() - state.get("tick_at", 0.0)) * 1000))))
+        return True
+
     def tick():
+        state["tick_at"] = time.monotonic()
         px, py, _, _, _, mask = x11.pointer()
         point = (px, py)
         if mask & BUTTON1:
@@ -1479,7 +1574,7 @@ def watch():
                         bar.hide()
                         state.update(bar=None, bar_zone=None, bar_cells=[])
                     show_target(drag_zone(point, monitor), area, monitor, scale)
-            GLib.timeout_add(30, tick)
+            schedule(30)
             return False
         if state["press"] is not None:
             state["press"] = None
@@ -1525,10 +1620,37 @@ def watch():
             if client and "MAXIMIZE" in allowed:
                 subprocess.Popen([sys.executable, os.path.abspath(__file__), "layouts", client,
                                   str(hovered[1]), str(hovered[2])], stdout=subprocess.DEVNULL, start_new_session=True)
-        GLib.timeout_add(100, tick)
+        # Souris immobile depuis trois tours (un passage de la barre compris)
+        # et aucun survol en attente : plus de tour jusqu'au prochain
+        # mouvement ou clic (#3279). Sans XInput 2, un tour toutes les 100 ms.
+        state["idle"] = state.get("idle", 0) + 1 if state.get("last_point") == (point, mask) else 0
+        state["last_point"] = (point, mask)
+        waiting = (state["hover"] is not None and state["armed"]) or \
+            (state.get("group_hover") is not None and state.get("group_armed"))
+        if raw is None or waiting or state["idle"] < 3:
+            schedule(100)
         return False
 
-    GLib.timeout_add(100, tick)
+    # Définition ou écrans changés : les fenêtres ancrées suivent (#2908),
+    # une fois la zone de travail mise à jour par openbox et le panneau.
+    pending = {"id": 0}
+
+    def screen_changed(*_):
+        if pending["id"]: GLib.source_remove(pending["id"])
+
+        def run():
+            pending["id"] = 0
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "resnap"],
+                             stdout=subprocess.DEVNULL, start_new_session=True)
+            return False
+        pending["id"] = GLib.timeout_add(1200, run)
+
+    screen = Gdk.Screen.get_default()
+    screen.connect("size-changed", screen_changed)
+    screen.connect("monitors-changed", screen_changed)
+    if raw is not None:
+        GLib.unix_fd_add_full(GLib.PRIORITY_DEFAULT, raw.fd, GLib.IOCondition.IN, raw_event)
+    schedule(100)
     Gtk.main()
     return 0
 
@@ -1566,6 +1688,8 @@ def main(argv):
         return group_popup(argv[2], tuple(int(v) for v in argv[3:7]))
     if len(argv) == 3 and argv[1] == "restore-group":
         return restore_group(argv[2])
+    if len(argv) == 2 and argv[1] == "resnap":
+        return resnap()
     if len(argv) == 2 and argv[1] == "watch":
         return watch()
     if len(argv) in (4, 6) and argv[1] == "drop" and (argv[3] in ZONES or argv[3] in ("maximize", "float")):

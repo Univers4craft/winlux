@@ -95,11 +95,45 @@ impl Interpreter {
     }
 }
 
+/// Fenêtre principale du processus `pid` : la première fenêtre de premier
+/// niveau, du sommet vers le fond, qui lui appartient, est visible et n'a
+/// pas de propriétaire. Learn (« Process.MainWindowHandle ») ne la définit
+/// que comme « la fenêtre ouverte par le processus qui a le focus » : cette
+/// règle est notre inférence. Les fenêtres des autres processus du compte
+/// viennent de l'annuaire partagé (#1228, #2046) ; 0 s'il n'y en a pas.
+fn main_window(pid: u32) -> usize {
+    use crate::dlls::gui;
+    gui::all_top_level_windows()
+        .into_iter()
+        .find(|&h| {
+            let (owner_pid, owner) = match gui::window_parent(h) {
+                // Fenêtre de ce processus : son propriétaire est rangé
+                // comme parent.
+                Some(parent) => (std::process::id(), parent),
+                None => match gui::foreign_window(h) {
+                    Some(f) => (f.pid, f.parent),
+                    None => return false,
+                },
+            };
+            owner_pid == pid && owner == 0 && gui::is_window_visible(h)
+        })
+        .unwrap_or(0)
+}
+
 /// # Safety
 /// Les arguments viennent des déclarations `extern` de `ProcessusNatif`.
 unsafe fn natif(name: &str, args: &[Value]) -> Option<Value> {
     Some(match name {
         "Courant" => Value::I32(kernel32::get_current_process_id() as i32),
+        // FenetrePrincipale(pid) : fenêtre principale du processus, 0 sans
+        // (#3285).
+        "FenetrePrincipale" => Value::I64(main_window(arg_i64(args, 0) as u32) as i64),
+        // TitreFenetre(hwnd) : titre de la fenêtre, publié par son processus
+        // s'il est un autre (#2046), "" sans.
+        "TitreFenetre" => {
+            let title = crate::dlls::gui::title_of(arg_i64(args, 0) as usize).unwrap_or_default();
+            alloc_managed_string(&title)
+        }
         // Liste() : [pid, nombre de fils, début en tops d'horloge]… à plat.
         "Liste" => {
             let mut flat = Vec::new();
@@ -156,6 +190,18 @@ unsafe fn natif(name: &str, args: &[Value]) -> Option<Value> {
             let ms = arg_i64(args, 1) as i32;
             let depth = super::threads::gil_release_all();
             let r = kernel32::wait_for_single_object(h, ms as u32);
+            super::threads::gil_restore(depth);
+            Value::I32(r as i32)
+        }
+        // AttendreSaisie(h, ms) : WaitForInputIdle de user32 (#3288), verrou
+        // global rendu pendant l'attente comme pour Attendre (#3287).
+        // 0 : prêt ; 258 : délai écoulé ; -1 : échec (sans interface,
+        // terminé).
+        "AttendreSaisie" => {
+            let h = arg_i64(args, 0) as usize;
+            let ms = arg_i64(args, 1) as i32;
+            let depth = super::threads::gil_release_all();
+            let r = unsafe { crate::dlls::user32_more::wait_for_input_idle(h, ms as u32) };
             super::threads::gil_restore(depth);
             Value::I32(r as i32)
         }

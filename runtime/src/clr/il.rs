@@ -14,7 +14,7 @@
 //! respectée.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -258,17 +258,18 @@ pub struct Interpreter {
 /// État partagé par les interpréteurs des différents fils.
 #[derive(Default)]
 pub struct Shared {
-    /// Types dont le constructeur statique a été lancé.
-    initialized: Mutex<HashSet<TypeId>>,
+    /// Constructeurs statiques des types chargés (programme et
+    /// assemblies), par `TypeId` : en cours, finis ou en échec (#3249).
+    initialized: super::initialisations::Initialisations,
     /// Champs statiques des types de la bibliothèque intégrée.
     external_statics: Mutex<HashMap<(usize, u32), Box<[u64; 4]>>>,
     /// Champs statiques des types intégrés au moteur (String, Boolean…)
     /// que notre mscorlib déclare, par nom complet : une seule case pour
     /// toutes les assemblies (#1997).
     builtin_statics: Mutex<HashMap<String, Box<[u64; 4]>>>,
-    /// Types intégrés dont le constructeur statique de notre mscorlib a
-    /// été lancé.
-    builtin_initialized: Mutex<HashSet<String>>,
+    /// Constructeurs statiques que notre mscorlib donne aux types intégrés :
+    /// en cours, finis ou en échec (#2001).
+    builtin_initialized: super::initialisations::Initialisations,
     /// Pointeurs de méthode rendus par `ldftn` / `ldvirtftn`.
     pub(super) fns: Mutex<FnTable>,
 }
@@ -424,10 +425,28 @@ impl Interpreter {
 
     /// Lance une seule fois le constructeur statique d'un type, avant son
     /// premier usage (ECMA-335 §II.10.5.3.1).
+    /// Lance une seule fois le constructeur statique d'un type chargé. Un
+    /// autre fil attend qu'il soit fini ; s'il lève, chaque accès relève la
+    /// même `TypeInitializationException` (ECMA-335 §II.10.5.3.3, #3249).
     fn ensure_initialized(&mut self, id: TypeId) -> Result<(), ClrException> {
-        if !self.shared.initialized.lock().unwrap().insert(id) {
-            return Ok(());
+        use super::initialisations::Acces;
+        let shared = self.shared.clone();
+        let cle = id.to_string();
+        match shared.initialized.entrer(&cle) {
+            Acces::Pret => return Ok(()),
+            Acces::Echec(e) => return Err(e),
+            Acces::Lancer => {}
         }
+        let r = self.run_cctor(id).map_err(|inner| {
+            let name =
+                types::with_types(|reg| reg.get(id).map(|t| t.full_name())).unwrap_or_default();
+            self.type_initialization_exception(&name, inner)
+        });
+        shared.initialized.terminer(&cle, r);
+        r
+    }
+
+    fn run_cctor(&mut self, id: TypeId) -> Result<(), ClrException> {
         let Some(((asm, row), args)) = types::with_types(|reg| {
             reg.get(id)
                 .and_then(|t| Some((t.def?, t.type_args.clone())))
@@ -1122,6 +1141,8 @@ impl Interpreter {
         for data in self.shared.builtin_statics.lock().unwrap().values() {
             roots.extend(data.iter().map(|&w| w as usize));
         }
+        roots.extend(self.shared.builtin_initialized.racines());
+        roots.extend(self.shared.initialized.racines());
         types::with_types(|reg| {
             for data in reg.static_data.values() {
                 roots.extend(data.iter().map(|&w| w as usize));
@@ -1222,17 +1243,25 @@ impl Interpreter {
     }
 
     /// Lance une seule fois le constructeur statique que notre mscorlib
-    /// donne à un type intégré au moteur (#1997).
+    /// donne à un type intégré au moteur (#1997). Un autre fil attend qu'il
+    /// soit fini ; s'il lève, chaque accès relève la même
+    /// `TypeInitializationException` (ECMA-335 §II.10.5.3.3, #2001).
     fn ensure_builtin_initialized(&mut self, class: &str) -> Result<(), ClrException> {
-        if !self
-            .shared
-            .builtin_initialized
-            .lock()
-            .unwrap()
-            .insert(class.to_string())
-        {
-            return Ok(());
+        use super::initialisations::Acces;
+        let shared = self.shared.clone();
+        match shared.builtin_initialized.entrer(class) {
+            Acces::Pret => return Ok(()),
+            Acces::Echec(e) => return Err(e),
+            Acces::Lancer => {}
         }
+        let r = self
+            .run_builtin_cctor(class)
+            .map_err(|inner| self.type_initialization_exception(&format!("System.{class}"), inner));
+        shared.builtin_initialized.terminer(class, r);
+        r
+    }
+
+    fn run_builtin_cctor(&mut self, class: &str) -> Result<(), ClrException> {
         let Some(asm) = self
             .domain
             .iter()
@@ -1261,6 +1290,60 @@ impl Interpreter {
             ExecResult::Exception(e) => Err(e),
             ExecResult::Return(_) => Ok(()),
         }
+    }
+
+    /// `TypeInitializationException(fullTypeName, inner)` construite par le
+    /// constructeur de notre mscorlib, qui en tire `Message` et `TypeName`.
+    fn type_initialization_exception(
+        &mut self,
+        type_name: &str,
+        inner: ClrException,
+    ) -> ClrException {
+        const NOM: &str = "TypeInitializationException";
+        let ctor = self
+            .domain
+            .iter()
+            .position(|info| info.name == super::domain::CORLIB)
+            .and_then(|asm| {
+                let a = self.assembly_at(asm);
+                (1..=a.row_count(TableId::TypeDef)).find_map(|row| {
+                    let td = a.get_type_def(row);
+                    if a.get_string(td.namespace) != "System" || a.get_string(td.name) != NOM {
+                        return None;
+                    }
+                    a.type_methods(row)
+                        .find(|&m| {
+                            let md = a.get_method_def(m);
+                            a.get_string(md.name) == ".ctor"
+                                && metadata::decode_method_sig(a.get_blob(md.signature))
+                                    .param_types
+                                    .len()
+                                    == 2
+                        })
+                        .map(|m| (asm, m))
+                })
+            });
+        let id = types::with_types(|reg| reg.find_by_name("System", NOM));
+        if let (Some((asm, m)), Some(id)) = (ctor, id) {
+            let obj = self.new_struct(id);
+            let name = bcl::alloc_managed_string(type_name);
+            let args = vec![Value::Ref(obj), name, Value::Ref(inner.obj_ptr)];
+            return match self.execute_in(asm, m, args, Gen::default()) {
+                ExecResult::Return(_) => ClrException { obj_ptr: obj },
+                ExecResult::Exception(e) => e,
+            };
+        }
+        // mscorlib sans ce type : objet du moteur, message et exception
+        // interne seulement.
+        let e = ClrException::new(
+            "System",
+            NOM,
+            &format!("The type initializer for '{type_name}' threw an exception."),
+        );
+        unsafe {
+            *(e.obj_ptr.add(exceptions::INNER_SLOT) as *mut *mut u8) = inner.obj_ptr;
+        }
+        e
     }
 
     /// Adresse d'un champ d'instance dans l'objet ou la structure `base`.

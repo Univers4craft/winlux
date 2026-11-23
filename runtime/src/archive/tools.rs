@@ -46,6 +46,18 @@ pub fn bsdtar() -> Option<PathBuf> {
     find(&["bsdtar"])
 }
 
+/// Commande d'un outil d'archive (7-Zip, unrar, unar, bsdtar) sous une
+/// locale UTF-8 fixe. Ces outils convertissent les noms d'entrée selon la
+/// locale héritée : sous C, bsdtar écrit « été » en caractères de
+/// remplacement sans erreur et ne relit plus aucun nom accentué (#3282).
+/// C.UTF-8 est intégrée à la glibc depuis 2.35, sans fichier de locale.
+/// Les messages restent en anglais, ce que `run_archiver` reconnaît.
+pub fn archiver(tool: &Path) -> Command {
+    let mut c = Command::new(tool);
+    c.env("LC_ALL", "C.UTF-8");
+    c
+}
+
 /// Décompresse `archive` à travers un filtre (`xz -dc`…) ; la lecture du
 /// fichier source alimente la progression.
 pub fn filter_read(
@@ -151,14 +163,114 @@ pub fn run_archiver(mut cmd: Command, has_password: bool, progress: &Progress) -
         });
     }
     if !status.success() {
-        let last = err_text
-            .lines()
-            .chain(out_text.lines())
-            .rfind(|l| !l.trim().is_empty())
-            .unwrap_or("échec de l'outil d'archive")
-            .trim()
-            .to_string();
+        if only_refused_links(&err_text) {
+            // 7-Zip a refusé lui-même les liens qui sortent du dossier et
+            // extrait tout le reste : c'est le résultat voulu (#3325, #3405).
+            return Ok(());
+        }
+        // L'erreur est sur stderr ; stdout ne porte que la progression.
+        let last_line = |t: &str| {
+            t.lines()
+                .rfind(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string())
+        };
+        let last = last_line(&err_text)
+            .or_else(|| last_line(&out_text))
+            .unwrap_or_else(|| "échec de l'outil d'archive".into());
         return Err(ArcError::Io(std::io::Error::other(last)));
     }
     Ok(())
+}
+
+/// Les seules erreurs de l'outil sont des entrées dangereuses qu'il a
+/// refusées en extrayant le reste :
+/// - 7-Zip 23, code 2 : « ERROR: Dangerous link path was ignored : nom : cible » (#3405) ;
+/// - bsdtar, code 1 : « nom: Path contains '..' », puis « bsdtar: Error exit
+///   delayed from previous errors. » (#3411).
+fn only_refused_links(err_text: &str) -> bool {
+    let lines: Vec<&str> = err_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let refused = |l: &str| {
+        l.starts_with("ERROR: Dangerous link path was ignored")
+            || l.contains(": Path contains '..'")
+    };
+    lines.iter().any(|l| refused(l))
+        && lines
+            .iter()
+            .all(|l| refused(l) || *l == "bsdtar: Error exit delayed from previous errors.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #3405 : la sortie exacte de 7-Zip 23.01 sur un 7z qui contient des
+    /// liens vers /etc et « ../../.. ».
+    #[test]
+    fn liens_refuses_par_7zip_ne_sont_pas_un_echec_3405() {
+        let err = "ERROR: Dangerous link path was ignored : ./remonte : ../../..\n\
+                   ERROR: Dangerous link path was ignored : ./absolu : /etc\n";
+        assert!(only_refused_links(err));
+        assert!(!only_refused_links(""));
+        assert!(!only_refused_links(
+            "ERROR: Dangerous link path was ignored : ./a : /etc\nERROR: Data Error : f.txt\n"
+        ));
+        assert!(!only_refused_links(
+            "ERROR: Can not open the file as archive\n"
+        ));
+        // #3411 : sortie exacte de bsdtar 3.7 sur un 7z avec « ../evade.txt ».
+        assert!(only_refused_links(
+            "../evade.txt: Path contains '..': Unknown error -1\n\
+             bsdtar: Error exit delayed from previous errors.\n"
+        ));
+        assert!(!only_refused_links(
+            "bsdtar: Error exit delayed from previous errors.\n"
+        ));
+        assert!(!only_refused_links(
+            "../e: Path contains '..': Unknown error -1\nf.txt: Truncated input file\n\
+             bsdtar: Error exit delayed from previous errors.\n"
+        ));
+    }
+
+    /// #3411 : un 7z dont une entrée remonte (« ../evade.txt ») : l'outil la refuse
+    /// et extrait le reste ; l'extraction réussit sans elle.
+    #[test]
+    fn entree_qui_remonte_refusee_sans_echec_total_3411() {
+        let Some(b) = bsdtar() else {
+            eprintln!("bsdtar absent : test sauté");
+            return;
+        };
+        let d = std::env::temp_dir().join(format!("winlux-pp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("ok.txt"), "ok").unwrap();
+        std::fs::write(d.join("ev.txt"), "x").unwrap();
+        let arc = d.join("pp.7z");
+        let st = archiver(&b)
+            .current_dir(&d)
+            .args([
+                "--format",
+                "7zip",
+                "-P",
+                "-cf",
+                "pp.7z",
+                "-s",
+                ",^ev.txt$,../evade.txt,",
+                "ok.txt",
+                "ev.txt",
+            ])
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let out = d.join("sous/out");
+        let r = super::super::extract_to(&arc, &out, None, &Progress::default());
+        eprintln!("extraction : {:?}", r.as_ref().map_err(|e| e.to_string()));
+        assert!(!d.join("sous/evade.txt").exists(), "écrit hors du dossier");
+        r.unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("ok.txt")).unwrap(), "ok");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

@@ -14,6 +14,12 @@ path = "src/main.rs"
 name = "winlux-remote"
 path = "src/remote/main.rs"
 
+# Fond « Winlux Aurore » animé (#3079) : petit programme à part, résident
+# seulement quand l'animation est activée et que le fond est affiché.
+[[bin]]
+name = "winlux-fond-anime"
+path = "src/fondanime/main.rs"
+
 [dependencies]
 libc = "0.2"
 png = "0.18.1"
