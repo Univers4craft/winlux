@@ -802,6 +802,22 @@ extern "win64" fn get_class_info(args: u32, s: usize) -> u64 {
 
 // MSG : x86 hwnd, message, wParam, lParam, time, pt (28 octets) ;
 // x64 hwnd 0, message 8, wParam 16, lParam 24, time 32, pt 36 (48 octets).
+// Le MSG x86 n'a pas de lPrivate (x64 : offset 44), où le runtime marque
+// les WM_SIZE et WM_MOVE venus du gestionnaire de fenêtres
+// (gui::BACKEND_GEOMETRY, d'où WM_WINDOWPOSCHANGED à la distribution) et ses
+// propres WM_PAINT. Chaque message rendu au programme avec une marque est
+// retenu ici, par fil (les 16 derniers), et la marque est rendue quand le
+// même MSG revient à TranslateMessage ou DispatchMessage (#3394).
+const MARQUES_MAX: usize = 16;
+thread_local! {
+    static MARQUES: std::cell::RefCell<Vec<([u32; 7], u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn msg32_mots(m: u32) -> [u32; 7] {
+    std::array::from_fn(|i| rd(m + 4 * i as u32))
+}
+
 fn msg_to64(m: u32, out: usize) {
     wq64(out, 0, ext(rd(m)) as u64);
     w64(out, 8, rd(m + 4));
@@ -810,6 +826,11 @@ fn msg_to64(m: u32, out: usize) {
     w64(out, 32, rd(m + 16));
     w64(out, 36, rd(m + 20));
     w64(out, 40, rd(m + 24));
+    let mots = msg32_mots(m);
+    // Lue sans être retirée : TranslateMessage lit le même MSG avant
+    // DispatchMessage. Les plus anciennes marques sortent par le haut.
+    let marque = MARQUES.with(|v| v.borrow().iter().find(|(k, _)| *k == mots).map(|e| e.1));
+    w64(out, 44, marque.unwrap_or(0));
 }
 
 fn msg_to32(m: usize, out: u32) {
@@ -820,6 +841,23 @@ fn msg_to32(m: usize, out: u32) {
     wr(out + 16, r64(m, 32));
     wr(out + 20, r64(m, 36));
     wr(out + 24, r64(m, 40));
+}
+
+/// Retient la marque lPrivate d'un MSG rendu au programme x86 (voir MARQUES).
+fn retenir_marque(m: usize, out: u32) {
+    let marque = r64(m, 44);
+    if marque == 0 {
+        return;
+    }
+    let mots = msg32_mots(out);
+    MARQUES.with(|v| {
+        let mut v = v.borrow_mut();
+        v.retain(|(k, _)| *k != mots);
+        if v.len() == MARQUES_MAX {
+            v.remove(0);
+        }
+        v.push((mots, marque));
+    });
 }
 
 /// GetMessage et PeekMessage : MSG x64 recopié en x86.
@@ -834,6 +872,10 @@ extern "win64" fn get_message(args: u32, s: usize) -> u64 {
     let peek = s.nargs == 5;
     if out != 0 && ((peek && r as u32 != 0) || (!peek && r as i32 != -1)) {
         msg_to32(p, out);
+        // PeekMessage sans PM_REMOVE laisse le message en file : il reviendra.
+        if !peek || slots[4] as u32 & 1 != 0 {
+            retenir_marque(p, out);
+        }
     }
     r
 }

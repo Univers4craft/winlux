@@ -331,12 +331,63 @@ thread_local! {
     /// la file ; `Some(true)` dès que DefWindowProc l'a reçu.
     static AWAITING: Cell<Option<bool>> = const { Cell::new(None) };
     static EXTRA_INFO: Cell<isize> = const { Cell::new(0) };
+    /// INPUT_MESSAGE_DEVICE_TYPE du dernier message retiré de la file
+    /// (GetCurrentInputMessageSource, #1932).
+    static SOURCE: Cell<u32> = const { Cell::new(IMDT_UNAVAILABLE) };
+}
+
+// INPUT_MESSAGE_DEVICE_TYPE (Learn, ne-winuser-input_message_device_type).
+pub const IMDT_UNAVAILABLE: u32 = 0x0;
+pub const IMDT_KEYBOARD: u32 = 0x1;
+pub const IMDT_MOUSE: u32 = 0x2;
+pub const IMDT_PEN: u32 = 0x8;
+
+/// Appareil d'origine d'un message retiré de la file : seuls les messages
+/// venus du serveur X (marqués par `gui`) ou promus d'un WM_POINTER* en ont
+/// un ; un message posté par un programme n'est pas identifié.
+fn source_of(m: &Msg) -> u32 {
+    if (WM_POINTERUPDATE..=WM_POINTERUP).contains(&m.message) {
+        return if m.wparam & 0xFFFF == PEN_ID as usize {
+            IMDT_PEN
+        } else {
+            IMDT_MOUSE
+        };
+    }
+    match m.l_private {
+        PEN_SIGNATURE => IMDT_PEN,
+        MOUSE_PROMOTED => IMDT_MOUSE,
+        gui::BACKEND_INPUT if (0x0100..=0x0109).contains(&m.message) => IMDT_KEYBOARD,
+        gui::BACKEND_INPUT if gui::is_mouse_message(m.message) => IMDT_MOUSE,
+        _ => IMDT_UNAVAILABLE,
+    }
+}
+
+/// Source du message courant du thread (GetCurrentInputMessageSource).
+pub fn current_source() -> u32 {
+    SOURCE.with(|s| s.get())
+}
+
+/// Pendant un SendMessage, Windows ne rattache le message à aucun appareil
+/// jusqu'au retour (Learn, GetCurrentInputMessageSource) ; la source du
+/// message courant est rendue ensuite.
+pub fn while_sent<R>(f: impl FnOnce() -> R) -> R {
+    let before = SOURCE.with(|s| s.replace(IMDT_UNAVAILABLE));
+    let r = f();
+    SOURCE.with(|s| s.set(before));
+    r
+}
+
+/// Un pointeur dont Winlux a livré un message (souris ou stylet) ; aucun
+/// n'est jamais de type PT_TOUCH.
+pub fn known_pointer(id: u32) -> bool {
+    last_for(id).is_some()
 }
 
 /// Appelé pour chaque message retiré de la file ; `false` : le message
 /// souris promu est retenu, car la fenêtre a traité le WM_POINTER* elle-même.
 pub fn on_take(m: &Msg) -> bool {
     if (WM_POINTERUPDATE..=WM_POINTERUP).contains(&m.message) {
+        SOURCE.with(|s| s.set(source_of(m)));
         AWAITING.with(|a| a.set(Some(false)));
         EXTRA_INFO.with(|x| x.set(0));
         return true;
@@ -345,6 +396,7 @@ pub fn on_take(m: &Msg) -> bool {
     if promoted && AWAITING.with(|a| a.take()) == Some(false) {
         return false;
     }
+    SOURCE.with(|s| s.set(source_of(m)));
     let extra = if m.l_private == PEN_SIGNATURE {
         PEN_SIGNATURE as i32 as isize
     } else {

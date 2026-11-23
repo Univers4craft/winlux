@@ -258,8 +258,11 @@ pub fn build(dll: &str, exports: &super::Exports, slot: usize) -> usize {
 
     let base = map_image(size, slot);
     if base == libc::MAP_FAILED {
-        // Repli : l'ancienne page « MZ » seule.
-        return super::fake_module();
+        // Repli quand la mémoire manque : une page « MZ » seule, sans table.
+        let page = Box::leak(Box::new([0u8; 4096]));
+        page[0] = b'M';
+        page[1] = b'Z';
+        return page.as_ptr() as usize;
     }
     let img = unsafe { std::slice::from_raw_parts_mut(base as *mut u8, size) };
 
@@ -390,6 +393,84 @@ mod tests {
             }
         }
         assert!(dlls.len() <= super::SLOTS);
+    }
+
+    /// #3337 : KernelBase est une vraie image PE, et sa table d'exports
+    /// porte ce que GetProcAddress y rend : noms de kernel32, d'advapi32
+    /// (#3207) et du registre. Lu comme un programme lit l'image, pas par
+    /// GetProcAddress.
+    #[test]
+    fn kernelbase_image_pe_avec_sa_table_3337() {
+        let h = super::super::kernelbase_handle();
+        assert_eq!(super::super::module_handle("kernelbase.dll"), Some(h));
+        assert_eq!(
+            super::super::module_handle("api-ms-win-core-synch-l1-2-0.dll"),
+            Some(h)
+        );
+        unsafe {
+            for name in [
+                "CreateFileW",
+                "GetTokenInformation",
+                "RegOpenKeyExW",
+                "RtlFillMemory",
+                "CheckTokenMembership",
+            ] {
+                assert!(
+                    manual_lookup(h, name).is_some(),
+                    "KernelBase!{name} absent de la table"
+                );
+            }
+            for &name in super::super::KERNELBASE_FROM_ADVAPI32
+                .iter()
+                .chain(super::super::KERNEL32_REGISTRY)
+            {
+                let served = super::super::kernel32_proc(name, true).is_some();
+                assert_eq!(
+                    manual_lookup(h, name).is_some(),
+                    served,
+                    "KernelBase!{name} : table et GetProcAddress divergent"
+                );
+            }
+        }
+    }
+
+    /// #3337 : plus aucune DLL intégrée n'est une page « MZ » sans en-tête
+    /// NT ; chacune a une table d'exports lisible.
+    #[test]
+    fn aucune_dll_integree_sans_en_tete_pe_3337() {
+        for name in [
+            "normaliz",
+            "wintab32",
+            "mshwgst",
+            "dpnet",
+            "dpnaddr",
+            "msacm32",
+            "webview2loader",
+            "authz",
+            "avicap32",
+        ] {
+            let h = super::super::module_handle(name).expect(name);
+            let b = super::super::builtins()
+                .iter()
+                .find(|b| b.name == name)
+                .unwrap();
+            unsafe {
+                let pe = h + (*((h + 0x3c) as *const u32)) as usize;
+                assert_eq!(*(pe as *const u32), 0x4550, "{name} : pas de signature PE");
+                let un = b
+                    .exports
+                    .iter()
+                    .filter(|(_, &a)| super::is_code(a))
+                    .map(|(&n, _)| n)
+                    .next();
+                if let Some(n) = un {
+                    assert!(
+                        manual_lookup(h, n).is_some(),
+                        "{name}!{n} absent de la table"
+                    );
+                }
+            }
+        }
     }
 
     /// Lecture de la table d'exports comme le fait le bac à sable de
