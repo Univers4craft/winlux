@@ -919,10 +919,6 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = builtin_instance(&guid, &iid, out) {
             return hr;
         }
-        // Application par défaut d'une extension (IApplicationAssociationRegistration, #3295).
-        if let Some(hr) = super::teams_win32::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
         // Serveur en processus inscrit au registre (InprocServer32, #16).
         if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
             if let Some(hr) = create_from_registry(&guid, &iid, out) {
@@ -1103,6 +1099,10 @@ unsafe fn builtin_instance(guid: &Guid, iid: &Guid, out: *mut *mut c_void) -> Op
     }
     // Options globales du runtime COM (IGlobalOptions, Teams #2208).
     if let Some(hr) = super::global_options::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Application par défaut d'une extension (IApplicationAssociationRegistration, #3295).
+    if let Some(hr) = super::teams_win32::create_builtin(guid, iid, out) {
         return Some(hr);
     }
     None
@@ -2147,6 +2147,7 @@ mod tests {
             g!(super::super::uianimation::CLSID_FACTORY),
             g!(super::super::uianimation::CLSID_TIMER),
             g!(super::super::global_options::CLSID_GLOBAL_OPTIONS),
+            g!(super::super::teams_win32::CLSID_APPLICATION_ASSOCIATION_REGISTRATION),
         ];
         for (c, _) in super::super::msxml::CLASSES {
             classes.push(g!(*c));
