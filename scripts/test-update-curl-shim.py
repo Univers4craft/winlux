@@ -12,7 +12,7 @@ output = args[args.index("--output") + 1] if "--output" in args else None
 url = next(argument for argument in reversed(args) if argument.startswith("https://"))
 name = url.rsplit("/", 1)[-1]
 asset = manifest["asset"]
-if "/releases/" not in url or name not in ("winlux-update-manifest.txt", asset, asset + ".sha256"):
+if "/releases/" not in url or name not in ("winlux-update-manifest.txt", "winlux-update-manifest.txt.sig", asset, asset + ".sha256"):
     sys.stderr.write(f"curl: (22) The requested URL returned error: 404 {url}\n")
     sys.exit(22)
 if name.endswith(".sha256"):

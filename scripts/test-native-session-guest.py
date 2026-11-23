@@ -677,6 +677,9 @@ def update_from_previous_release():
     shim = Path("/tmp/winlux-update-shim"); shim.mkdir(exist_ok=True)
     shutil.copyfile(bench / "curl", shim / "curl"); (shim / "curl").chmod(0o755)
     env = dict(os.environ, PATH=f"{shim}:" + os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))
+    # Manifeste signé par la clé jetable de test-native-session-vm.sh (#3452).
+    signed = Path("/usr/share/winlux/update-signing.pub").is_file()
+    if signed: env["WINLUX_UPDATE_PUBLIC_KEY"] = str(bench / "update-test.pub")
     result = subprocess.run(["winlux-control", "update-apply"], env=env, capture_output=True, text=True, timeout=900)
     if result.returncode != 0:
         # winlux-control écrit la sortie de l'outil dans update.log (lu par Paramètres).
@@ -687,6 +690,9 @@ def update_from_previous_release():
                 print("\n".join(path.read_text(errors="replace").splitlines()[-60:]), flush=True)
         print(subprocess.run(["df", "-h", "/", "/var"], capture_output=True, text=True).stdout, flush=True)
     assert result.returncode == 0, "update from " + previous + " failed"
+    if signed:
+        log = Path("/run/winlux/update.log").read_text(errors="replace")
+        assert "Signature Ed25519 du manifeste vérifiée" in log, "signature du manifeste non vérifiée par l'outil de v" + previous
     new = manifest["version"]
     assert Path("/usr/share/winlux/version").read_text().strip() == new, Path("/usr/share/winlux/version").read_text()
     assert "v" + run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == new
