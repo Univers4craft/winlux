@@ -9,7 +9,9 @@ normalement, une qui pose une question avant de se fermer. Vérifie :
   - « Attendre » le laisse vivre ;
   - une fenêtre qui se ferme, ou qui ouvre une question, ne déclenche rien ;
   - un PID d'un autre utilisateur, init ou une autre machine ne sont jamais tués ;
-  - menu de fenêtre traduit, migration d'un rc.xml existant.
+  - menu de fenêtre traduit, migration d'un rc.xml existant ;
+  - la question se retire seule si le programme meurt ou si sa fenêtre passe à
+    un autre processus, sans rien tuer ni annoncer « fermé » (#3259).
 Sans Openbox ni xprop, seules les vérifications hors affichage tournent.
 
     test-force-close.py
@@ -107,6 +109,18 @@ def offline_checks():
         check(refusal({"pid": child.pid, "machine": "autre-pc"}) is not None, "fenêtre d'une autre machine acceptée")
     finally:
         child.kill()
+    # #3259 : rien n'est tué ni annoncé fermé si le processus visé n'est plus le même.
+    terminate, start_time = module["terminate"], module["start_time"]
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    check(terminate(dead.pid, "1") is False, "processus déjà terminé : terminate() annonce une fermeture (#3259)")
+    other = subprocess.Popen(["sleep", "30"])
+    try:
+        check(terminate(other.pid, str(int(start_time(other.pid)) + 1)) is False,
+              "autre date de départ : terminate() annonce une fermeture (#3259)")
+        check(other.poll() is None, "autre date de départ : processus tué (#3259)")
+    finally:
+        other.kill()
     # rc.xml livré : croix, Alt+F4, clic droit sur la barre de titre, Alt+Espace.
     shipped = HERE.parent / "integration/native/config/openbox/rc.xml"
     root = ET.parse(shipped).getroot()
@@ -171,6 +185,62 @@ def other_user_pid():
             except OSError:
                 pass
     return None, None
+
+
+def question_window(seconds=10):
+    """Fenêtre de la question « … ne répond pas », ou None."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        found = subprocess.run(["xdotool", "search", "--name", "ne répond pas"], capture_output=True, text=True, timeout=5).stdout.split()
+        if found:
+            return found[0]
+        time.sleep(0.2)
+    return None
+
+
+def withdrawal_checks(env):
+    """#3259 : la question ne survit ni au programme ni à sa fenêtre, et ne tue rien d'autre."""
+    asking = dict(env, WINLUX_LANG="fr")
+    asking.pop("WINLUX_FORCE_CLOSE_ANSWER", None)
+    for case in ("mort", "XID réattribué"):
+        process = subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), "window", "hung"], env=env,
+                                   stderr=subprocess.DEVNULL)
+        window = find_window(process.pid)
+        check(window is not None, f"{case} : fenêtre d'essai introuvable")
+        if not window:
+            process.kill()
+            continue
+        question = subprocess.Popen([sys.executable, "-B", str(HERE / "winlux-force-close.py"), "--hung", window],
+                                    env=asking, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            check(question_window() is not None, f"{case} : question « ne répond pas » jamais affichée")
+            check(not gone(question, 1), f"{case} : question retirée alors que le programme est toujours bloqué")
+            other = None
+            if case == "mort":
+                process.kill()
+                process.wait()
+            else:
+                # Même identifiant X, autre processus : celui-ci ne doit jamais être visé.
+                other = subprocess.Popen(["sleep", "30"])
+                subprocess.run(["xprop", "-id", window, "-f", "_NET_WM_PID", "32c", "-set", "_NET_WM_PID", str(other.pid)], check=True)
+            begun = time.monotonic()
+            withdrawn = gone(question, 3)
+            check(withdrawn, f"{case} : la question reste affichée (#3259)")
+            if withdrawn:
+                print(f"{case} : question retirée en {int((time.monotonic() - begun) * 1000)} ms")
+                out, err = question.communicate()
+                check(question.returncode == 0, f"{case} : code de sortie {question.returncode}")
+                check("fermé" not in out, f"{case} : « fermé » annoncé sans rien avoir fermé ({out.strip()})")
+                check("question retirée" in err, f"{case} : retrait non tracé ({err.strip()})")
+            check(question_window(0.5) is None, f"{case} : fenêtre de la question toujours là (#3259)")
+            if other is not None:
+                check(other.poll() is None, f"{case} : le processus qui a repris l'identifiant X a été tué (#3259)")
+                check(process.poll() is None, f"{case} : l'ancien programme a été tué sans réponse")
+                other.kill()
+        finally:
+            if question.poll() is None:
+                question.kill()
+            process.kill()
 
 
 def display_checks(temp):
@@ -249,6 +319,7 @@ def display_checks(temp):
                 if owned:
                     owned.kill()
             process.kill()
+            withdrawal_checks(env)
         finally:
             openbox.terminate()
             openbox.wait(timeout=10)
