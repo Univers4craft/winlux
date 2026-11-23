@@ -36,7 +36,11 @@ mod home;
 
 pub const CUSTOM_TITLE: bool = true;
 
-const MAX_ENTRIES: usize = 1024;
+/// Éléments d'un volet au plus. Le stockage grandit à la demande (#3156) :
+/// avant, 1 024 places fixes tronquaient les gros dossiers.
+const MAX_ENTRIES: usize = 1 << 18;
+/// Places réservées au premier remplissage d'un volet.
+const FIRST_ENTRIES: usize = 256;
 const PATH_LEN: usize = 260;
 // FIND_DATA fournit jusqu'à 259 octets : le libellé affiché doit rester le
 // même nom que celui utilisé par les opérations sur les fichiers.
@@ -178,18 +182,85 @@ impl Field {
     }
 }
 
+/// Tableau qui grandit sur le tas du processus, par doublement. Les cases
+/// au-delà de ce que le volet a écrit sont à zéro et ne sont jamais lues.
+/// Une seule copie vit dans chaque volet : les onglets s'échangent par
+/// `ptr::swap`, jamais par copie.
+struct Store<T> {
+    ptr: *mut T,
+    cap: usize,
+}
+
+impl<T> Store<T> {
+    const EMPTY: Store<T> = Store {
+        ptr: core::ptr::null_mut(),
+        cap: 0,
+    };
+
+    /// Au moins `n` cases ; faux si la mémoire manque.
+    unsafe fn reserve(&mut self, n: usize) -> bool {
+        if n <= self.cap {
+            return true;
+        }
+        let cap = n.next_power_of_two().max(64);
+        let Some(bytes) = cap.checked_mul(core::mem::size_of::<T>()) else {
+            return false;
+        };
+        let heap = GetProcessHeap();
+        let fresh = HeapAlloc(heap, 0x8, bytes) as *mut T;
+        if fresh.is_null() {
+            return false;
+        }
+        if !self.ptr.is_null() {
+            core::ptr::copy_nonoverlapping(self.ptr, fresh, self.cap);
+            HeapFree(heap, 0, self.ptr.cast());
+        }
+        self.ptr = fresh;
+        self.cap = cap;
+        true
+    }
+
+    unsafe fn zero(&mut self) {
+        if !self.ptr.is_null() {
+            core::ptr::write_bytes(self.ptr, 0, self.cap);
+        }
+    }
+}
+
+impl<T> core::ops::Deref for Store<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        if self.ptr.is_null() {
+            return &[];
+        }
+        // SAFETY : `ptr` vient de HeapAlloc pour `cap` éléments, mis à zéro.
+        unsafe { core::slice::from_raw_parts(self.ptr, self.cap) }
+    }
+}
+
+impl<T> core::ops::DerefMut for Store<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if self.ptr.is_null() {
+            return &mut [];
+        }
+        // SAFETY : comme `deref`, et `&mut self` garantit l'exclusivité.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.cap) }
+    }
+}
+
 struct Pane {
     loc: Path,
     back: [Path; HISTORY],
     nback: usize,
     fwd: [Path; HISTORY],
     nfwd: usize,
-    entries: [Entry; MAX_ENTRIES],
+    entries: Store<Entry>,
     count: usize,
     /// Indices filtrés et triés réellement affichés.
-    view: [u16; MAX_ENTRIES],
+    view: Store<u32>,
     nview: usize,
-    sel: [u64; MAX_ENTRIES / 64],
+    /// Un bit par élément de `entries`.
+    sel: Store<u64>,
     anchor: usize,
     scroll: i32,
     scroll_target: i32,
@@ -207,11 +278,11 @@ const EMPTY_PANE: Pane = Pane {
     nback: 0,
     fwd: [EMPTY_PATH; HISTORY],
     nfwd: 0,
-    entries: [EMPTY_ENTRY; MAX_ENTRIES],
+    entries: Store::EMPTY,
     count: 0,
-    view: [0; MAX_ENTRIES],
+    view: Store::EMPTY,
     nview: 0,
-    sel: [0; MAX_ENTRIES / 64],
+    sel: Store::EMPTY,
     anchor: 0,
     scroll: 0,
     scroll_target: 0,
@@ -1042,6 +1113,12 @@ unsafe fn pane() -> &'static mut Pane {
     &mut t.panes[t.focus]
 }
 
+/// Place pour `n` éléments dans `entries`, `view` et `sel` (#3156).
+unsafe fn grow(p: &mut Pane, n: usize) -> bool {
+    let n = n.max(FIRST_ENTRIES);
+    p.entries.reserve(n) && p.view.reserve(n) && p.sel.reserve(n.div_ceil(64))
+}
+
 unsafe fn add_entry(
     p: &mut Pane,
     name: &[u8],
@@ -1051,7 +1128,7 @@ unsafe fn add_entry(
     mtime: u64,
     kind: Option<Kind>,
 ) {
-    if p.count >= MAX_ENTRIES || !valid_path(name) || name.is_empty() {
+    if p.count >= MAX_ENTRIES || !valid_path(name) || name.is_empty() || !grow(p, p.count + 1) {
         p.truncated = true;
         return;
     }
@@ -1171,7 +1248,7 @@ unsafe fn reload(p: &mut Pane) {
     p.truncated = false;
     p.missing = false;
     p.deep = false;
-    p.sel = [0; MAX_ENTRIES / 64];
+    p.sel.zero();
     let loc = p.loc;
     if !loc.virt() {
         maybe_commit(loc.get());
@@ -1260,7 +1337,7 @@ unsafe fn rebuild_view(p: &mut Pane) {
         if p.loc.is(HOME) && !home::passes(e) {
             continue;
         }
-        p.view[p.nview] = i as u16;
+        p.view[p.nview] = i as u32;
         p.nview += 1;
     }
     // Accueil : ordre fixe (dossiers, lecteurs, récents du plus récent).
@@ -1822,13 +1899,16 @@ unsafe fn save_folder_options() {
 // ---------- Sélection ----------
 
 fn is_sel(p: &Pane, i: usize) -> bool {
-    p.sel[i / 64] & (1 << (i % 64)) != 0
+    p.sel.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0)
 }
 fn set_sel(p: &mut Pane, i: usize, on: bool) {
+    let Some(w) = p.sel.get_mut(i / 64) else {
+        return;
+    };
     if on {
-        p.sel[i / 64] |= 1 << (i % 64);
+        *w |= 1 << (i % 64);
     } else {
-        p.sel[i / 64] &= !(1 << (i % 64));
+        *w &= !(1 << (i % 64));
     }
 }
 fn sel_count(p: &Pane) -> usize {
@@ -3966,7 +4046,7 @@ unsafe fn unique_name(
 }
 
 unsafe fn select_named(p: &mut Pane, name: &[u8]) -> Option<usize> {
-    p.sel = [0; MAX_ENTRIES / 64];
+    p.sel.zero();
     let i = (0..p.count).find(|&i| p.entries[i].name() == name)?;
     set_sel(p, i, true);
     p.anchor = i;
@@ -5988,7 +6068,7 @@ unsafe fn finish_job(status: u32, msg: &[u8]) {
                 let nl = created.len().min(NAME_LEN);
                 nb[..nl].copy_from_slice(&created[..nl]);
                 let p = pane();
-                p.sel = [0; MAX_ENTRIES / 64];
+                p.sel.zero();
                 let _ = select_named(p, &nb[..nl]);
                 notify_with(
                     t4([
@@ -6999,7 +7079,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                     }
                     Mouse::RightDown => {
                         if !is_sel(pn, idx) {
-                            pn.sel = [0; MAX_ENTRIES / 64];
+                            pn.sel.zero();
                             set_sel(pn, idx, true);
                             pn.anchor = idx;
                         }
@@ -7025,13 +7105,13 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                             let a = (0..pn.nview)
                                 .find(|&k| pn.view[k] as usize == pn.anchor)
                                 .unwrap_or(v);
-                            pn.sel = [0; MAX_ENTRIES / 64];
+                            pn.sel.zero();
                             for k in a.min(v)..=a.max(v) {
                                 let i2 = pn.view[k] as usize;
                                 set_sel(pn, i2, true);
                             }
                         } else {
-                            pn.sel = [0; MAX_ENTRIES / 64];
+                            pn.sel.zero();
                             set_sel(pn, idx, true);
                             pn.anchor = idx;
                         }
@@ -7041,7 +7121,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
             }
             None => {
                 if !ctrl() {
-                    pn.sel = [0; MAX_ENTRIES / 64];
+                    pn.sel.zero();
                 }
                 if ev == Mouse::RightDown {
                     MENU = Menu::Context {
@@ -7369,7 +7449,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                 let loc = p.loc;
                                 p.count = 0;
                                 p.truncated = false;
-                                p.sel = [0; MAX_ENTRIES / 64];
+                                p.sel.zero();
                                 read_dir(p, loc.get(), b"", filter.get(), 3);
                                 p.deep = true;
                                 rebuild_view(p);
@@ -7425,7 +7505,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 == Some(b)
         }) {
             let i = p.view[v] as usize;
-            p.sel = [0; MAX_ENTRIES / 64];
+            p.sel.zero();
             set_sel(p, i, true);
             p.anchor = i;
         }
@@ -7435,7 +7515,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     let cols = cells(&rect(0, 0, 1000, 600)).cols.max(1) as usize;
     let move_to = |p: &mut Pane, v: usize| {
         let i = p.view[v] as usize;
-        p.sel = [0; MAX_ENTRIES / 64];
+        p.sel.zero();
         set_sel(p, i, true);
         p.anchor = i;
     };
@@ -7904,6 +7984,60 @@ unsafe fn wheel_tick_checks() {
     reload(p);
 }
 
+/// Un dossier de plus de 1 024 éléments s'affiche en entier : le stockage
+/// des volets grandit à la demande (#3156).
+unsafe fn big_folder_checks(root: &[u8]) {
+    const N: u32 = 3000;
+    let mut dir = [0u8; PATH_LEN + NAME_LEN + 2];
+    let dn = join(&mut dir, root, b"gros-3156");
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    CreateDirectoryW(wstr(&mut w, &dir[..dn]), core::ptr::null_mut());
+    let mut made = 0;
+    for i in 0..N {
+        let mut name = *b"f-0000.txt";
+        name[2] = b'0' + (i / 1000) as u8;
+        name[3] = b'0' + (i / 100 % 10) as u8;
+        name[4] = b'0' + (i / 10 % 10) as u8;
+        name[5] = b'0' + (i % 10) as u8;
+        let mut file = [0u8; PATH_LEN + NAME_LEN + 2];
+        let n = join(&mut file, &dir[..dn], &name);
+        let h = CreateFileW(
+            wstr(&mut w, &file[..n]),
+            0x4000_0000,
+            7,
+            core::ptr::null_mut(),
+            1,
+            0x80,
+            core::ptr::null_mut(),
+        );
+        if h as isize != -1 {
+            CloseHandle(h);
+            made += 1;
+        }
+    }
+    let p = pane();
+    let old_loc = p.loc;
+    p.loc.set(&dir[..dn]);
+    reload(p);
+    let p = pane();
+    let whole = made == N && p.count == N as usize && p.nview == N as usize && !p.truncated;
+    let last = p.view[p.nview.saturating_sub(1)] as usize;
+    let sorted_last = p.nview > 0 && p.entries[last].name() == b"f-2999.txt";
+    p.sel.zero();
+    set_sel(p, last, true);
+    let selected = is_sel(p, last) && sel_count(p) == 1;
+    check!(
+        whole && sorted_last,
+        "Explorateur : un dossier de 3 000 fichiers s'affiche en entier, trie (#3156)"
+    );
+    check!(
+        selected,
+        "Explorateur : le 3 000e element se selectionne (#3156)"
+    );
+    p.loc = old_loc;
+    reload(p);
+}
+
 pub unsafe fn regression_checks() {
     // Dossier accentué réel (VM de l'ISO) : « Téléchargements » doit s'ouvrir,
     // pas « Ce dossier est introuvable ». Seulement si le test le demande.
@@ -8113,7 +8247,7 @@ pub unsafe fn regression_checks() {
     crate::settings::regression_exe_settings(&wide_program);
     let p = pane();
     p.count = 0;
-    p.sel = [0; MAX_ENTRIES / 64];
+    p.sel.zero();
     add_entry(p, b"Mon programme.EXE", false, false, 0, 0, Some(Kind::Exe));
     set_sel(p, 0, true);
     MENU = Menu::Context {
@@ -8137,6 +8271,7 @@ pub unsafe fn regression_checks() {
     );
     MENU = Menu::None;
     archive_regression(root);
+    big_folder_checks(root);
     row_icon_checks();
     pick::regression();
     places_and_hover_checks();
