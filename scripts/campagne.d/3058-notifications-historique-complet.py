@@ -21,10 +21,13 @@ class _Boite3058:
     def get_children(self): return list(self.enfants)
     def remove(self, enfant): self.enfants.remove(enfant)
     def pack_start(self, enfant, *_): self.enfants.append(enfant)
+    def get_vadjustment(self): return self          # défilement en haut (#3342)
+    def get_value(self): return 0
     def __getattr__(self, _nom): return lambda *a, **k: None
 _centre_3058 = _popup_3058["Popup"].__new__(_popup_3058["Popup"])
 _centre_3058.__dict__.update(cards=_Boite3058(), dnd=_Boite3058(), clear=_Boite3058(), window=None,
-                             snapshot=None, updating=False, pending=[])
+                             snapshot=None, updating=False, pending=[], shown={}, reading=None,
+                             empty=_Boite3058(), scroll=_Boite3058())
 _centre_3058.notification_card = lambda item: item["title"]
 _centre_3058.label = lambda *a, **k: "vide"
 _centre_3058.refresh_notifications()

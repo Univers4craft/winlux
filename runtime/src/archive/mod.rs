@@ -158,6 +158,21 @@ impl Format {
 // ---------- Extraction ----------
 
 fn external_extract(archive: &Path, dest: &Path, pw: Option<&str>, progress: &Progress) -> Res<()> {
+    let r = external_tool_extract(archive, dest, pw, progress);
+    // L'outil crée les liens lui-même : ceux qui sortent du dossier sont
+    // retirés, même après un échec partiel (#3325).
+    if dest.is_dir() {
+        remove_escaping_links(dest)?;
+    }
+    r
+}
+
+fn external_tool_extract(
+    archive: &Path,
+    dest: &Path,
+    pw: Option<&str>,
+    progress: &Progress,
+) -> Res<()> {
     std::fs::create_dir_all(dest)?;
     let pw_arg = |prefix: &str| format!("{prefix}{}", pw.unwrap_or(""));
     if let Some(sz) = tools::sevenzip() {
@@ -1010,6 +1025,54 @@ mod tests {
                 .as_deref(),
             Some("Bonjour")
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Les liens d'une archive extraite par un outil externe (7z, RAR…)
+    /// ne mènent pas hors du dossier d'extraction, comme pour ZIP et TAR.
+    #[test]
+    fn liens_sortants_outil_externe_retires() {
+        if tools::bsdtar().is_none() {
+            eprintln!("bsdtar absent : test sauté");
+            return;
+        }
+        let d = tmp("7z-liens");
+        let src = d.join("src");
+        std::fs::create_dir_all(src.join("sous")).unwrap();
+        std::fs::write(src.join("f.txt"), "f").unwrap();
+        for (t, n) in [
+            ("/etc", "absolu"),
+            ("../../..", "remonte"),
+            ("sous", "dedans"),
+            ("f.txt", "fichier"),
+        ] {
+            std::os::unix::fs::symlink(t, src.join(n)).unwrap();
+        }
+        let arc = d.join("l.7z");
+        let mut c = tools::archiver(&tools::bsdtar().unwrap());
+        c.arg("--format")
+            .arg("7zip")
+            .arg("-cf")
+            .arg(&arc)
+            .arg("-C")
+            .arg(&src)
+            .arg(".");
+        assert!(c.status().unwrap().success());
+        let out = d.join("out");
+        extract_to(&arc, &out, None, &Progress::default()).unwrap();
+        let liens: Vec<_> = walk(&out)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.meta.file_type().is_symlink())
+            .map(|e| (e.rel.clone(), std::fs::read_link(out.join(&e.rel)).unwrap()))
+            .collect();
+        eprintln!("liens après extraction : {liens:?}");
+        assert!(
+            liens.iter().all(|(r, _)| !util::link_escapes(&out, r)),
+            "lien sortant gardé"
+        );
+        assert_eq!(liens.len(), 2, "les liens internes restent");
+        assert_eq!(std::fs::read_to_string(out.join("f.txt")).unwrap(), "f");
         let _ = std::fs::remove_dir_all(&d);
     }
 

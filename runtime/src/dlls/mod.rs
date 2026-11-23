@@ -1439,6 +1439,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             });
         }
+        add_ntdll_crt(&mut all);
         all
     });
     // ntdll et kernel32 tout de suite, comme avant le Gain #3050 : le bac à
@@ -1549,6 +1550,25 @@ fn add_psapi(all: &mut Vec<Builtin>) {
         exports,
         handle: 0,
     });
+}
+
+/// La CRT que ntdll exporte sous Windows (`ntdll::CRT_REEXPORTS`) entre dans
+/// la table de ntdll quand notre msvcrt la sert : `lookup("ntdll", …)` la
+/// trouvait déjà par repli, la table de l'image non (#3389). Appelé une fois
+/// toutes les DLL complétées, pour reprendre exactement ce que le repli rend.
+fn add_ntdll_crt(all: &mut [Builtin]) {
+    let Some(crt) = all.iter().find(|b| b.name == "msvcrt") else {
+        return;
+    };
+    let found: Vec<(&'static str, usize)> = ntdll::CRT_REEXPORTS
+        .iter()
+        .filter_map(|&n| crt.exports.get(n).map(|&a| (n, a)))
+        .collect();
+    if let Some(nt) = all.iter_mut().find(|b| b.name == "ntdll") {
+        for (n, a) in found {
+            nt.exports.entry(n).or_insert(a);
+        }
+    }
 }
 
 /// Fonctions de base (win32_basics) : elles complètent chaque DLL sans

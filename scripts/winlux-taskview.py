@@ -93,14 +93,15 @@ def desktop_names():
 
 
 def windows():
-    """[(id hexadécimal, bureau, titre)] des fenêtres normales."""
+    """[(id hexadécimal, bureau, titre)] des fenêtres normales ; bureau -1 :
+    sur tous les bureaux."""
     found = []
     for line in _run(["wmctrl", "-l"]).splitlines():
         parts = line.split(None, 3)
         if len(parts) < 3: continue
         try: desktop = int(parts[1])
         except ValueError: continue
-        if desktop < 0: continue
+        if desktop < -1: continue
         kind = _run(["xprop", "-id", parts[0], "_NET_WM_WINDOW_TYPE"])
         if "_NET_WM_WINDOW_TYPE_NORMAL" not in kind and "_NET_WM_WINDOW_TYPE_DIALOG" not in kind \
                 and "_NET_WM_WINDOW_TYPE(ATOM)" in kind:
@@ -108,6 +109,12 @@ def windows():
         title = parts[3] if len(parts) > 3 else ""
         found.append((parts[0], desktop, title))
     return found
+
+
+def on_desktop(found, current):
+    """Fenêtres de `found` à montrer sur le bureau `current` : les siennes et
+    celles affichées sur tous les bureaux (bureau -1, #3346)."""
+    return [item for item in found if item[1] in (current, -1)]
 
 
 def removal_moves(count, removed, placed):
@@ -168,6 +175,11 @@ def remove_desktop(number):
     if was_current >= number and was_current > 0:
         _run(["wmctrl", "-s", str(was_current - 1)])
     return 0
+
+
+def move_window(window, number):
+    """Fenêtre `window` (identifiant hexadécimal) vers le bureau `number`."""
+    _run(["wmctrl", "-i", "-r", window, "-t", str(number)])
 
 
 def rename_desktop(number, name):
@@ -262,7 +274,11 @@ def run_view():
         except Exception:
             return None
 
+    DRAG_TARGET = Gtk.TargetEntry.new("application/x-winlux-window", Gtk.TargetFlags.SAME_APP, 0)
+
     class View(Gtk.Window):
+        dragging = False
+
         def __init__(self):
             super().__init__(title=_t("Vue des tâches"))
             self.set_role("winlux-taskview")
@@ -330,7 +346,7 @@ def run_view():
             for child in self.flow.get_children() + self.desks.get_children(): child.destroy()
             desks = desktops() or [(0, display_name(0, ""), True)]
             current = next((number for number, _, on in desks if on), 0)
-            shown = [item for item in windows() if item[1] == current and item[2] not in ("xfce4-panel", "xfdesktop")]
+            shown = [item for item in on_desktop(windows(), current) if item[2] not in ("xfce4-panel", "xfdesktop")]
             shown = [item for item in shown if int(item[0], 16) != self.own_id()]
             if not shown:
                 label = Gtk.Label(label=_t("Aucune fenêtre ouverte sur ce bureau."))
@@ -418,11 +434,25 @@ def run_view():
                     menu.show_all()
                     menu.popup_at_pointer(event)
                     return True
-                if event.button == 1:
+                if event.button == 1 and not self.dragging:
                     self.open_window(window)
                 return True
             event.connect("button-release-event", clicked)
+            # Glisser la carte sur un bureau de la bande l'y déplace (#3076).
+            event.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [DRAG_TARGET], Gdk.DragAction.MOVE)
+            if pixbuf is not None:
+                event.drag_source_set_icon_pixbuf(pixbuf.scale_simple(max(1, pixbuf.get_width() // 2),
+                                                                      max(1, pixbuf.get_height() // 2), 2))
+            event.connect("drag-begin", lambda *_: setattr(self, "dragging", True))
+            event.connect("drag-end", lambda *_: GLib.idle_add(lambda: setattr(self, "dragging", False)))
+            event.connect("drag-data-get", lambda _w, _c, data, *_: data.set(data.get_target(), 8, window.encode("ascii")))
             return event
+
+        def drop(self, data, number):
+            window = bytes(data or b"").decode("ascii", "replace")
+            if re.fullmatch(r"0x[0-9a-fA-F]+", window):
+                move_window(window, number)
+                GLib.timeout_add(150, self.refresh_later)
 
         def move_to_new(self, window):
             count = len(desktops()) or 1
@@ -449,6 +479,11 @@ def run_view():
                 close.set_can_focus(False)
                 close.connect("clicked", lambda *_: (remove_desktop(number), GLib.timeout_add(200, self.refresh_later)))
                 box.pack_start(close, False, False, 0)
+
+            event.drag_dest_set(Gtk.DestDefaults.ALL, [DRAG_TARGET], Gdk.DragAction.MOVE)
+            event.connect("drag-motion", lambda *_: box.get_style_context().add_class("focus") or False)
+            event.connect("drag-leave", lambda *_: box.get_style_context().remove_class("focus"))
+            event.connect("drag-data-received", lambda _w, _c, _x, _y, data, *_: self.drop(data.get_data(), number))
 
             def clicked(_, event):
                 if event.button == 3:
