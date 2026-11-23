@@ -251,6 +251,12 @@ pub unsafe extern "win64" fn create_text_services(
     hote: usize,
     out: *mut usize,
 ) -> i32 {
+    // L'objet et ses tables sont x64 : aucune passerelle ne les présente à
+    // un programme 32 bits. Refus avant toute écriture, car `out` y désigne
+    // une case de 4 octets.
+    if crate::wow32::active() {
+        return non_servie!("CreateTextServices (programme 32 bits)");
+    }
     if out.is_null() {
         return E_POINTER;
     }
@@ -979,6 +985,59 @@ mod tests {
             vus.push(iid);
         }
         assert_eq!(vus[0], vus[1]);
+    }
+
+    /// Un programme 32 bits ne reçoit jamais l'objet x64 : E_NOTIMPL, et la
+    /// case de 4 octets derrière ppUnk n'est pas touchée. Vérifié dans un
+    /// processus neuf (ce test relancé seul), le seul où le drapeau
+    /// « programme x86 » peut être levé.
+    #[test]
+    fn pas_d_objet_x64_pour_un_programme_32_bits_3268() {
+        const ENFANT: &str = "WINLUX_TEST_TEXTSERV_X86";
+        if std::env::var_os(ENFANT).is_some() {
+            crate::wow32::force_active_for_test();
+            let table = table_hote();
+            let hote = Hote {
+                vtbl: &*table,
+                invalidations: AtomicUsize::new(0),
+                notifications: AtomicUsize::new(0),
+            };
+            let mut cases = [0xAAAA_AAAAu32; 2];
+            let hr = unsafe {
+                create_text_services(
+                    0,
+                    &hote as *const Hote as usize,
+                    cases.as_mut_ptr() as *mut usize,
+                )
+            };
+            let ok = hr == E_NOTIMPL && cases == [0xAAAA_AAAA; 2];
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::textserv::tests::pas_d_objet_x64_pour_un_programme_32_bits_3268",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ENFANT, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if std::time::Instant::now() > fin {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("le test x86 relancé n'a pas fini en 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(status.success(), "CreateTextServices sous wow32 : {status}");
     }
 
     #[test]
