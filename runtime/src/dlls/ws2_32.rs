@@ -487,6 +487,33 @@ pub(crate) fn has_socket_assoc(h: usize) -> bool {
     h != 0 && lock(event_assoc()).values().any(|a| a.event == h)
 }
 
+/// Descripteurs à surveiller par poll pour attendre `h` sans l'interroger
+/// en boucle (#3123) : l'eventfd d'un événement WSACreateEvent et les
+/// sockets associées à `h` par WSAEventSelect, avec les mêmes événements
+/// que `handle_ready`.
+pub(crate) fn wait_fds(h: usize) -> Vec<libc::pollfd> {
+    let mut out = Vec::new();
+    if let Some(st) = lock(events()).get(&h) {
+        out.push(libc::pollfd {
+            fd: st.fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
+    }
+    out.extend(
+        lock(event_assoc())
+            .iter()
+            .filter(|(_, a)| a.event == h)
+            .map(|(&sock, a)| libc::pollfd {
+                fd: sock as i32,
+                events: assoc_poll_events(a),
+                revents: 0,
+            })
+            .filter(|p| p.events != 0),
+    );
+    out
+}
+
 pub(crate) fn handle_ready(h: usize) -> bool {
     {
         let ev = lock(events());

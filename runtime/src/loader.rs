@@ -395,7 +395,11 @@ pub fn load_data(path: &Path, tag: usize) -> Result<usize, String> {
             return Ok(m.base | tag);
         }
     }
-    let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    // Projeté, pas lu : seules les pages des en-têtes et des sections sont
+    // touchées, et seule l'image copiée reste ; lire tout le fichier coûtait
+    // sa taille en mémoire pour un chargement « ressources seulement »
+    // (#3244, comme #3164).
+    let file = ImageFile::open(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse_resources(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);
     let base = unsafe { map_aligned(size).ok_or("mémoire insuffisante pour l'image")? };
@@ -1132,6 +1136,13 @@ pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
     } else {
         format!("{want}.dll")
     };
+    // Assemblies privées du manifeste de l'exe : elles passent avant le
+    // dossier de l'appli (#3195).
+    if DLL_SEARCH.with(|slot| slot.borrow().is_none()) {
+        if let Some(p) = private_assembly_file(&want, &want_dll) {
+            return Some(p);
+        }
+    }
     for d in dirs {
         // Windows ignore la casse : on cherche sans en tenir compte.
         if let Ok(rd) = std::fs::read_dir(&d) {
@@ -1144,6 +1155,130 @@ pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Fichiers des assemblies privées déclarées par le manifeste de l'exe,
+/// calculés une fois par exe (clé : son adresse de base).
+static PRIVATE_ASSEMBLIES: Mutex<Option<(usize, Vec<(String, PathBuf)>)>> = Mutex::new(None);
+
+/// Learn, « Assembly Searching Sequence » : une assembly privée nommée
+/// `<nom>` se cherche dans `<appdir>\<nom>.dll`, `<appdir>\<nom>.manifest`,
+/// `<appdir>\<nom>\<nom>.dll` puis `<appdir>\<nom>\<nom>.manifest` ; les
+/// `<file name=…>` de son manifeste se chargent depuis le dossier de ce
+/// manifeste. Chromium installé range ainsi chrome_elf.dll dans
+/// `Application\<version>\` (#3195).
+fn private_assembly_file(want: &str, want_dll: &str) -> Option<PathBuf> {
+    let exe = main_module()?;
+    let mut g = PRIVATE_ASSEMBLIES.lock().unwrap_or_else(|e| e.into_inner());
+    if g.as_ref().map(|(b, _)| *b) != Some(exe.base) {
+        let manifest = dlls::resource::manifest(exe.base).or_else(|| {
+            let mut side = exe.path.clone().into_os_string();
+            side.push(".manifest");
+            std::fs::read_to_string(side).ok()
+        });
+        let files = match (manifest, exe.path.parent()) {
+            (Some(m), Some(appdir)) => private_assembly_files(&m, appdir),
+            _ => Vec::new(),
+        };
+        *g = Some((exe.base, files));
+    }
+    let (_, files) = g.as_ref()?;
+    files
+        .iter()
+        .find(|(n, _)| n == want || n == want_dll)
+        .map(|(_, p)| p.clone())
+}
+
+/// (nom en minuscules, chemin) de chaque fichier des assemblies privées
+/// dont dépend `manifest`, résolues sous `appdir`.
+pub fn private_assembly_files(manifest: &str, appdir: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for dep in manifest.split("<dependentAssembly").skip(1) {
+        let dep = dep.split("</dependentAssembly").next().unwrap_or(dep);
+        let Some(identity) = xml_tag(dep, "assemblyIdentity") else {
+            continue;
+        };
+        let Some(name) = xml_attr(identity, "name") else {
+            continue;
+        };
+        if name.is_empty() || name.contains(['/', '\\']) || name == "." || name == ".." {
+            continue;
+        }
+        let sub = child_ci(appdir, &name);
+        // Étapes 2 et 4 : une DLL qui porte le nom de l'assembly.
+        for dir in [Some(appdir.to_path_buf()), sub.clone()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(p) = child_ci(&dir, &format!("{name}.dll")) {
+                out.push((format!("{}.dll", name.to_ascii_lowercase()), p));
+            }
+        }
+        // Étapes 3 et 5 : un manifeste qui liste les fichiers.
+        for dir in [Some(appdir.to_path_buf()), sub].into_iter().flatten() {
+            let Some(m) = child_ci(&dir, &format!("{name}.manifest")) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&m) else {
+                continue;
+            };
+            for f in text.split("<file").skip(1) {
+                if !f.starts_with(|c: char| c.is_ascii_whitespace()) {
+                    continue;
+                }
+                let tag = f.split('>').next().unwrap_or("");
+                let Some(file) = xml_attr(tag, "name") else {
+                    continue;
+                };
+                if file.contains(['/', '\\']) {
+                    continue;
+                }
+                if let Some(p) = child_ci(&dir, &file) {
+                    out.push((file.to_ascii_lowercase(), p));
+                }
+            }
+            break;
+        }
+    }
+    out
+}
+
+/// Contenu de la première balise `<tag …>` de `xml`.
+fn xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+    let start = xml.find(&format!("<{tag}"))? + tag.len() + 1;
+    let rest = &xml[start..];
+    Some(&rest[..rest.find('>').unwrap_or(rest.len())])
+}
+
+/// Valeur de l'attribut `attr` (guillemets simples ou doubles).
+fn xml_attr(tag: &str, attr: &str) -> Option<String> {
+    let mut rest = tag;
+    while let Some(i) = rest.find(attr) {
+        let before_ok = i == 0 || rest.as_bytes()[i - 1].is_ascii_whitespace();
+        let after = rest[i + attr.len()..].trim_start();
+        if before_ok {
+            if let Some(after) = after.strip_prefix('=') {
+                let after = after.trim_start();
+                let q = after.chars().next()?;
+                if q == '"' || q == '\'' {
+                    let v = &after[1..];
+                    return Some(v[..v.find(q)?].to_string());
+                }
+            }
+        }
+        rest = &rest[i + attr.len()..];
+    }
+    None
+}
+
+/// Entrée de `dir` nommée `name`, sans tenir compte de la casse.
+fn child_ci(dir: &Path, name: &str) -> Option<PathBuf> {
+    let want = name.to_ascii_lowercase();
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().to_ascii_lowercase() == want)
+        .map(|e| e.path())
 }
 
 fn resolve_imports(m: &Module) -> Result<(), String> {
@@ -1561,6 +1696,72 @@ pub fn mark_initialized(base: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// #3244 : un chargement en données (LoadLibraryEx AS_DATAFILE,
+    /// DONT_RESOLVE_DLL_REFERENCES) ne lit pas tout le fichier. PE32+ minimal
+    /// (une section .rsrc vide) suivi de 64 Mo : moins de 1 Mo lu par ce fil.
+    #[test]
+    fn chargement_en_donnees_sans_lire_le_fichier_3244() {
+        fn lus() -> u64 {
+            std::fs::read_to_string("/proc/thread-self/io")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("rchar:"))
+                        .and_then(|l| l[6..].trim().parse().ok())
+                })
+                .unwrap_or(0)
+        }
+        let mut f = vec![0u8; 0x400];
+        let w16 = |f: &mut Vec<u8>, o: usize, v: u16| f[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        let w32 = |f: &mut Vec<u8>, o: usize, v: u32| f[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        f[0..2].copy_from_slice(b"MZ");
+        w32(&mut f, 0x3c, 0x40);
+        f[0x40..0x44].copy_from_slice(b"PE\0\0");
+        let coff = 0x44;
+        w16(&mut f, coff, 0x8664);
+        w16(&mut f, coff + 2, 1);
+        w16(&mut f, coff + 16, 0xf0);
+        w16(&mut f, coff + 18, 0x2022);
+        let opt = coff + 20;
+        w16(&mut f, opt, 0x20b);
+        w32(&mut f, opt + 32, 0x1000);
+        w32(&mut f, opt + 36, 0x200);
+        w32(&mut f, opt + 56, 0x2000);
+        w32(&mut f, opt + 60, 0x200);
+        w16(&mut f, opt + 68, 2);
+        w32(&mut f, opt + 108, 16);
+        w32(&mut f, opt + 108 + 4 + 2 * 8, 0x1000);
+        w32(&mut f, opt + 108 + 8 + 2 * 8, 16);
+        let sec = opt + 0xf0;
+        f[sec..sec + 5].copy_from_slice(b".rsrc");
+        w32(&mut f, sec + 8, 16);
+        w32(&mut f, sec + 12, 0x1000);
+        w32(&mut f, sec + 16, 0x200);
+        w32(&mut f, sec + 20, 0x200);
+        let dir = std::env::temp_dir().join(format!("winlux-3244-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Gros.dll");
+        std::fs::write(&path, &f).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(64 << 20)
+            .unwrap();
+        let before = lus();
+        let handle = load_data(&path, 2);
+        let read = lus() - before;
+        if let Ok(h) = handle {
+            free_data(h);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(handle.is_ok(), "{handle:?}");
+        assert!(
+            read < 1 << 20,
+            "{read} octets lus pour un chargement en données"
+        );
+    }
+
     use super::*;
 
     /// #1417 : SetDllDirectory("bin64") puis LoadLibrary("zlib1.dll") :
@@ -1833,5 +2034,59 @@ mod tests_dll_introuvable {
         assert!(s.contains("f59") && !s.contains("f60,"));
         assert!(s.ends_with("… (+15 autres)"));
         assert_eq!(super::shorten(&names[..2]), "f0, f1");
+    }
+}
+
+#[cfg(test)]
+mod tests_assemblies_privees {
+    /// #3195 : Chromium installé déclare l'assembly « 160.0.8179.0 » dans
+    /// son manifeste ; chrome_elf.dll est dans `<appdir>\160.0.8179.0\`.
+    #[test]
+    fn dll_d_une_assembly_privee_dans_un_sous_dossier_versionne_3195() {
+        let appdir = std::env::temp_dir().join(format!("winlux-sxs-3195-{}", std::process::id()));
+        let ver = appdir.join("160.0.8179.0");
+        std::fs::create_dir_all(&ver).unwrap();
+        std::fs::write(
+            ver.join("160.0.8179.0.manifest"),
+            "<assembly xmlns='urn:schemas-microsoft-com:asm.v1' manifestVersion='1.0'>\n  \
+             <assemblyIdentity name='160.0.8179.0' version='160.0.8179.0' type='win32'/>\n  \
+             <file name='chrome_elf.dll'/>\n</assembly>\n",
+        )
+        .unwrap();
+        std::fs::write(ver.join("Chrome_Elf.DLL"), b"MZ").unwrap();
+        std::fs::write(appdir.join("chrome_elf.dll.bak"), b"").unwrap();
+        let exe_manifest = r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+<assemblyIdentity name="chrome" version="1.0.0.0" type="win32"/>
+<dependency><dependentAssembly><assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/></dependentAssembly></dependency>
+<dependency><dependentAssembly><assemblyIdentity type="win32" name="160.0.8179.0" version="160.0.8179.0" language="*"/></dependentAssembly></dependency>
+</assembly>"#;
+        let files = super::private_assembly_files(exe_manifest, &appdir);
+        assert_eq!(
+            files,
+            vec![("chrome_elf.dll".to_string(), ver.join("Chrome_Elf.DLL"))]
+        );
+        // L'identité de l'exe lui-même n'est pas une dépendance.
+        std::fs::create_dir_all(appdir.join("chrome")).unwrap();
+        std::fs::write(
+            appdir.join("chrome").join("chrome.manifest"),
+            "<file name='x.dll'/>",
+        )
+        .unwrap();
+        std::fs::write(appdir.join("chrome").join("x.dll"), b"MZ").unwrap();
+        assert_eq!(
+            super::private_assembly_files(exe_manifest, &appdir).len(),
+            1
+        );
+        // Un nom d'assembly ou de fichier ne sort pas de appdir.
+        let evil = r#"<dependentAssembly><assemblyIdentity name="../x"/></dependentAssembly>"#;
+        assert!(super::private_assembly_files(evil, &appdir).is_empty());
+        // Étape 2 : une DLL portant le nom de l'assembly, à côté de l'exe.
+        std::fs::write(appdir.join("Ma.Lib.dll"), b"MZ").unwrap();
+        let lib = r#"<dependentAssembly><assemblyIdentity name="Ma.Lib" version="1.0.0.0"/></dependentAssembly>"#;
+        assert_eq!(
+            super::private_assembly_files(lib, &appdir),
+            vec![("ma.lib.dll".to_string(), appdir.join("Ma.Lib.dll"))]
+        );
+        let _ = std::fs::remove_dir_all(&appdir);
     }
 }

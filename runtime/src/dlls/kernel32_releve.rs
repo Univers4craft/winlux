@@ -511,10 +511,11 @@ pub unsafe extern "win64" fn get_binary_type_w(path: *const u16, kind: *mut u32)
         return fail(ERROR_INVALID_PARAMETER);
     }
     let p = wstr(path);
-    let Ok(data) = std::fs::read(crate::paths::to_linux(&p)).map(|mut d| {
-        d.truncate(4096);
-        d
-    }) else {
+    // Seul l'en-tête sert : 4 Ko lus, jamais le fichier entier.
+    let mut data = Vec::with_capacity(4096);
+    let Ok(_) = std::fs::File::open(crate::paths::to_linux(&p))
+        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 4096), &mut data))
+    else {
         return fail(ERROR_FILE_NOT_FOUND);
     };
     match binary_type(&data, &p) {
@@ -1987,6 +1988,23 @@ pub unsafe extern "win64" fn query_unbiased_interrupt_time_precise(t: *mut u64) 
     );
 }
 
+/// QueryInterruptTime et QueryInterruptTimePrecise (kernel32, Learn :
+/// realtimeapiset.h) : temps d'interruption en unités de 100 ns depuis le
+/// démarrage. Contrairement au temps « non biaisé », il compte aussi la
+/// veille : CLOCK_BOOTTIME. Chromium 160 le charge en différé par
+/// api-ms-win-core-realtime-l1-1-1 et s'arrête s'il manque (#3168).
+pub unsafe extern "win64" fn query_interrupt_time(t: *mut u64) {
+    if t.is_null() {
+        return;
+    }
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts);
+    *t = ts.tv_sec as u64 * 10_000_000 + ts.tv_nsec as u64 / 100;
+}
+
 /// CompareObjectHandles (KernelBase) : deux handles du même objet.
 pub extern "win64" fn compare_object_handles(a: usize, b: usize) -> i32 {
     let c = crate::dlls::kernel32::canon_std;
@@ -2085,6 +2103,8 @@ pub fn exports() -> Exports {
         "PulseEvent" => fn pulse_event,
         "OpenWaitableTimerW" => fn crate::dlls::kernel32::open_waitable_timer_w,
         "QueryUnbiasedInterruptTimePrecise" => fn query_unbiased_interrupt_time_precise,
+        "QueryInterruptTime" => fn query_interrupt_time,
+        "QueryInterruptTimePrecise" => fn query_interrupt_time,
         "CompareObjectHandles" => fn compare_object_handles,
         "SetFileApisToANSI" => fn set_file_apis_to_ansi,
         "BeginUpdateResourceA" => fn not_supported,
@@ -2096,6 +2116,76 @@ pub fn exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Octets lus par ce fil (rchar de /proc/thread-self/io).
+    fn lus_par_le_fil() -> u64 {
+        std::fs::read_to_string("/proc/thread-self/io")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("rchar:"))
+                    .and_then(|l| l[6..].trim().parse().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// GetBinaryTypeW ne regarde que l'en-tête : un .exe de 64 Mo n'est pas
+    /// lu en entier pour en garder 4 Ko.
+    #[test]
+    fn type_binaire_sans_lire_le_fichier() {
+        let dir = std::env::temp_dir().join(format!("winlux-bintype-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Gros.exe");
+        let mut head = vec![0u8; 0x200];
+        head[..2].copy_from_slice(b"MZ");
+        head[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+        head[0x40..0x44].copy_from_slice(b"PE\0\0");
+        head[0x44..0x46].copy_from_slice(&0x8664u16.to_le_bytes());
+        std::fs::write(&path, &head).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(64 << 20)
+            .unwrap();
+        let w = wide(path.to_str().unwrap());
+        let mut kind = 99u32;
+        let before = lus_par_le_fil();
+        let ok = unsafe { get_binary_type_w(w.as_ptr(), &mut kind) };
+        let read = lus_par_le_fil() - before;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(ok, 1);
+        assert_eq!(kind, 6, "SCS_64BIT_BINARY");
+        assert!(read < 1 << 20, "{read} octets lus pour un en-tête");
+    }
+
+    /// #3168 : QueryInterruptTime(Precise) rendent le temps d'interruption
+    /// en 100 ns, veille comprise (CLOCK_BOOTTIME), et kernel32 les exporte
+    /// (req.dll Kernel32.dll dans sdk-api).
+    #[test]
+    fn temps_d_interruption_veille_comprise_3168() {
+        let e = exports();
+        for name in ["QueryInterruptTime", "QueryInterruptTimePrecise"] {
+            assert!(e.contains_key(name), "kernel32!{name} absente");
+        }
+        let boot = || {
+            let mut ts = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+            ts.tv_sec as u64 * 10_000_000 + ts.tv_nsec as u64 / 100
+        };
+        let avant = boot();
+        let mut t = 0u64;
+        unsafe { query_interrupt_time(&mut t) };
+        let apres = boot();
+        assert!(avant <= t && t <= apres, "{avant} <= {t} <= {apres}");
+        let mut t2 = 0u64;
+        unsafe { query_interrupt_time(&mut t2) };
+        assert!(t2 >= t);
+        unsafe { query_interrupt_time(std::ptr::null_mut()) };
+    }
 
     #[test]
     fn set_search_path_mode_valide_les_indicateurs() {

@@ -15,7 +15,7 @@
 //! l'environnement), par une fenêtre cachée et son WndProc, comme les
 //! rappels de WebView2 arrivent dans la boucle de messages.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -389,8 +389,52 @@ extern "win64" fn com_release(this: usize) -> u32 {
         left
     }
 }
-extern "win64" fn not_implemented() -> i32 {
+/// Entrée non servie : rend E_NOTIMPL et le dit une fois par famille et
+/// par rang, pour qu'un relevé nomme l'entrée qu'un programme appelle
+/// (#3395). Une instance par rang : le premier argument de toute méthode
+/// est l'objet, qui porte sa famille.
+extern "win64" fn not_implemented<const SLOT: usize>(this: usize) -> i32 {
+    let family = if this == 0 {
+        None
+    } else {
+        // SAFETY : ces tables ne servent que des objets `Com` de ce module.
+        Some(unsafe { (*(this as *const Com)).family })
+    };
+    static SEEN: OnceLock<Mutex<HashSet<(Option<u8>, usize)>>> = OnceLock::new();
+    let first = super::lock(SEEN.get_or_init(|| Mutex::new(HashSet::new())))
+        .insert((family.map(|f| f as u8), SLOT));
+    if first {
+        crate::log_warn!(
+            "webview2",
+            "{:?} : entrée {} (rang après IUnknown) non servie, E_NOTIMPL ({}:{})",
+            family,
+            SLOT - 3,
+            file!(),
+            line!()
+        );
+    }
+    #[cfg(test)]
+    super::lock(&NOT_IMPLEMENTED_CALLS).push((family, SLOT - 3));
     E_NOTIMPL
+}
+
+#[cfg(test)]
+static NOT_IMPLEMENTED_CALLS: Mutex<Vec<(Option<Family>, usize)>> = Mutex::new(Vec::new());
+
+macro_rules! not_implemented_table {
+    ($($slot:literal)*) => {
+        [$(not_implemented::<$slot> as NotImplemented),*]
+    };
+}
+
+/// Une entrée E_NOTIMPL distincte par rang de table virtuelle.
+type NotImplemented = extern "win64" fn(usize) -> i32;
+static NOT_IMPLEMENTED: [NotImplemented; WEBVIEW_SLOTS] = not_implemented_table!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134);
+
+/// Vrai si l'adresse est une entrée non servie.
+#[cfg(test)]
+fn is_not_implemented(addr: usize) -> bool {
+    NOT_IMPLEMENTED.iter().any(|&f| f as usize == addr)
 }
 
 /// Méthodes `add_X` de chaque famille (rang après IUnknown ; `remove_X`
@@ -461,7 +505,11 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::CookieList => (COOKIE_LIST_SLOTS, cookie_list_methods()),
         Family::DevToolsReceiver => (DEVTOOLS_RECEIVER_SLOTS, Vec::new()),
     };
-    let mut v = vec![not_implemented as *const () as usize; slots];
+    assert!(slots <= NOT_IMPLEMENTED.len());
+    let mut v: Vec<usize> = NOT_IMPLEMENTED[..slots]
+        .iter()
+        .map(|&f| f as usize)
+        .collect();
     v[0] = query_interface as *const () as usize;
     v[1] = com_add_ref as *const () as usize;
     v[2] = com_release as *const () as usize;
@@ -612,6 +660,9 @@ fn helper_available() -> bool {
             .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&cmd[0]).is_file()))
 }
 
+/// HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED).
+const E_ACCESSDENIED: i32 = 0x8007_0005u32 as i32;
+
 unsafe extern "win64" fn create_environment_with_options(
     _browser_folder: *const u16,
     user_data_folder: *const u16,
@@ -631,13 +682,45 @@ unsafe extern "win64" fn create_environment_with_options(
             language = wstr(p);
         }
     }
+    // Dossier de données réellement utilisé (#3276) : celui de
+    // l'application, ou le dossier par défaut de WebView2, créé ici. Le
+    // moteur y range ses données et UserDataFolder le rend.
+    let exe = crate::loader::main_module().map(|m| crate::paths::to_windows(&m.path));
+    let package = super::kernel32_misc::current_package()
+        .and(super::storage_appdata::current_family())
+        .map(|f| super::storage_appdata::folder_path(&f, super::storage_appdata::Kind::Local));
+    let resolved = resolve_user_data_folder(&wstr(user_data_folder), exe.as_deref(), package);
+    let linux = resolved.as_deref().map(crate::paths::to_linux);
+    if let Err(e) = linux
+        .as_ref()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        .and_then(std::fs::create_dir_all)
+    {
+        // « WebView2 creation fails if the compiled code is running in a
+        // directory in which the process does not have permission to create a
+        // new directory » (WebView2.idl) : le rappel reçoit l'échec.
+        crate::log_warn!(
+            "webview2",
+            "dossier de données {:?} impossible à créer ({e}) : E_ACCESSDENIED",
+            resolved
+        );
+        add_ref(handler);
+        post(
+            dispatcher_window(),
+            Box::new(move || unsafe {
+                invoke(handler, E_ACCESSDENIED as u32 as usize, 0);
+                release(handler);
+            }),
+        );
+        return S_OK;
+    }
     let env = Arc::new(Env {
         dispatcher: dispatcher_window(),
-        user_data: crate::paths::to_linux(&wstr(user_data_folder))
-            .to_string_lossy()
-            .into_owned(),
+        user_data: linux
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         language,
-        user_data_win: wstr(user_data_folder),
+        user_data_win: resolved.unwrap_or_default(),
         profile: Mutex::new(ProfileState::default()),
         cookies: Mutex::new(Vec::new()),
     });
@@ -706,6 +789,50 @@ unsafe extern "win64" fn compare_browser_versions(
     S_OK
 }
 
+/// Dossier de données de WebView2 (#3276), d'après WebView2.idl
+/// (CreateCoreWebView2EnvironmentWithOptions) :
+/// - donné absolu : tel quel ;
+/// - donné relatif : « relative to the compiled code for the current
+///   process », donc au dossier du programme ;
+/// - absent, programme empaqueté : « the app data folder for the package »,
+///   ici son LocalState (inférence nommée : le dossier local du paquet) ;
+/// - absent, programme classique : `{Executable File Name}.WebView2` à côté
+///   du programme.
+fn resolve_user_data_folder(
+    given: &str,
+    exe: Option<&str>,
+    package_local: Option<String>,
+) -> Option<String> {
+    let given = given.trim();
+    let dir_of = |e: &str| e.rsplit_once('\\').map(|(d, _)| d.to_string());
+    if !given.is_empty() {
+        let b = given.as_bytes();
+        let absolute = given.starts_with("\\\\")
+            || (b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'));
+        if absolute {
+            return Some(given.to_string());
+        }
+        let rel = given.trim_start_matches(['.', '\\', '/']);
+        return exe.and_then(dir_of).map(|d| format!("{d}\\{rel}"));
+    }
+    package_local.or_else(|| exe.map(|e| format!("{e}.WebView2")))
+}
+
+/// ICoreWebView2Environment7::get_UserDataFolder : « the value passed in by
+/// the developer … or the calculated one for default handling. It will
+/// always be an absolute path. »
+unsafe extern "win64" fn env_user_data_folder(this: usize, out: *mut *mut u16) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let folder = com(this)
+        .env
+        .as_ref()
+        .map(|e| e.user_data_win.clone())
+        .unwrap_or_default();
+    co_string(&folder, out)
+}
+
 fn environment_methods() -> Vec<(usize, usize)> {
     vec![
         (0, env_create_controller as *const () as usize),
@@ -718,6 +845,8 @@ fn environment_methods() -> Vec<(usize, usize)> {
         // ICoreWebView2Environment8 / 13 : processus du moteur (#2581).
         (15, env_get_process_infos as *const () as usize),
         (22, env_get_process_extended_infos as *const () as usize),
+        // ICoreWebView2Environment7 (#3276).
+        (12, env_user_data_folder as *const () as usize),
     ]
 }
 
@@ -1399,6 +1528,15 @@ struct ViewState {
     background: u32,
     /// Hôtes virtuels → dossiers (SetVirtualHostNameToFolderMapping).
     hosts: Vec<(String, String)>,
+    /// ICoreWebView2Controller3 (#3231) : échelle de rendu, suivi de
+    /// l'échelle de l'écran, et unité de Bounds (0 pixels bruts,
+    /// 1 pixels logiques multipliés par l'échelle).
+    raster: f64,
+    detect_scale: bool,
+    bounds_mode: u32,
+    /// ICoreWebView2Controller4 (#3237) : dépôt venu d'une autre
+    /// application, permis par défaut.
+    external_drop: bool,
 }
 
 struct View {
@@ -1418,6 +1556,9 @@ struct View {
     settings: AtomicUsize,
     closed: AtomicBool,
     pid: AtomicU32,
+    /// Lignes envoyées au moteur, gardées pour les tests.
+    #[cfg(test)]
+    sent: Mutex<Vec<String>>,
 }
 
 static TOKENS: AtomicI64 = AtomicI64::new(1);
@@ -1466,6 +1607,9 @@ impl View {
                 devtools: true,
                 context_menus: true,
                 background: 0xFFFF_FFFF,
+                raster: monitor_scale(),
+                detect_scale: true,
+                external_drop: true,
                 ..Default::default()
             }),
             handlers: Mutex::new(Vec::new()),
@@ -1476,6 +1620,8 @@ impl View {
             webview: AtomicUsize::new(0),
             settings: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
+            #[cfg(test)]
+            sent: Mutex::new(Vec::new()),
         });
         let xid = super::gui::native_window(parent).unwrap_or(0);
         view.send(&format!(
@@ -1494,6 +1640,8 @@ impl View {
     }
 
     fn send(&self, line: &str) {
+        #[cfg(test)]
+        super::lock(&self.sent).push(line.to_string());
         if let Some(i) = super::lock(&self.input).as_mut() {
             let _ = i.write_all(line.as_bytes());
             let _ = i.write_all(b"\n");
@@ -1502,8 +1650,9 @@ impl View {
     }
 
     fn send_bounds(&self) {
+        self.follow_monitor_scale();
         let s = super::lock(&self.state);
-        let b = s.bounds;
+        let b = physical_bounds(s.bounds, s.bounds_mode, s.raster);
         drop(s);
         self.send(&format!(
             "{{\"op\":\"bounds\",\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
@@ -1512,6 +1661,47 @@ impl View {
             (b[2] - b[0]).max(0),
             (b[3] - b[1]).max(0)
         ));
+    }
+
+    /// Zoom donné au moteur : ZoomFactor de l'application multiplié par
+    /// l'échelle de rendu (#3231).
+    fn send_zoom(&self) {
+        let s = super::lock(&self.state);
+        let zoom = s.zoom * s.raster;
+        drop(s);
+        self.send(&format!("{{\"op\":\"settings\",\"zoom\":{zoom}}}"));
+    }
+
+    /// ShouldDetectMonitorScaleChanges (#3231) : quand il est vrai et que
+    /// l'échelle de l'écran a changé, RasterizationScale la suit et
+    /// RasterizationScaleChanged est levé. L'échelle de l'écran est relue à
+    /// chaque changement de taille ou de place de la vue, puisque c'est ce
+    /// que fait l'hôte quand sa fenêtre change d'écran (inférence nommée :
+    /// Winlux ne signale pas encore de changement d'écran).
+    fn follow_monitor_scale(&self) {
+        let scale = monitor_scale();
+        let mut s = super::lock(&self.state);
+        if !s.detect_scale || s.raster == scale {
+            return;
+        }
+        s.raster = scale;
+        drop(s);
+        self.send_zoom();
+        self.fire_controller("raster");
+    }
+
+    /// Lève un événement du contrôleur : l'expéditeur est le contrôleur,
+    /// l'argument est nul (gestionnaire « (sender, IUnknown* args) »).
+    fn fire_controller(&self, event: &str) {
+        let list: Vec<usize> = super::lock(&self.handlers)
+            .iter()
+            .filter(|(e, _, _)| *e == event)
+            .map(|(_, _, h)| *h)
+            .collect();
+        let sender = self.controller.load(Ordering::SeqCst);
+        for h in list {
+            unsafe { invoke(h, sender, 0) };
+        }
     }
 
     fn close(&self) {
@@ -1820,7 +2010,153 @@ fn controller_methods() -> Vec<(usize, usize)> {
         // ICoreWebView2Controller2 : couleur de fond.
         (23, ctrl_get_background as *const () as usize),
         (24, ctrl_put_background as *const () as usize),
+        // ICoreWebView2Controller3 (#3231).
+        (25, ctrl_get_raster as *const () as usize),
+        (26, ctrl_put_raster as *const () as usize),
+        (27, ctrl_get_detect as *const () as usize),
+        (28, ctrl_put_detect as *const () as usize),
+        (29, ctrl_add_raster_changed as *const () as usize),
+        (30, ctrl_remove_handler as *const () as usize),
+        (31, ctrl_get_bounds_mode as *const () as usize),
+        (32, ctrl_put_bounds_mode as *const () as usize),
+        // ICoreWebView2Controller4 (#3237).
+        (33, ctrl_get_external_drop as *const () as usize),
+        (34, ctrl_put_external_drop as *const () as usize),
     ]
+}
+
+unsafe extern "win64" fn ctrl_get_external_drop(this: usize, out: *mut i32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = i32::from(super::lock(&v.state).external_drop);
+    S_OK
+}
+/// put_AllowExternalDrop : le moteur refuse ou accepte le dépôt d'un objet
+/// glissé depuis une autre application.
+unsafe extern "win64" fn ctrl_put_external_drop(this: usize, on: i32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    super::lock(&v.state).external_drop = on != 0;
+    v.send(&format!(
+        "{{\"op\":\"settings\",\"external_drop\":{}}}",
+        on != 0
+    ));
+    S_OK
+}
+
+/// Échelle de l'écran : PPP du système rapportés à 96.
+fn monitor_scale() -> f64 {
+    f64::from(unsafe { super::win32_basics::get_dpi_for_system() }) / 96.0
+}
+
+/// Bounds donnés au moteur, en pixels de l'écran (#3231) : tels quels en
+/// COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS (0) ; en
+/// USE_RASTERIZATION_SCALE (1), « Logical size * rasterization scale = Raw
+/// Pixel size » (WebView2.idl), la place comprise.
+fn physical_bounds(b: [i32; 4], mode: u32, scale: f64) -> [i32; 4] {
+    if mode != 1 {
+        return b;
+    }
+    b.map(|x| (f64::from(x) * scale).round() as i32)
+}
+
+unsafe extern "win64" fn ctrl_get_raster(this: usize, out: *mut f64) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = super::lock(&v.state).raster;
+    S_OK
+}
+/// put_RasterizationScale : une échelle nulle, négative ou non finie est
+/// refusée (E_INVALIDARG, inférence nommée : l'IDL ne dit rien de ces
+/// valeurs). Le contenu est rendu à cette échelle par le zoom du moteur ; en
+/// USE_RASTERIZATION_SCALE, la taille en pixels suit (taille logique
+/// gardée).
+unsafe extern "win64" fn ctrl_put_raster(this: usize, scale: f64) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return E_INVALIDARG;
+    }
+    let mode = {
+        let mut s = super::lock(&v.state);
+        s.raster = scale;
+        s.bounds_mode
+    };
+    v.send_zoom();
+    if mode == 1 {
+        v.send_bounds();
+    }
+    S_OK
+}
+unsafe extern "win64" fn ctrl_get_detect(this: usize, out: *mut i32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = i32::from(super::lock(&v.state).detect_scale);
+    S_OK
+}
+unsafe extern "win64" fn ctrl_put_detect(this: usize, on: i32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    super::lock(&v.state).detect_scale = on != 0;
+    if on != 0 {
+        v.follow_monitor_scale();
+    }
+    S_OK
+}
+unsafe extern "win64" fn ctrl_add_raster_changed(
+    this: usize,
+    handler: usize,
+    token: *mut i64,
+) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    v.add_handler("raster", handler, token)
+}
+unsafe extern "win64" fn ctrl_remove_handler(this: usize, token: i64) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    v.remove_handler(token)
+}
+unsafe extern "win64" fn ctrl_get_bounds_mode(this: usize, out: *mut u32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = super::lock(&v.state).bounds_mode;
+    S_OK
+}
+/// put_BoundsMode : hors de l'énumération COREWEBVIEW2_BOUNDS_MODE (0, 1),
+/// E_INVALIDARG. Les Bounds déjà posés sont redonnés au moteur dans la
+/// nouvelle unité.
+unsafe extern "win64" fn ctrl_put_bounds_mode(this: usize, mode: u32) -> i32 {
+    let Some(v) = view_of(this) else {
+        return E_FAIL;
+    };
+    if mode > 1 {
+        return E_INVALIDARG;
+    }
+    super::lock(&v.state).bounds_mode = mode;
+    v.send_bounds();
+    S_OK
 }
 
 unsafe extern "win64" fn ctrl_get_visible(this: usize, out: *mut i32) -> i32 {
@@ -1878,7 +2214,7 @@ unsafe extern "win64" fn ctrl_put_zoom(this: usize, zoom: f64) -> i32 {
         return E_FAIL;
     };
     super::lock(&v.state).zoom = zoom;
-    v.send(&format!("{{\"op\":\"settings\",\"zoom\":{zoom}}}"));
+    v.send_zoom();
     S_OK
 }
 unsafe extern "win64" fn ctrl_set_bounds_zoom(
@@ -2817,14 +3153,15 @@ unsafe extern "win64" fn args_status(this: usize, out: *mut i32) -> i32 {
     S_OK
 }
 /// WebErrorStatus d'une fin de navigation : 0 si elle a réussi, sinon
-/// celui que le moteur donne (`error`, #2974), sinon 2 comme avant.
+/// celui que le moteur donne (`error`, #2974, #2980), sinon UNKNOWN (0) :
+/// jamais CERTIFICATE_EXPIRED (2) sans raison (#2980).
 fn web_error_status(ev: &HashMap<String, Val>) -> i32 {
     if get_bool(ev, "ok") {
         0
     } else if ev.contains_key("error") {
         get_num(ev, "error") as i32
     } else {
-        2
+        0
     }
 }
 /// NavigationStartingEventArgs3::NavigationKind (#2975).
@@ -3065,7 +3402,6 @@ mod tests {
     /// l'inscription rend un jeton que la désinscription accepte.
     #[test]
     fn inscriptions_aux_evenements_acceptees_2547() {
-        let stub = not_implemented as *const () as usize;
         for (family, slots) in [
             (Family::WebView, WEBVIEW_SLOTS),
             (Family::Controller, CONTROLLER_SLOTS),
@@ -3074,8 +3410,12 @@ mod tests {
             let v = vtable(family);
             for &add in event_slots(family) {
                 assert!(3 + add + 1 < slots);
-                assert_ne!(v[3 + add], stub, "add_ au rang {add}");
-                assert_ne!(v[3 + add + 1], stub, "remove_ au rang {}", add + 1);
+                assert!(!is_not_implemented(v[3 + add]), "add_ au rang {add}");
+                assert!(
+                    !is_not_implemented(v[3 + add + 1]),
+                    "remove_ au rang {}",
+                    add + 1
+                );
             }
         }
         // ICoreWebView2Environment5 : add_BrowserProcessExited (rang 9).
@@ -3087,10 +3427,11 @@ mod tests {
         assert_eq!(unsafe { add(0, 0, &mut token) }, S_OK);
         assert_ne!(token, 0);
         assert_eq!(unsafe { remove(0, token) }, S_OK);
-        // ICoreWebView2Controller3 : add_RasterizationScaleChanged (rang 29).
+        // ICoreWebView2Controller3 : add_RasterizationScaleChanged (rang 29),
+        // gardé depuis #3231.
         assert_eq!(
             vtable(Family::Controller)[3 + 29],
-            add_ignored as *const () as usize
+            ctrl_add_raster_changed as *const () as usize
         );
     }
 
@@ -3246,9 +3587,8 @@ mod tests {
     #[test]
     fn reglages_de_vue_3_a_9_2601() {
         let set = vtable(Family::Settings);
-        let stub = not_implemented as *const () as usize;
         for m in 20..36 {
-            assert_ne!(set[3 + m], stub, "méthode {m}");
+            assert!(!is_not_implemented(set[3 + m]), "méthode {m}");
         }
         let obj = new_com(Family::Settings, None, None, Args::default());
         let get = |m: usize| -> u32 {
@@ -3404,11 +3744,27 @@ mod tests {
             web_error_status(&ev(r#"{"ok":false,"status":401,"error":17}"#)),
             17
         );
-        assert_eq!(web_error_status(&ev(r#"{"ok":false,"status":0}"#)), 2);
+        assert_eq!(web_error_status(&ev(r#"{"ok":false,"status":0}"#)), 0);
         assert!(!get_bool(
             &ev(r#"{"ok":false,"status":404,"error":0}"#),
             "ok"
         ));
+    }
+
+    /// #2980 : un échec de navigation garde la cause que le moteur donne,
+    /// et n'est jamais pris pour un certificat expiré sans raison.
+    #[test]
+    fn cause_d_echec_de_navigation_2980() {
+        let ev = |t: &str| parse_flat(t).unwrap();
+        assert_eq!(
+            web_error_status(&ev(r#"{"ok":false,"status":0,"error":13}"#)),
+            13
+        );
+        assert_eq!(
+            web_error_status(&ev(r#"{"ok":false,"status":0,"error":14}"#)),
+            14
+        );
+        assert_eq!(web_error_status(&ev(r#"{"ok":false,"status":0}"#)), 0);
     }
 
     /// #2979 : AdditionalObjects (WebMessageReceivedEventArgs2, entrée 3)
@@ -3850,5 +4206,295 @@ mod tests {
         // Un `ready` tardif n'écrase pas l'agent choisi par l'application.
         engine_user_agent(&mut state, "autre".into());
         assert_eq!(state.user_agent, teams);
+    }
+
+    /// Vue sans moteur pour les tests : les lignes envoyées sont gardées.
+    fn vue_de_test() -> Arc<View> {
+        Arc::new(View {
+            env: Arc::new(Env {
+                dispatcher: 0,
+                user_data: String::new(),
+                language: String::new(),
+                user_data_win: String::new(),
+                profile: Mutex::new(ProfileState::default()),
+                cookies: Mutex::new(Vec::new()),
+            }),
+            parent: AtomicUsize::new(0),
+            input: Mutex::new(None),
+            child: Mutex::new(None),
+            state: Mutex::new(ViewState {
+                bounds: [10, 20, 410, 320],
+                zoom: 1.0,
+                raster: monitor_scale(),
+                detect_scale: true,
+                external_drop: true,
+                ..Default::default()
+            }),
+            handlers: Mutex::new(Vec::new()),
+            pending_exec: Mutex::new(HashMap::new()),
+            next_exec: AtomicU64::new(1),
+            pending_create: AtomicUsize::new(0),
+            controller: AtomicUsize::new(0),
+            webview: AtomicUsize::new(0),
+            settings: AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
+            pid: AtomicU32::new(0),
+            sent: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Gestionnaire RasterizationScaleChanged de test : compte ses appels.
+    static RASTER_CALLS: AtomicU32 = AtomicU32::new(0);
+    static RASTER_SENDER: AtomicUsize = AtomicUsize::new(0);
+    extern "win64" fn raster_qi(_t: usize, _i: *const u8, _o: *mut usize) -> i32 {
+        E_NOINTERFACE
+    }
+    extern "win64" fn raster_ref(_t: usize) -> u32 {
+        1
+    }
+    extern "win64" fn raster_invoke(_t: usize, sender: usize, args: usize) -> i32 {
+        assert_eq!(args, 0);
+        RASTER_SENDER.store(sender, Ordering::SeqCst);
+        RASTER_CALLS.fetch_add(1, Ordering::SeqCst);
+        S_OK
+    }
+
+    /// #3231 : RasterizationScale, ShouldDetectMonitorScaleChanges et
+    /// BoundsMode de ICoreWebView2Controller3 sont servis et agissent.
+    #[test]
+    fn echelle_de_rendu_du_controleur_3231() {
+        let vt = vtable(Family::Controller);
+        for (i, f) in [
+            (25, ctrl_get_raster as *const () as usize),
+            (26, ctrl_put_raster as *const () as usize),
+            (27, ctrl_get_detect as *const () as usize),
+            (28, ctrl_put_detect as *const () as usize),
+            (29, ctrl_add_raster_changed as *const () as usize),
+            (30, ctrl_remove_handler as *const () as usize),
+            (31, ctrl_get_bounds_mode as *const () as usize),
+            (32, ctrl_put_bounds_mode as *const () as usize),
+        ] {
+            assert_eq!(vt[3 + i], f, "entrée {i}");
+        }
+        // Calcul des pixels de l'écran.
+        assert_eq!(
+            physical_bounds([10, 20, 410, 320], 0, 2.0),
+            [10, 20, 410, 320]
+        );
+        assert_eq!(
+            physical_bounds([10, 20, 410, 320], 1, 1.5),
+            [15, 30, 615, 480]
+        );
+
+        let view = vue_de_test();
+        let ctrl = new_com(
+            Family::Controller,
+            None,
+            Some(view.clone()),
+            Args::default(),
+        );
+        view.controller.store(ctrl, Ordering::SeqCst);
+        let start = monitor_scale();
+        // Valeurs de départ : échelle de l'écran, suivi actif, pixels bruts.
+        let mut scale = 0.0f64;
+        assert_eq!(unsafe { ctrl_get_raster(ctrl, &mut scale) }, S_OK);
+        assert_eq!(scale, start);
+        let mut detect = 0i32;
+        assert_eq!(unsafe { ctrl_get_detect(ctrl, &mut detect) }, S_OK);
+        assert_eq!(detect, 1);
+        let mut mode = 9u32;
+        assert_eq!(unsafe { ctrl_get_bounds_mode(ctrl, &mut mode) }, S_OK);
+        assert_eq!(mode, 0);
+
+        // L'hôte prend la main sur l'échelle : le zoom du moteur suit.
+        assert_eq!(unsafe { ctrl_put_detect(ctrl, 0) }, S_OK);
+        assert_eq!(unsafe { ctrl_put_raster(ctrl, 2.0) }, S_OK);
+        assert_eq!(unsafe { ctrl_get_raster(ctrl, &mut scale) }, S_OK);
+        assert_eq!(scale, 2.0);
+        assert_eq!(unsafe { ctrl_put_zoom(ctrl, 1.25) }, S_OK);
+        let last = |prefix: &str| -> String {
+            super::super::lock(&view.sent)
+                .iter()
+                .rev()
+                .find(|l| l.starts_with(prefix))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            last("{\"op\":\"settings\""),
+            "{\"op\":\"settings\",\"zoom\":2.5}"
+        );
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(unsafe { ctrl_put_raster(ctrl, bad) }, E_INVALIDARG);
+        }
+
+        // Bounds en pixels logiques : le moteur reçoit la taille multipliée,
+        // get_Bounds rend la taille logique.
+        assert_eq!(unsafe { ctrl_put_bounds_mode(ctrl, 1) }, S_OK);
+        assert_eq!(
+            last("{\"op\":\"bounds\""),
+            "{\"op\":\"bounds\",\"x\":20,\"y\":40,\"w\":800,\"h\":600}"
+        );
+        let mut b = [0i32; 4];
+        assert_eq!(unsafe { ctrl_get_bounds(ctrl, &mut b) }, S_OK);
+        assert_eq!(b, [10, 20, 410, 320]);
+        assert_eq!(unsafe { ctrl_put_bounds_mode(ctrl, 2) }, E_INVALIDARG);
+        assert_eq!(unsafe { ctrl_put_bounds_mode(ctrl, 0) }, S_OK);
+        assert_eq!(
+            last("{\"op\":\"bounds\""),
+            "{\"op\":\"bounds\",\"x\":10,\"y\":20,\"w\":400,\"h\":300}"
+        );
+
+        // Suivi rétabli : l'échelle revient à celle de l'écran et
+        // RasterizationScaleChanged est levé, avec le contrôleur pour
+        // expéditeur ; un gestionnaire retiré n'est plus appelé.
+        let vtbl: &'static [usize; 4] = Box::leak(Box::new([
+            raster_qi as *const () as usize,
+            raster_ref as *const () as usize,
+            raster_ref as *const () as usize,
+            raster_invoke as *const () as usize,
+        ]));
+        let handler: &'static usize = Box::leak(Box::new(vtbl.as_ptr() as usize));
+        let h = handler as *const usize as usize;
+        let mut token = 0i64;
+        assert_eq!(
+            unsafe { ctrl_add_raster_changed(ctrl, h, &mut token) },
+            S_OK
+        );
+        assert_eq!(unsafe { ctrl_put_detect(ctrl, 1) }, S_OK);
+        assert_eq!(RASTER_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(RASTER_SENDER.load(Ordering::SeqCst), ctrl);
+        assert_eq!(unsafe { ctrl_get_raster(ctrl, &mut scale) }, S_OK);
+        assert_eq!(scale, start);
+        // Échelle inchangée : pas de nouvel événement.
+        assert_eq!(unsafe { ctrl_put_bounds(ctrl, &[0, 0, 100, 100]) }, S_OK);
+        assert_eq!(RASTER_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(unsafe { ctrl_remove_handler(ctrl, token) }, S_OK);
+        assert_eq!(unsafe { ctrl_put_detect(ctrl, 0) }, S_OK);
+        assert_eq!(unsafe { ctrl_put_raster(ctrl, 3.0) }, S_OK);
+        assert_eq!(unsafe { ctrl_put_detect(ctrl, 1) }, S_OK);
+        assert_eq!(RASTER_CALLS.load(Ordering::SeqCst), 1);
+        view.controller.store(0, Ordering::SeqCst);
+        com_release(ctrl);
+    }
+
+    /// #3237 : AllowExternalDrop de ICoreWebView2Controller4, vrai par
+    /// défaut, se relit et part au moteur.
+    #[test]
+    fn depot_externe_du_controleur_3237() {
+        let vt = vtable(Family::Controller);
+        assert_eq!(vt[3 + 33], ctrl_get_external_drop as *const () as usize);
+        assert_eq!(vt[3 + 34], ctrl_put_external_drop as *const () as usize);
+        let view = vue_de_test();
+        let ctrl = new_com(
+            Family::Controller,
+            None,
+            Some(view.clone()),
+            Args::default(),
+        );
+        let mut on = 0i32;
+        assert_eq!(unsafe { ctrl_get_external_drop(ctrl, &mut on) }, S_OK);
+        assert_eq!(on, 1);
+        assert_eq!(unsafe { ctrl_put_external_drop(ctrl, 0) }, S_OK);
+        assert_eq!(unsafe { ctrl_get_external_drop(ctrl, &mut on) }, S_OK);
+        assert_eq!(on, 0);
+        assert_eq!(
+            super::super::lock(&view.sent).last().map(String::as_str),
+            Some("{\"op\":\"settings\",\"external_drop\":false}")
+        );
+        assert_eq!(
+            unsafe { ctrl_get_external_drop(ctrl, std::ptr::null_mut()) },
+            E_POINTER
+        );
+        com_release(ctrl);
+    }
+
+    /// #3276 : dossier de données de WebView2 calculé comme le dit l'IDL,
+    /// et rendu par ICoreWebView2Environment7::get_UserDataFolder.
+    #[test]
+    fn dossier_de_donnees_3276() {
+        let exe = Some("C:\\Program Files\\Demo\\demo.exe");
+        assert_eq!(
+            resolve_user_data_folder("D:\\Données\\Vue", exe, None).as_deref(),
+            Some("D:\\Données\\Vue")
+        );
+        assert_eq!(
+            resolve_user_data_folder("\\\\serveur\\part", exe, None).as_deref(),
+            Some("\\\\serveur\\part")
+        );
+        assert_eq!(
+            resolve_user_data_folder(".\\cache", exe, None).as_deref(),
+            Some("C:\\Program Files\\Demo\\cache")
+        );
+        assert_eq!(
+            resolve_user_data_folder("", exe, None).as_deref(),
+            Some("C:\\Program Files\\Demo\\demo.exe.WebView2")
+        );
+        let local = "C:\\Users\\a\\AppData\\Local\\Packages\\F_x\\LocalState".to_string();
+        assert_eq!(
+            resolve_user_data_folder("", exe, Some(local.clone())),
+            Some(local)
+        );
+        assert_eq!(resolve_user_data_folder("", None, None), None);
+
+        assert_eq!(
+            vtable(Family::Environment)[3 + 12],
+            env_user_data_folder as *const () as usize
+        );
+        let env = Arc::new(Env {
+            dispatcher: 0,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: "C:\\Program Files\\Demo\\demo.exe.WebView2".to_string(),
+            profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
+        });
+        let obj = new_com(Family::Environment, Some(env), None, Args::default());
+        let mut p: *mut u16 = std::ptr::null_mut();
+        assert_eq!(unsafe { env_user_data_folder(obj, &mut p) }, S_OK);
+        assert_eq!(wstr(p), "C:\\Program Files\\Demo\\demo.exe.WebView2");
+        assert_eq!(
+            unsafe { env_user_data_folder(obj, std::ptr::null_mut()) },
+            E_POINTER
+        );
+        com_release(obj);
+    }
+
+    /// #3395 : une entrée non servie rend E_NOTIMPL et nomme sa famille et
+    /// son rang ; chaque rang a sa propre entrée.
+    #[test]
+    fn entree_non_servie_nommee_3395() {
+        let env_vt = vtable(Family::Environment);
+        // ICoreWebView2Environment11::get_FailureReportFolderPath (rang 20).
+        assert!(is_not_implemented(env_vt[3 + 20]));
+        assert_ne!(env_vt[3 + 20], env_vt[3 + 21]);
+        let env = Arc::new(Env {
+            dispatcher: 0,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: String::new(),
+            profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
+        });
+        let obj = new_com(Family::Environment, Some(env), None, Args::default());
+        let f: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32 =
+            unsafe { std::mem::transmute(env_vt[3 + 20]) };
+        let mut p: *mut u16 = std::ptr::null_mut();
+        assert_eq!(unsafe { f(obj, &mut p) }, E_NOTIMPL);
+        assert!(p.is_null());
+        assert!(
+            super::super::lock(&NOT_IMPLEMENTED_CALLS).contains(&(Some(Family::Environment), 20))
+        );
+        com_release(obj);
+        // Aucune famille ne dépasse la table des entrées non servies.
+        for slots in [
+            WEBVIEW_SLOTS,
+            CONTROLLER_SLOTS,
+            ENVIRONMENT_SLOTS,
+            SETTINGS_SLOTS,
+            PROFILE_SLOTS,
+        ] {
+            assert!(slots <= NOT_IMPLEMENTED.len());
+        }
     }
 }

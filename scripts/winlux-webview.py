@@ -123,6 +123,28 @@ def navigation_kind(WebKit2, action):
     return 2
 
 
+def web_error_status(error):
+    """COREWEBVIEW2_WEB_ERROR_STATUS d'une erreur de chargement WebKit (#2980).
+
+    Nom d'hôte inconnu → HOST_NAME_NOT_RESOLVED (13) ; connexion refusée →
+    CANNOT_CONNECT (12) ; délai dépassé → TIMEOUT (7) ; hôte ou réseau
+    injoignable → SERVER_UNREACHABLE (6) ; chargement annulé (par WebKit,
+    par une nouvelle navigation ou par une décision de l'application) →
+    OPERATION_CANCELED (14) ; le reste → UNKNOWN (0).
+    """
+    domain = getattr(error, "domain", "")
+    code = getattr(error, "code", -1)
+    if domain == "g-resolver-error-quark":
+        return 13
+    if domain == "g-io-error-quark":
+        return {39: 12, 24: 7, 37: 6, 38: 6, 19: 14}.get(code, 0)
+    if domain == "WebKitNetworkError" and code == 302:
+        return 14
+    if domain == "WebKitPolicyError" and code == 102:
+        return 14
+    return 0
+
+
 def completion(code):
     """(IsSuccess, WebErrorStatus) d'une page chargée avec le code HTTP `code` (#2974).
 
@@ -463,6 +485,8 @@ class View:
         self.view = None
         self.nav = 0
         self.menus = True
+        # AllowExternalDrop (#3237) : vrai par défaut, comme dans l'IDL.
+        self.external_drop = True
         # Hôtes virtuels (SetVirtualHostNameToFolderMapping) : https://hôte/…
         # est servi depuis un dossier, sous le schéma winlux-local://.
         self.hosts = {}
@@ -509,6 +533,25 @@ class View:
                                              self.WebKit2.UserScriptInjectionTime.START, None, None)
         self.manager.add_script(script)
 
+    def blocks_drop(self, context):
+        """AllowExternalDrop faux (#3237) : un glisser venu d'une autre
+        application est refusé ; un glisser né dans ce moteur (dans la page)
+        garde son chemin, comme le veut l'IDL (« from outside the bounds of
+        webview2 »)."""
+        return not self.external_drop and self.Gtk.drag_get_source_widget(context) is None
+
+    def on_drag_motion(self, view, context, x, y, time):
+        if not self.blocks_drop(context):
+            return False
+        self.Gdk.drag_status(context, 0, time)
+        return True
+
+    def on_drag_drop(self, view, context, x, y, time):
+        if not self.blocks_drop(context):
+            return False
+        self.Gtk.drag_finish(context, False, False, time)
+        return True
+
     def create(self, cmd):
         Gtk, WebKit2 = self.Gtk, self.WebKit2
         self.view = WebKit2.WebView(web_context=self.context, user_content_manager=self.manager)
@@ -521,6 +564,8 @@ class View:
         self.view.connect("notify::title", self.on_title)
         self.view.connect("notify::uri", self.on_uri)
         self.view.connect("decide-policy", self.on_policy)
+        self.view.connect("drag-motion", self.on_drag_motion)
+        self.view.connect("drag-drop", self.on_drag_drop)
         # window.open (#2727) : WebView2 n'a pas de bloqueur de fenêtres
         # surgissantes ; sans NewWindowRequested traité par l'hôte, il ouvre
         # une fenêtre surgissante et la page garde la main sur elle.
@@ -715,7 +760,8 @@ class View:
 
     def on_failed(self, view, event, uri, error):
         self._failed = True
-        emit(ev="nav_completed", nav=self.nav, ok=False, status=0)
+        emit(ev="nav_completed", nav=self.nav, ok=False, status=0,
+             error=web_error_status(error))
         return False
 
     def on_title(self, view, _param):
@@ -802,6 +848,8 @@ class View:
                 self.view.set_zoom_level(float(cmd["zoom"]) or 1.0)
             if "user_agent" in cmd:
                 self.set_user_agent(settings, cmd["user_agent"] or "")
+            if "external_drop" in cmd:
+                self.external_drop = bool(cmd["external_drop"])
         elif op == "close":
             return False
         return True

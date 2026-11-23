@@ -122,6 +122,7 @@ pub mod ftp_apps;
 pub mod gamemode;
 pub mod games_win32;
 pub mod gdi32;
+pub mod gdi32_bounds;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
@@ -247,6 +248,7 @@ pub mod quartz;
 pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
+pub mod tactile;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
 pub mod mdi;
 pub mod msvcp140_2;
@@ -292,6 +294,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod taskschd_dll;
 pub mod teams_win32;
+pub mod textserv;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -469,16 +472,10 @@ pub fn shadowed_exports() -> Vec<String> {
 struct Builtin {
     name: &'static str,
     exports: Exports,
-    /// HMODULE fixé (page « MZ » seule), ou 0 : image PE minimale
-    /// construite à la demande (`builtin_handle`, voir `pe_image`).
+    /// HMODULE fixé, ou 0 : image PE minimale construite à la demande
+    /// (`builtin_handle`, voir `pe_image`). Plus aucune DLL n'a de page
+    /// « MZ » seule (#3337).
     handle: usize,
-}
-
-fn fake_module() -> usize {
-    let page = Box::leak(Box::new([0u8; 4096]));
-    page[0] = b'M';
-    page[1] = b'Z';
-    page.as_ptr() as usize
 }
 
 fn builtins() -> &'static Vec<Builtin> {
@@ -629,6 +626,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     // Stylet : API WM_POINTER et GetMessageExtraInfo (#1199).
                     e.extend(pointer::user32_exports());
+                    // Toucher, injection, source des messages, gestes (#1932).
+                    e.extend(tactile::user32_exports());
                     // Lot D du relevé (#1512) : seulement les noms absents.
                     for (name, addr) in user32_releve::user32_exports() {
                         e.entry(name).or_insert(addr);
@@ -721,19 +720,19 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "normaliz",
                 exports: normaliz::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Tablette graphique WinTab (#1199).
             Builtin {
                 name: "wintab32",
                 exports: wintab32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
             Builtin {
                 name: "mshwgst",
                 exports: mshwgst::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "shell32",
@@ -789,6 +788,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_bounds::exports());
                     for (name, addr) in user32_releve::gdi32_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -904,17 +904,17 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dpnet",
                 exports: dpnet::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dpnaddr",
                 exports: dpnet::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "msacm32",
                 exports: msacm32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "quartz",
@@ -1009,7 +1009,7 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "webview2loader",
                 exports: webview2::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "winusb",
@@ -1084,16 +1084,17 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
-            // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
-            // charger (LoadLibrary de wxWidgets, #795).
+            // sont fournies par controls::richedit (LoadLibrary de wxWidgets,
+            // #795). msftedit et riched20 servent aussi les Text Services sans
+            // fenêtre, avec les mêmes IID (#3268).
             Builtin {
                 name: "msftedit",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {
                 name: "riched20",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {
@@ -1105,93 +1106,93 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "authz",
                 exports: sysdlls::authz_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "avicap32",
                 exports: sysdlls::avicap32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "credui",
                 exports: sysdlls::credui_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "evr",
                 exports: sysdlls::evr_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ktmw32",
                 exports: sysdlls::ktmw32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "sfc",
                 exports: sysdlls::sfc_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "loadperf",
                 exports: sysdlls::loadperf_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "rasapi32",
                 exports: sysdlls::rasapi32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ntdsapi",
                 exports: sysdlls::ntdsapi_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "odbc32",
                 exports: odbc32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "activeds",
                 exports: activeds_aclui::activeds_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "aclui",
                 exports: activeds_aclui::aclui_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "webservices",
                 exports: webservices::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "wevtapi",
                 exports: wevtapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "rstrtmgr",
                 exports: rstrtmgr::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Contrat sans DLL hôte documentée : le module porte son nom (Refs #2902).
             Builtin {
                 name: "api-ms-win-security-isolatedcontainer-l1-1-0",
                 exports: isolatedcontainer::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "gamemode",
                 exports: gamemode::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "sensapi",
@@ -1441,6 +1442,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             });
         }
+        add_ntdll_crt(&mut all);
         all
     });
     // ntdll et kernel32 tout de suite, comme avant le Gain #3050 : le bac à
@@ -1551,6 +1553,25 @@ fn add_psapi(all: &mut Vec<Builtin>) {
         exports,
         handle: 0,
     });
+}
+
+/// La CRT que ntdll exporte sous Windows (`ntdll::CRT_REEXPORTS`) entre dans
+/// la table de ntdll quand notre msvcrt la sert : `lookup("ntdll", …)` la
+/// trouvait déjà par repli, la table de l'image non (#3389). Appelé une fois
+/// toutes les DLL complétées, pour reprendre exactement ce que le repli rend.
+fn add_ntdll_crt(all: &mut [Builtin]) {
+    let Some(crt) = all.iter().find(|b| b.name == "msvcrt") else {
+        return;
+    };
+    let found: Vec<(&'static str, usize)> = ntdll::CRT_REEXPORTS
+        .iter()
+        .filter_map(|&n| crt.exports.get(n).map(|&a| (n, a)))
+        .collect();
+    if let Some(nt) = all.iter_mut().find(|b| b.name == "ntdll") {
+        for (n, a) in found {
+            nt.exports.entry(n).or_insert(a);
+        }
+    }
 }
 
 /// Fonctions de base (win32_basics) : elles complètent chaque DLL sans
@@ -2028,6 +2049,146 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     })
 }
 
+/// Fonctions d'advapi32 que KernelBase.dll exporte aussi sous Windows
+/// (#3207) : GetProcAddress(KernelBase, …) les trouve, GetProcAddress(kernel32,
+/// …) non. Liste = noms de `mingw-w64-crt/libarm32/kernelbase.def` (mingw-w64,
+/// « Definition file of KERNELBASE.dll ») servis par notre advapi32 et absents
+/// de notre kernel32. Inférence nommée : mingw-w64 n'a ce .def que pour ARM32,
+/// les mêmes exports sont supposés en x64. Triée (recherche dichotomique).
+pub const KERNELBASE_FROM_ADVAPI32: &[&str] = &[
+    "AccessCheck",
+    "AddAccessAllowedAce",
+    "AddAccessAllowedAceEx",
+    "AddAccessAllowedObjectAce",
+    "AddAccessDeniedAce",
+    "AddAccessDeniedAceEx",
+    "AddAccessDeniedObjectAce",
+    "AddAce",
+    "AddAuditAccessAce",
+    "AddAuditAccessAceEx",
+    "AddAuditAccessObjectAce",
+    "AddMandatoryAce",
+    "AdjustTokenGroups",
+    "AdjustTokenPrivileges",
+    "AllocateAndInitializeSid",
+    "AllocateLocallyUniqueId",
+    "CheckTokenMembership",
+    "CopySid",
+    "CreateProcessAsUserW",
+    "CreateRestrictedToken",
+    "CreateWellKnownSid",
+    "DeleteAce",
+    "DuplicateToken",
+    "DuplicateTokenEx",
+    "EqualSid",
+    "EventActivityIdControl",
+    "EventEnabled",
+    "EventProviderEnabled",
+    "EventRegister",
+    "EventSetInformation",
+    "EventUnregister",
+    "EventWrite",
+    "EventWriteString",
+    "EventWriteTransfer",
+    "FreeSid",
+    "GetAce",
+    "GetAclInformation",
+    "GetFileSecurityW",
+    "GetKernelObjectSecurity",
+    "GetLengthSid",
+    "GetSecurityDescriptorControl",
+    "GetSecurityDescriptorDacl",
+    "GetSecurityDescriptorGroup",
+    "GetSecurityDescriptorLength",
+    "GetSecurityDescriptorOwner",
+    "GetSecurityDescriptorRMControl",
+    "GetSecurityDescriptorSacl",
+    "GetSidIdentifierAuthority",
+    "GetSidLengthRequired",
+    "GetSidSubAuthority",
+    "GetSidSubAuthorityCount",
+    "GetTokenInformation",
+    "GetTraceEnableFlags",
+    "GetTraceEnableLevel",
+    "GetTraceLoggerHandle",
+    "ImpersonateAnonymousToken",
+    "ImpersonateLoggedOnUser",
+    "ImpersonateNamedPipeClient",
+    "ImpersonateSelf",
+    "InitializeAcl",
+    "InitializeSecurityDescriptor",
+    "InitializeSid",
+    "IsTokenRestricted",
+    "IsValidAcl",
+    "IsValidSecurityDescriptor",
+    "IsValidSid",
+    "MakeAbsoluteSD",
+    "MakeSelfRelativeSD",
+    "MapGenericMask",
+    "OpenProcessToken",
+    "OpenThreadToken",
+    "RegCloseKey",
+    "RegCopyTreeW",
+    "RegCreateKeyExA",
+    "RegCreateKeyExW",
+    "RegDeleteKeyExA",
+    "RegDeleteKeyExW",
+    "RegDeleteKeyValueA",
+    "RegDeleteKeyValueW",
+    "RegDeleteTreeA",
+    "RegDeleteTreeW",
+    "RegDeleteValueA",
+    "RegDeleteValueW",
+    "RegDisablePredefinedCacheEx",
+    "RegEnumKeyExA",
+    "RegEnumKeyExW",
+    "RegEnumValueA",
+    "RegEnumValueW",
+    "RegFlushKey",
+    "RegGetKeySecurity",
+    "RegGetValueA",
+    "RegGetValueW",
+    "RegLoadKeyA",
+    "RegLoadKeyW",
+    "RegLoadMUIStringW",
+    "RegNotifyChangeKeyValue",
+    "RegOpenCurrentUser",
+    "RegOpenKeyExA",
+    "RegOpenKeyExW",
+    "RegOpenUserClassesRoot",
+    "RegQueryInfoKeyA",
+    "RegQueryInfoKeyW",
+    "RegQueryValueExA",
+    "RegQueryValueExW",
+    "RegRestoreKeyA",
+    "RegRestoreKeyW",
+    "RegSaveKeyExA",
+    "RegSaveKeyExW",
+    "RegSetKeySecurity",
+    "RegSetKeyValueA",
+    "RegSetKeyValueW",
+    "RegSetValueExA",
+    "RegSetValueExW",
+    "RegUnLoadKeyA",
+    "RegUnLoadKeyW",
+    "RegisterTraceGuidsW",
+    "RevertToSelf",
+    "SetFileSecurityW",
+    "SetKernelObjectSecurity",
+    "SetSecurityDescriptorControl",
+    "SetSecurityDescriptorDacl",
+    "SetSecurityDescriptorGroup",
+    "SetSecurityDescriptorOwner",
+    "SetSecurityDescriptorRMControl",
+    "SetSecurityDescriptorSacl",
+    "SetThreadToken",
+    "SetTokenInformation",
+    "TraceEvent",
+    "TraceMessage",
+    "TraceMessageVa",
+    "UnregisterTraceGuids",
+];
+
 /// Fonctions que Windows place dans KernelBase.dll (et ses API-sets) mais
 /// pas dans kernel32.dll : GetProcAddress(kernel32, …) doit y échouer,
 /// sinon une appli prend un chemin que Windows ne lui fait jamais prendre
@@ -2038,6 +2199,12 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // (api-ms-win-core-handle, -realtime) : Qt WebEngine (#1510).
     "CompareObjectHandles",
     "QueryUnbiasedInterruptTimePrecise",
+    // Prises par Chromium dans kernelbase.dll seulement (code BSD :
+    // sandbox/win/src/app_container_base.cc).
+    "AppContainerRegisterSid",
+    "AppContainerUnregisterSid",
+    "AppContainerLookupMoniker",
+    "AppContainerFreeMemory",
     "WakeByAddressAll",
     "WakeByAddressSingle",
     // Douteux (#521) : user32 les exporte ; on les laisse visibles par
@@ -2168,7 +2335,13 @@ pub fn kernel32_proc(symbol: &str, kernelbase: bool) -> Option<usize> {
         return None;
     }
     if kernelbase {
-        return lookup("kernel32", symbol);
+        return lookup("kernel32", symbol).or_else(|| {
+            KERNELBASE_FROM_ADVAPI32
+                .binary_search(&symbol)
+                .is_ok()
+                .then(|| lookup("advapi32", symbol))
+                .flatten()
+        });
     }
     let b = builtins().iter().find(|b| b.name == "kernel32")?;
     if let Some(&a) = b.exports.get(symbol) {
@@ -2200,10 +2373,41 @@ pub fn kernel32_surface() -> Vec<&'static str> {
 }
 
 /// HMODULE distinct de KernelBase.dll et des API-sets api-ms-win-core-* :
-/// mêmes fonctions que kernel32, plus celles de `KERNELBASE_ONLY`.
+/// mêmes fonctions que kernel32, plus celles de `KERNELBASE_ONLY`. C'est
+/// une vraie image PE dont la table d'exports porte exactement ce que GetProcAddress rend
+/// sur ce module (`kernel32_proc(…, true)`). Avant #3337 c'était une page
+/// « MZ » sans en-tête NT : un programme qui lisait l'image (PEImage de
+/// Chromium, rapports de plantage) prenait l'en-tête DOS pour l'en-tête NT.
 pub fn kernelbase_handle() -> usize {
     static H: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *H.get_or_init(fake_module)
+    *H.get_or_init(|| pe_image::build("kernelbase", &kernelbase_exports(), KERNELBASE_SLOT))
+}
+
+/// Case d'adresse fixe de l'image KernelBase : la dernière, jamais prise par
+/// une DLL intégrée (bien moins de `SLOTS`).
+const KERNELBASE_SLOT: usize = 0xFFF;
+
+/// Table d'exports de KernelBase : les noms de kernel32 que GetProcAddress
+/// y rend, plus ceux qu'elle tient d'advapi32 et de ntdll.
+fn kernelbase_exports() -> Exports {
+    let k32 = &builtins()
+        .iter()
+        .find(|b| b.name == "kernel32")
+        .expect("kernel32 intégrée")
+        .exports;
+    let candidates = k32
+        .keys()
+        .copied()
+        .chain(KERNELBASE_FROM_ADVAPI32.iter().copied())
+        .chain(KERNEL32_REGISTRY.iter().copied())
+        .chain(KERNEL32_FROM_NTDLL.iter().copied());
+    let mut e = Exports::new();
+    for name in candidates {
+        if let Some(a) = kernel32_proc(name, true) {
+            e.insert(name, a);
+        }
+    }
+    e
 }
 
 /// Le nom désigne-t-il KernelBase ou un API-set du noyau (et non kernel32) ?
@@ -2388,12 +2592,39 @@ pub unsafe fn put_text_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{lookup, normalize, put_text_a, put_text_w};
+    use super::{
+        kernel32_proc, kernelbase_handle, lookup, normalize, put_text_a, put_text_w,
+        KERNELBASE_FROM_ADVAPI32,
+    };
 
     /// Copies d'exports masquées, figées dans docs/compat/exports-masques.txt.
     /// Une nouvelle copie masquée fait échouer le test : corriger la copie
     /// servie et retirer l'autre, ou, si c'est voulu, régénérer la liste avec
     /// WINLUX_EXPORTS_MASQUES=ecrire cargo test exports_masques.
+    #[test]
+    fn kernelbase_exporte_la_securite_d_advapi32_3207() {
+        // Liste triée : la recherche dichotomique en dépend.
+        assert!(KERNELBASE_FROM_ADVAPI32.windows(2).all(|w| w[0] < w[1]));
+        for &name in KERNELBASE_FROM_ADVAPI32 {
+            let via_kb = kernel32_proc(name, true);
+            assert!(via_kb.is_some(), "KernelBase!{name} introuvable");
+            assert_eq!(
+                via_kb,
+                lookup("advapi32", name),
+                "KernelBase!{name} ≠ advapi32"
+            );
+        }
+        // Acrobat (#3093) : kernel32 n'exporte pas GetTokenInformation,
+        // KernelBase si.
+        assert!(kernel32_proc("GetTokenInformation", false).is_none());
+        assert!(kernel32_proc("GetTokenInformation", true).is_some());
+        let h = kernelbase_handle();
+        let name = b"GetTokenInformation\0";
+        let a = unsafe { crate::dlls::kernel32::get_proc_address(h, name.as_ptr()) };
+        eprintln!("      GetProcAddress(KernelBase, GetTokenInformation) = {a:#x}");
+        assert_ne!(a, 0);
+    }
+
     #[test]
     fn exports_masques() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

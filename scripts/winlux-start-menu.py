@@ -468,6 +468,10 @@ class Start(Gtk.Application):
         # calculé en arrière-plan à chaque ouverture (#685).
         self.open_category = None
         self.side_generation = 0
+        # Catalogue des applications : relu seulement quand GIO signale un
+        # lanceur ajouté, retiré ou modifié (#3121), plus à chaque ouverture.
+        self.apps_stale = True
+        self.app_monitor = None
         self.side_data = None
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
@@ -498,19 +502,17 @@ class Start(Gtk.Application):
         # dernière ouverture : relues à chaque ouverture.
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): pass
-        # Services de la session livrés avec une entrée de menu par leur paquet.
-        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
-                     if listed(app) and app.get_id() not in SESSION_SERVICES}
-        # Textes repliés préparés une fois le menu dessiné (priorité « au
-        # repos », après l'affichage) : la première frappe ne les calcule plus.
-        GLib.idle_add(warm_index, list(self.apps.values()))
+        if self.apps_stale or not hasattr(self, "apps"): self.load_apps()
         changed = auto_pin(self.state, self.apps)
         changed |= note_new_apps(self.state, self.apps, time.time())
         if changed: self.save()
         self.all_apps = False
         self.open_category = None
-        self.search.set_text("")
-        self.render()
+        # La liste est construite une seule fois, par place() plus bas : vider
+        # une recherche restée tapée ne la reconstruit pas, et un render() ici
+        # était refait aussitôt par place(), pour rien (#3217).
+        with self.search.handler_block(self.search_changed):
+            self.search.set_text("")
         # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
         # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
         # premier appui et se trouvait en partie dessous.
@@ -544,10 +546,38 @@ class Start(Gtk.Application):
         affichage des widgets (styles, tailles, fenêtre X). Laissé au
         premier appui, il en coûtait 36 à 52 ms contre 4 à 11 ensuite, et ce
         premier appui préchargé n'était pas deux fois plus rapide qu'un
-        lancement à froid (#2834)."""
+        lancement à froid (#2834). Le catalogue des applications aussi."""
         self.window.get_child().show_all()
         self.window.realize()
         self.window.get_preferred_size()
+        self.load_apps()
+
+    def load_apps(self):
+        """Lit le catalogue des applications (Gio.AppInfo.get_all : 13 à 19 ms
+        médiane, jusqu'à 39 ms, sur le PC de damien, à chaque ouverture
+        jusqu'ici, #3121). Relu ensuite seulement sur le signal « changed »
+        de Gio.AppInfoMonitor : lanceur installé, retiré ou modifié."""
+        if self.app_monitor is None:
+            # Le moniteur ne signale rien tant que get_all n'a pas été appelé
+            # une fois : créé juste avant la première lecture.
+            self.app_monitor = Gio.AppInfoMonitor.get()
+            self.app_monitor.connect("changed", self.apps_changed)
+        self.apps_stale = False
+        # Services de la session livrés avec une entrée de menu par leur paquet.
+        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
+                     if listed(app) and app.get_id() not in SESSION_SERVICES}
+        # Textes repliés préparés au repos, après l'affichage : la première
+        # frappe ne les calcule plus.
+        GLib.idle_add(warm_index, list(self.apps.values()))
+        return False
+
+    def apps_changed(self, _monitor):
+        """Catalogue changé : relu au repos si le menu est caché, pour que
+        l'ouverture suivante n'ait rien à relire ; sinon à la prochaine
+        ouverture (la liste affichée ne bouge pas sous le pointeur)."""
+        self.apps_stale = True
+        if not (self.window and self.window.get_visible()):
+            GLib.idle_add(lambda: self.load_apps() if self.apps_stale else False)
 
     def workarea(self):
         display = self.window.get_display()
@@ -671,7 +701,7 @@ class Start(Gtk.Application):
         self.body = body
         self.left.pack_start(body, True, True, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
-        self.search.connect("search-changed", lambda *_: self.render())
+        self.search_changed = self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         search_row = Gtk.Box(spacing=8)
         search_row.pack_start(self.search, True, True, 0)
@@ -1586,7 +1616,12 @@ def result_order(app, query, state):
     ident = app.get_id() or ""
     when = seen.get(ident)
     when = when if isinstance(when, (int, float)) else 0
-    return (rank(app.get_display_name(), query), indexed(app.get_display_name())[0], -when,
+    name = app.get_display_name()
+    level = rank(name, query)
+    # Milieu de mot (3) et faute de frappe (4) après toute correspondance
+    # exacte, nom ou mots-clés (#3068).
+    if level == 2 and not exact_match(app, query): level = near(query, name) or 2
+    return (level, indexed(name)[0], -when,
             ident.startswith(("winlux-pe-", "winlux-link-")), ident)
 
 
@@ -1623,6 +1658,9 @@ def words(text):
 # au-delà de 20 000 textes. Les noms de fichiers n'y passent pas (cache=False).
 _INDEX = {}
 _QUERY = [(None, [])]
+# Milieu de mot et fautes de frappe : recherche repliée et verdict par nom,
+# pour la frappe en cours (matches puis result_order demandent les deux).
+_NEAR = [(None, [], {})]
 
 
 def indexed(text):
@@ -1705,13 +1743,67 @@ def page_first(apps, pages, query):
     return rank(pages[0][0], query) < rank(apps[0].get_display_name(), query)
 
 
-def matches(app, query):
+def exact_match(app, query):
     """Nom affiché, nom générique ou mot-clé du lanceur (« boutique » trouve le Store)."""
-    if not query: return True
     if found_in(query, app.get_display_name()): return True
     keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
     generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
     return found_in(query, " ".join(list(keywords or []) + [generic or ""]))
+
+
+def matches(app, query):
+    """Correspondance exacte (exact_match), sinon milieu de mot ou faute de
+    frappe dans le nom de l'application (near)."""
+    if not query: return True
+    return exact_match(app, query) or near(query, app.get_display_name()) is not None
+
+
+def one_edit(a, b):
+    """Vrai si a et b diffèrent d'au plus une lettre ajoutée, oubliée,
+    remplacée, ou de deux lettres voisines inversées."""
+    if a == b: return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1: return False
+    i = 0
+    while i < la and i < lb and a[i] == b[i]: i += 1
+    if la == lb:
+        return a[i + 1:] == b[i + 1:] or (i + 1 < la and a[i] == b[i + 1] and a[i + 1] == b[i] and a[i + 2:] == b[i + 2:])
+    return a[i:] == b[i + 1:] if la < lb else a[i + 1:] == b[i:]
+
+
+def near(query, name):
+    """Applications seulement (#3068) : 3 si chaque mot de la recherche est au
+    milieu d'un mot du nom (« pad » dans Mousepad, 3 lettres au moins), 4 s'il
+    faut en plus tolérer une faute de frappe (« outlok » → Outlook, 4 lettres
+    au moins, une lettre de différence avec les 4 premières lettres au moins
+    d'un mot), sinon None.
+    Microsoft annonce la tolérance aux fautes pour les applications sans en
+    donner la règle : les seuils sont les nôtres."""
+    memo = _NEAR[0]
+    if memo[0] != query:
+        memo = (query, words(query).split(), {})
+        _NEAR[0] = memo
+    found = memo[2].get(name, False)
+    if found is not False: return found
+    tokens = indexed(name)[1]
+    level = 3
+    for word in memo[1]:
+        size = len(word)
+        head = (word[:1], word[1:2])
+        if size >= 3 and any(word in token for token in tokens): continue
+        # Une seule lettre de différence : les deux premières lettres du mot
+        # et du début du nom en ont au moins une en commun, à la même place
+        # ou décalée d'un cran. Le filtre évite one_edit() pour presque tous.
+        # Le début du nom comparé a lui aussi 4 lettres au moins : sinon
+        # « rapp » (une lettre en trop devant « app ») trouvait toutes les
+        # « Application… ».
+        if size >= 4 and any(one_edit(word, token[:size + delta]) for token in tokens
+                             if token[:1] in head or token[1:2] in head
+                             for delta in (-1, 0, 1) if size + delta >= 4):
+            level = 4; continue
+        level = None; break
+    memo[2][name] = level
+    return level
 
 
 def auto_pin(state, apps):

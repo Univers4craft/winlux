@@ -93,14 +93,15 @@ def desktop_names():
 
 
 def windows():
-    """[(id hexadécimal, bureau, titre)] des fenêtres normales."""
+    """[(id hexadécimal, bureau, titre)] des fenêtres normales ; bureau -1 :
+    sur tous les bureaux."""
     found = []
     for line in _run(["wmctrl", "-l"]).splitlines():
         parts = line.split(None, 3)
         if len(parts) < 3: continue
         try: desktop = int(parts[1])
         except ValueError: continue
-        if desktop < 0: continue
+        if desktop < -1: continue
         kind = _run(["xprop", "-id", parts[0], "_NET_WM_WINDOW_TYPE"])
         if "_NET_WM_WINDOW_TYPE_NORMAL" not in kind and "_NET_WM_WINDOW_TYPE_DIALOG" not in kind \
                 and "_NET_WM_WINDOW_TYPE(ATOM)" in kind:
@@ -108,6 +109,12 @@ def windows():
         title = parts[3] if len(parts) > 3 else ""
         found.append((parts[0], desktop, title))
     return found
+
+
+def on_desktop(found, current):
+    """Fenêtres de `found` à montrer sur le bureau `current` : les siennes et
+    celles affichées sur tous les bureaux (bureau -1, #3346)."""
+    return [item for item in found if item[1] in (current, -1)]
 
 
 def removal_moves(count, removed, placed):
@@ -170,11 +177,64 @@ def remove_desktop(number):
     return 0
 
 
+def move_window(window, number):
+    """Fenêtre `window` (identifiant hexadécimal) vers le bureau `number`."""
+    _run(["wmctrl", "-i", "-r", window, "-t", str(number)])
+
+
 def rename_desktop(number, name):
     count = len(desktops())
     names = (desktop_names() + [""] * count)[:count]
     names[number] = name.strip()
     return set_desktop_names(names)
+
+
+class ClientListWatch:
+    """Connexion X à part qui signale chaque changement de _NET_CLIENT_LIST
+    sur la fenêtre racine : une fenêtre ouverte ou fermée pendant que la vue
+    est affichée (#3347). Rien ne tourne entre deux changements."""
+    PROPERTY_NOTIFY = 28
+    PROPERTY_CHANGE_MASK = 1 << 22
+
+    def __init__(self):
+        self.x11 = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+        x11 = self.x11
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x11.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+        x11.XConnectionNumber.argtypes = [ctypes.c_void_p]
+        x11.XPending.argtypes = [ctypes.c_void_p]
+        x11.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        self.display = x11.XOpenDisplay(None)
+        if not self.display: raise OSError("XOpenDisplay")
+        self.atom = x11.XInternAtom(self.display, b"_NET_CLIENT_LIST", 0)
+        x11.XSelectInput(self.display, x11.XDefaultRootWindow(self.display), self.PROPERTY_CHANGE_MASK)
+        x11.XFlush(self.display)
+        self.event = (ctypes.c_long * 24)()  # XEvent : 192 octets
+
+    def fileno(self):
+        return self.x11.XConnectionNumber(self.display)
+
+    def changed(self):
+        """Vide la file ; vrai si _NET_CLIENT_LIST a changé."""
+        changed = False
+        while self.x11.XPending(self.display):
+            self.x11.XNextEvent(self.display, ctypes.byref(self.event))
+            # XPropertyEvent : type (int), serial, send_event, display, window, atom.
+            if self.event[0] & 0xFFFFFFFF == self.PROPERTY_NOTIFY and self.event[5] == self.atom:
+                changed = True
+        return changed
+
+    def close(self):
+        if self.display:
+            self.x11.XCloseDisplay(self.display)
+            self.display = None
 
 
 # ── Vue des tâches (GTK) ────────────────────────────────────────────────────
@@ -262,7 +322,11 @@ def run_view():
         except Exception:
             return None
 
+    DRAG_TARGET = Gtk.TargetEntry.new("application/x-winlux-window", Gtk.TargetFlags.SAME_APP, 0)
+
     class View(Gtk.Window):
+        dragging = False
+
         def __init__(self):
             super().__init__(title=_t("Vue des tâches"))
             self.set_role("winlux-taskview")
@@ -282,7 +346,9 @@ def run_view():
             css = Gtk.CssProvider()
             css.load_from_data(b"""
               window { background: rgba(16, 18, 26, 0.86); color: #ecedf5; }
-              .card { background: #2a3040; border-radius: 8px; padding: 8px; }
+              .card { background: #2a3040; border-radius: 8px; padding: 6px; border: 2px solid transparent; }
+              flowboxchild { padding: 0; outline: none; }
+              flowboxchild:focus .card, .desk.focus { border-color: #ecedf5; background: #343b4e; }
               .card:hover { background: #343b4e; }
               .title { font-size: 13px; }
               .hint { color: #adb6c9; font-size: 15px; }
@@ -307,21 +373,58 @@ def run_view():
             # FlowBox centré : GTK lui donne sa largeur naturelle, une seule
             # colonne, et la vue débordait de l'écran (#3066). Les colonnes
             # sont fixées par grid_layout.
-            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+            # Clavier (#3075) : les flèches passent d'une carte à l'autre,
+            # Entrée ou Espace ouvre la fenêtre, Suppr la ferme ; Tab mène
+            # à la bande des bureaux. La souris reste sur les EventBox.
+            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, activate_on_single_click=False,
                                     row_spacing=GAP, column_spacing=GAP, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
             outer.pack_start(self.flow, True, True, 0)
             self.desks = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER)
             outer.pack_end(self.desks, False, False, 0)
+            self.flow.connect("child-activated", lambda _, child: getattr(child.get_child(), "window_id", None)
+                              and self.open_window(child.get_child().window_id))
             self.connect("key-press-event", self.key)
+            # GTK efface l'indicateur de focus au premier affichage : remis
+            # après, sinon la carte choisie au clavier ne se voit pas.
+            self.connect("map-event", lambda *_: GLib.idle_add(self.show_focus))
             self.connect("button-release-event", lambda *_: self.close_view())
             self.refresh()
+            # Fenêtres ouvertes ou fermées pendant que la vue est affichée (#3347).
+            try:
+                self.watch = ClientListWatch()
+                GLib.io_add_watch(self.watch.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN, self.clients_changed)
+            except OSError:
+                self.watch = None
+
+        def clients_changed(self, *_):
+            if self.watch is not None and self.watch.changed() and not getattr(self, "pending", False):
+                # Une rafale (programme qui ouvre trois fenêtres) ne refait la vue qu'une fois.
+                self.pending = True
+                GLib.timeout_add(80, self.refresh_clients)
+            return True
+
+        def refresh_clients(self):
+            if self.dragging or Gtk.grab_get_current() is not None:
+                return True  # glisser ou menu en cours : la vue sera refaite après
+            self.pending = False
+            desks = desktops()
+            current = next((number for number, _, on in desks if on), 0)
+            if [item[0] for item in self.listed(current)] != getattr(self, "shown_ids", None):
+                self.refresh()
+            return False
+
+        def listed(self, current):
+            shown = [item for item in on_desktop(windows(), current) if item[2] not in ("xfce4-panel", "xfdesktop")]
+            return [item for item in shown if int(item[0], 16) != self.own_id()]
 
         def refresh(self):
+            focused = self.get_focus()
+            focused = getattr(focused.get_child(), "window_id", None) if isinstance(focused, Gtk.FlowBoxChild) else None
             for child in self.flow.get_children() + self.desks.get_children(): child.destroy()
             desks = desktops() or [(0, display_name(0, ""), True)]
             current = next((number for number, _, on in desks if on), 0)
-            shown = [item for item in windows() if item[1] == current and item[2] not in ("xfce4-panel", "xfdesktop")]
-            shown = [item for item in shown if int(item[0], 16) != self.own_id()]
+            shown = self.listed(current)
+            self.shown_ids = [item[0] for item in shown]
             if not shown:
                 label = Gtk.Label(label=_t("Aucune fenêtre ouverte sur ce bureau."))
                 label.get_style_context().add_class("hint")
@@ -331,13 +434,38 @@ def run_view():
             self.flow.set_max_children_per_line(columns)
             for window, _, title in shown:
                 self.flow.add(self.window_card(window, title, desks, current, thumb_w, thumb_h))
+            self.desk_events = []
             for number, name, on in desks:
-                self.desks.pack_start(self.desk_card(number, name, on, len(desks)), False, False, 0)
+                card = self.desk_card(number, name, on, len(desks))
+                self.desk_events.append(card)
+                if on: self.current_desk = card
+                self.desks.pack_start(card, False, False, 0)
             add = Gtk.Button(label="+  " + _t("Nouveau bureau"))
             add.get_style_context().add_class("new")
             add.connect("clicked", lambda *_: (new_desktop(), GLib.timeout_add(150, self.refresh_later)))
             self.desks.pack_start(add, False, False, 0)
             self.show_all()
+            # La carte qui avait le focus le garde quand la vue est refaite.
+            first = self.flow.get_child_at_index(self.shown_ids.index(focused) if focused in self.shown_ids else 0)
+            if shown and first is not None:
+                first.grab_focus()
+            elif getattr(self, "current_desk", None) is not None:
+                self.current_desk.grab_focus()
+
+        def show_focus(self):
+            self.set_focus_visible(True)
+            return False
+
+        def open_window(self, window):
+            self.hide()
+            _run(["wmctrl", "-i", "-a", window])
+            Gtk.main_quit()
+
+        def go_to(self, number):
+            # Choisir un bureau y mène et ferme la vue (#3074).
+            self.hide()
+            _run(["wmctrl", "-s", str(number)])
+            Gtk.main_quit()
 
         def refresh_later(self):
             self.refresh()
@@ -349,6 +477,7 @@ def run_view():
 
         def window_card(self, window, title, desks, current, thumb_w, thumb_h):
             event = Gtk.EventBox()
+            event.window_id = window
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             box.get_style_context().add_class("card")
             event.add(box)
@@ -359,6 +488,7 @@ def run_view():
             close = Gtk.Button(label="✕")
             close.get_style_context().add_class("x")
             close.set_tooltip_text(_t("Fermer"))
+            close.set_can_focus(False)  # au clavier : Suppr sur la carte
             close.connect("clicked", lambda *_: (_run(["wmctrl", "-i", "-c", window]), GLib.timeout_add(300, self.refresh_later)))
             head.pack_start(close, False, False, 0)
             box.pack_start(head, False, False, 0)
@@ -382,13 +512,25 @@ def run_view():
                     menu.show_all()
                     menu.popup_at_pointer(event)
                     return True
-                if event.button == 1:
-                    self.hide()
-                    _run(["wmctrl", "-i", "-a", window])
-                    Gtk.main_quit()
+                if event.button == 1 and not self.dragging:
+                    self.open_window(window)
                 return True
             event.connect("button-release-event", clicked)
+            # Glisser la carte sur un bureau de la bande l'y déplace (#3076).
+            event.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [DRAG_TARGET], Gdk.DragAction.MOVE)
+            if pixbuf is not None:
+                event.drag_source_set_icon_pixbuf(pixbuf.scale_simple(max(1, pixbuf.get_width() // 2),
+                                                                      max(1, pixbuf.get_height() // 2), 2))
+            event.connect("drag-begin", lambda *_: setattr(self, "dragging", True))
+            event.connect("drag-end", lambda *_: GLib.idle_add(lambda: setattr(self, "dragging", False)))
+            event.connect("drag-data-get", lambda _w, _c, data, *_: data.set(data.get_target(), 8, window.encode("ascii")))
             return event
+
+        def drop(self, data, number):
+            window = bytes(data or b"").decode("ascii", "replace")
+            if re.fullmatch(r"0x[0-9a-fA-F]+", window):
+                move_window(window, number)
+                GLib.timeout_add(150, self.refresh_later)
 
         def move_to_new(self, window):
             count = len(desktops()) or 1
@@ -402,13 +544,24 @@ def run_view():
             box.get_style_context().add_class("desk")
             if on: box.get_style_context().add_class("on")
             event.add(box)
+            event.set_can_focus(True)
+            event.connect("focus-in-event", lambda *_: box.get_style_context().add_class("focus"))
+            event.connect("focus-out-event", lambda *_: box.get_style_context().remove_class("focus"))
+            event.connect("key-press-event", lambda _, key: key.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space)
+                          and (self.go_to(number) or True))
             box.pack_start(Gtk.Label(label=name), False, False, 0)
             if count > 1:
                 close = Gtk.Button(label="✕")
                 close.get_style_context().add_class("x")
                 close.set_tooltip_text(_t("Supprimer le bureau"))
+                close.set_can_focus(False)
                 close.connect("clicked", lambda *_: (remove_desktop(number), GLib.timeout_add(200, self.refresh_later)))
                 box.pack_start(close, False, False, 0)
+
+            event.drag_dest_set(Gtk.DestDefaults.ALL, [DRAG_TARGET], Gdk.DragAction.MOVE)
+            event.connect("drag-motion", lambda *_: box.get_style_context().add_class("focus") or False)
+            event.connect("drag-leave", lambda *_: box.get_style_context().remove_class("focus"))
+            event.connect("drag-data-received", lambda _w, _c, _x, _y, data, *_: self.drop(data.get_data(), number))
 
             def clicked(_, event):
                 if event.button == 3:
@@ -423,10 +576,7 @@ def run_view():
                     menu.show_all()
                     menu.popup_at_pointer(event)
                 elif event.button == 1:
-                    # Choisir un bureau y mène et ferme la vue (#3074).
-                    self.hide()
-                    _run(["wmctrl", "-s", str(number)])
-                    Gtk.main_quit()
+                    self.go_to(number)
                 return True
             event.connect("button-release-event", clicked)
             return event
@@ -447,6 +597,22 @@ def run_view():
         def key(self, _, event):
             if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_Super_L, Gdk.KEY_Super_R):
                 self.close_view()
+                return True
+            focused = self.get_focus()
+            # Tab : de la grille au bureau courant de la bande, et retour.
+            if event.keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_KP_Tab):
+                if isinstance(focused, Gtk.FlowBoxChild) or focused is None:
+                    target = getattr(self, "current_desk", None)
+                else:
+                    target = self.flow.get_child_at_index(0)
+                    target = target if target is not None and getattr(target.get_child(), "window_id", None) else None
+                if target is not None:
+                    target.grab_focus()
+                    return True
+            if event.keyval == Gdk.KEY_Delete and isinstance(focused, Gtk.FlowBoxChild) \
+                    and getattr(focused.get_child(), "window_id", None):
+                _run(["wmctrl", "-i", "-c", focused.get_child().window_id])
+                GLib.timeout_add(300, self.refresh_later)
                 return True
             return False
 

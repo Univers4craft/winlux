@@ -252,6 +252,18 @@ unsafe fn file_path(info: usize) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()
 }
 
+/// HRESULT_FROM_WIN32 de l'erreur de lecture du fichier examiné.
+fn read_error(e: &std::io::Error) -> u32 {
+    let code = match e.raw_os_error() {
+        Some(libc::ENOENT) => 2,               // ERROR_FILE_NOT_FOUND
+        Some(libc::EACCES | libc::EPERM) => 5, // ERROR_ACCESS_DENIED
+        Some(libc::ENOMEM) => 8,               // ERROR_NOT_ENOUGH_MEMORY
+        Some(libc::EISDIR) => 5,               // ERROR_ACCESS_DENIED
+        _ => 30,                               // ERROR_READ_FAULT
+    };
+    0x8007_0000 | code
+}
+
 fn fail(status: u32) -> i32 {
     crate::process::set_last_error(status);
     status as i32
@@ -331,8 +343,16 @@ pub unsafe extern "win64" fn WinVerifyTrust(_hwnd: usize, action: usize, data: u
     let Some(path) = (if info == 0 { None } else { file_path(info) }) else {
         return fail(E_INVALIDARG);
     };
-    use crate::setup::appx_signature::{examine_pe_with_certs, Signature};
-    let (signature, certs) = examine_pe_with_certs(&path);
+    use crate::setup::appx_signature::{examine_pe_file, Signature};
+    // Fichier illisible : son erreur, pas un verdict sur la signature
+    // (#3215 : « aucune signature » ou « fichier modifié » étaient faux).
+    let (signature, certs) = match examine_pe_file(&path) {
+        Ok(found) => found,
+        Err(e) => {
+            crate::log_warn!("wintrust", "WinVerifyTrust({}) : {e}", path.display());
+            return fail(read_error(&e));
+        }
+    };
     let status = match &signature {
         Signature::Verified { .. } => 0,
         Signature::Absent => TRUST_E_NOSIGNATURE,

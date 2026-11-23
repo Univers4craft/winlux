@@ -146,6 +146,107 @@ pub fn symlink_stays_inside(rel: &Path, target: &str) -> bool {
     true
 }
 
+/// Le lien `rel` (sous `root`), résolu sur le disque en suivant aussi les
+/// liens qu'il traverse, mène-t-il hors de `root` ? `symlink_stays_inside`
+/// ne juge que le texte de la cible : `x → a/..` y passe, mais si `a → .`
+/// est un autre lien de l'archive, `x` désigne le parent du dossier
+/// d'extraction (#3062). Un composant absent est pris tel quel ; une cible
+/// absolue ou une boucle de liens compte comme une sortie.
+pub fn link_escapes(root: &Path, rel: &Path) -> bool {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+    let mut stack: Vec<OsString> = Vec::new();
+    let mut todo: VecDeque<OsString> = rel
+        .components()
+        .map(|c| c.as_os_str().to_os_string())
+        .collect();
+    let mut hops = 0;
+    while let Some(part) = todo.pop_front() {
+        match part.to_str() {
+            Some("" | ".") => continue,
+            Some("..") => {
+                if stack.pop().is_none() {
+                    return true;
+                }
+                continue;
+            }
+            Some("/") => return true,
+            _ => {}
+        }
+        stack.push(part);
+        let here: PathBuf = stack.iter().fold(root.to_path_buf(), |p, c| p.join(c));
+        let Ok(meta) = std::fs::symlink_metadata(&here) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        hops += 1;
+        let Ok(target) = std::fs::read_link(&here) else {
+            return true;
+        };
+        if hops > 40 || target.is_absolute() {
+            return true;
+        }
+        stack.pop();
+        for c in target.components().rev() {
+            todo.push_front(c.as_os_str().to_os_string());
+        }
+    }
+    false
+}
+
+/// Crée les liens symboliques différés d'une extraction, puis retire ceux
+/// qui, une fois tous en place, mènent hors de `dest` en passant par un autre
+/// lien (#3062). Une archive téléchargée n'est pas fiable.
+pub fn create_links(dest: &Path, links: Vec<(PathBuf, String)>) -> io::Result<()> {
+    let mut made = Vec::new();
+    for (rel, target) in links {
+        if !symlink_stays_inside(&rel, &target) || !no_symlink_parent(dest, &rel) {
+            continue;
+        }
+        let p = dest.join(&rel);
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        if std::os::unix::fs::symlink(&target, &p).is_ok() {
+            made.push(rel);
+        }
+    }
+    remove_escaping(dest, &made)
+}
+
+/// Après une extraction par un outil externe (7-Zip, unrar, unar, bsdtar),
+/// qui crée les liens lui-même : retire ceux qui mènent hors de `dest`
+/// (#3325), avec la même règle que `create_links`.
+pub fn remove_escaping_links(dest: &Path) -> io::Result<()> {
+    let links: Vec<PathBuf> = walk(dest)?
+        .into_iter()
+        .filter(|e| e.meta.file_type().is_symlink())
+        .map(|e| e.rel)
+        .collect();
+    remove_escaping(dest, &links)
+}
+
+fn remove_escaping(dest: &Path, made: &[PathBuf]) -> io::Result<()> {
+    // Retirer un lien peut en rendre un autre sortant : on recommence
+    // jusqu'à ce qu'aucun ne sorte plus.
+    loop {
+        let mut removed = false;
+        for rel in made {
+            let p = dest.join(rel);
+            let is_link = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink());
+            if is_link && link_escapes(dest, rel) {
+                std::fs::remove_file(&p)?;
+                removed = true;
+            }
+        }
+        if !removed {
+            return Ok(());
+        }
+    }
+}
+
 pub struct WalkEntry {
     pub rel: PathBuf,
     pub meta: std::fs::Metadata,
@@ -239,5 +340,30 @@ mod tests {
         assert!(symlink_stays_inside(Path::new("a/l"), "../b"));
         assert!(!symlink_stays_inside(Path::new("l"), "../b"));
         assert!(!symlink_stays_inside(Path::new("l"), "/etc"));
+    }
+
+    /// #3062 : résolution réelle d'un lien qui passe par un autre lien.
+    #[test]
+    fn lien_resolu_sur_le_disque_3062() {
+        let d = std::env::temp_dir().join(format!("winlux-util-3062-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sous")).unwrap();
+        let link = |t: &str, n: &str| std::os::unix::fs::symlink(t, d.join(n)).unwrap();
+        link(".", "a");
+        link("a/..", "x");
+        link("a/sous", "dedans");
+        link("sous/../..", "sortie");
+        link("boucle2", "boucle1");
+        link("boucle1", "boucle2");
+        link("absent/../sous", "pendant");
+        link("/etc", "absolu");
+        assert!(!link_escapes(&d, Path::new("a")));
+        assert!(link_escapes(&d, Path::new("x")));
+        assert!(!link_escapes(&d, Path::new("dedans")));
+        assert!(link_escapes(&d, Path::new("sortie")));
+        assert!(link_escapes(&d, Path::new("boucle1")));
+        assert!(!link_escapes(&d, Path::new("pendant")));
+        assert!(link_escapes(&d, Path::new("absolu")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
