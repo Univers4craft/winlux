@@ -123,6 +123,28 @@ def navigation_kind(WebKit2, action):
     return 2
 
 
+def web_error_status(error):
+    """COREWEBVIEW2_WEB_ERROR_STATUS d'une erreur de chargement WebKit (#2980).
+
+    Nom d'hôte inconnu → HOST_NAME_NOT_RESOLVED (13) ; connexion refusée →
+    CANNOT_CONNECT (12) ; délai dépassé → TIMEOUT (7) ; hôte ou réseau
+    injoignable → SERVER_UNREACHABLE (6) ; chargement annulé (par WebKit,
+    par une nouvelle navigation ou par une décision de l'application) →
+    OPERATION_CANCELED (14) ; le reste → UNKNOWN (0).
+    """
+    domain = getattr(error, "domain", "")
+    code = getattr(error, "code", -1)
+    if domain == "g-resolver-error-quark":
+        return 13
+    if domain == "g-io-error-quark":
+        return {39: 12, 24: 7, 37: 6, 38: 6, 19: 14}.get(code, 0)
+    if domain == "WebKitNetworkError" and code == 302:
+        return 14
+    if domain == "WebKitPolicyError" and code == 102:
+        return 14
+    return 0
+
+
 def completion(code):
     """(IsSuccess, WebErrorStatus) d'une page chargée avec le code HTTP `code` (#2974).
 
@@ -715,7 +737,8 @@ class View:
 
     def on_failed(self, view, event, uri, error):
         self._failed = True
-        emit(ev="nav_completed", nav=self.nav, ok=False, status=0)
+        emit(ev="nav_completed", nav=self.nav, ok=False, status=0,
+             error=web_error_status(error))
         return False
 
     def on_title(self, view, _param):
