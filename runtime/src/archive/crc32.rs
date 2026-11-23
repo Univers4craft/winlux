@@ -54,8 +54,8 @@ impl Crc32 {
     pub fn update(&mut self, data: &[u8]) {
         let t = &SLICES;
         let mut c = !self.0;
-        let mut blocks = data.chunks_exact(16);
-        for b in &mut blocks {
+        let (blocks, rest) = data.as_chunks::<16>();
+        for b in blocks {
             let w = c ^ u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
             c = t[15][(w & 0xFF) as usize]
                 ^ t[14][((w >> 8) & 0xFF) as usize]
@@ -74,7 +74,7 @@ impl Crc32 {
                 ^ t[1][b[14] as usize]
                 ^ t[0][b[15] as usize];
         }
-        for &b in blocks.remainder() {
+        for &b in rest {
             c = TABLE[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
         }
         self.0 = !c;
