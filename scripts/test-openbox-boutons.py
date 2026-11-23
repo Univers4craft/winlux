@@ -84,11 +84,15 @@ def buttons(frame, work, colours):
 
 
 def main():
-    for tool in (CC, "Xvfb", "xdotool", "xprop", "xwininfo", "xwd", "convert"):
-        if not shutil.which(tool):
-            print(f"{tool} absent : test sauté"); return 0
+    # Un outil ou le runtime manquant fait échouer le test : sauté, il
+    # laissait l'étape verte sans rien vérifier (#3407).
+    missing = [t for t in (CC, "Xvfb", "xdotool", "xprop", "xwininfo", "xwd", "convert") if not shutil.which(t)]
+    if missing:
+        print(f"ÉCHEC : outils absents ({', '.join(missing)}) : le test ne peut rien vérifier (#3407)")
+        return 1
     if not WINLUX.is_file():
-        print("runtime absent : test sauté"); return 0
+        print(f"ÉCHEC : runtime absent ({WINLUX}) : cargo build --release -p winlux (#3407)")
+        return 1
     if not OPENBOX.is_file():
         print(f"ÉCHEC : openbox de Winlux absent ({OPENBOX}) : sh scripts/build-openbox.sh build/openbox")
         return 1

@@ -566,7 +566,7 @@ jobs:
           deps="autoconf automake libtool gettext autopoint pkg-config libglib2.0-dev libxml2-dev
             libpango1.0-dev libx11-dev libxft-dev libxrandr-dev libxinerama-dev libxcursor-dev
             libstartup-notification0-dev libsm-dev libxext-dev libimlib2-dev librsvg2-dev libxi-dev
-            openbox xvfb xdotool x11-utils x11-apps imagemagick gcc-mingw-w64-x86-64-win32"
+            openbox xvfb xdotool x11-utils x11-apps imagemagick wmctrl python3-gi gir1.2-gtk-3.0 gcc-mingw-w64-x86-64-win32"
           sudo apt-get install -y -q $deps || { sudo apt-get update -q && sudo apt-get install -y -q $deps; }
           sh scripts/build-openbox.sh build/openbox
           WINLUX_OPENBOX=build/openbox/openbox /usr/bin/python3 -B scripts/test-openbox-boutons.py
