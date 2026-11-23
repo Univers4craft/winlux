@@ -11216,7 +11216,7 @@ pub(crate) fn run_apcs() -> bool {
 }
 /// Attente alertable : APC en attente → elles tournent et on rend
 /// WAIT_IO_COMPLETION (0xC0) ; sinon `wait(tranche)` jusqu'au délai.
-fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
+pub(crate) fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
     const WAIT_IO_COMPLETION: u32 = 0xC0;
     const WAIT_TIMEOUT: u32 = 258;
     if run_apcs() {
