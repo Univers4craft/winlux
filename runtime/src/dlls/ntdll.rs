@@ -3366,6 +3366,14 @@ mod ouvertures_tests {
             "NtOpenMutant",
             "NtCreateMutant",
             "NtCreateSection",
+            "NtAddAtom",
+            "NtAddAtomEx",
+            "NtFindAtom",
+            "NtDeleteAtom",
+            "NtQueryInformationAtom",
+            // Les 27 noms cherchés par le courtier d'Acrobat (passe i17, #3304).
+            "NtOpenSection",
+            "NtDeleteValueKey",
         ] {
             assert!(e.contains_key(name), "{name} absent de ntdll");
         }
