@@ -357,7 +357,7 @@ pub(super) unsafe fn click_chip(p: &mut Pane, r: &Rect, x: i32, y: i32) -> bool 
     for (i, c) in chip_rects(&l).iter().enumerate() {
         if inside(c, x, y) {
             FILTER = i as u8;
-            p.sel = [0; MAX_ENTRIES / 64];
+            p.sel.zero();
             rebuild_view(p);
             return true;
         }
@@ -780,7 +780,7 @@ pub(super) unsafe fn regression() {
     p.search.len = 0;
     p.count = 0;
     p.scroll = 0;
-    p.sel = [0; MAX_ENTRIES / 64];
+    p.sel.zero();
     for i in 0..PLACES.len() {
         add_entry(p, place_label(i), true, false, 0, 0, Some(Kind::Folder));
     }
