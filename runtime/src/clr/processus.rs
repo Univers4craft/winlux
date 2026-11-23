@@ -193,6 +193,18 @@ unsafe fn natif(name: &str, args: &[Value]) -> Option<Value> {
             super::threads::gil_restore(depth);
             Value::I32(r as i32)
         }
+        // AttendreSaisie(h, ms) : WaitForInputIdle de user32 (#3288), verrou
+        // global rendu pendant l'attente comme pour Attendre (#3287).
+        // 0 : prêt ; 258 : délai écoulé ; -1 : échec (sans interface,
+        // terminé).
+        "AttendreSaisie" => {
+            let h = arg_i64(args, 0) as usize;
+            let ms = arg_i64(args, 1) as i32;
+            let depth = super::threads::gil_release_all();
+            let r = unsafe { crate::dlls::user32_more::wait_for_input_idle(h, ms as u32) };
+            super::threads::gil_restore(depth);
+            Value::I32(r as i32)
+        }
         // Image(h) : chemin Windows du programme, ou null (accès refusé).
         // Le processus courant se lit par GetModuleFileNameW ; les autres
         // passent par QueryFullProcessImageNameW et sa règle de comptes.
