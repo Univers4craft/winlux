@@ -15,12 +15,13 @@ command -v timeout >/dev/null 2>&1 || { echo "timeout est requis" >&2; exit 1; }
 test -f "$iso" || { echo "ISO absente : $iso" >&2; exit 1; }
 mkdir -p "$(dirname -- "$log")"
 
-# KVM quand le runner l'offre, comme test-browsers-vm.sh et
-# test-install-vm-guest.sh (#3317) : en TCG, le démarrage bios mangeait
-# 141 à 179 s des 180 s de budget. uefi32 reste en TCG tant que la panique
-# intermittente de #3199, vue seulement en TCG, n'est pas expliquée.
+# bios prend KVM quand le runner l'offre, comme test-browsers-vm.sh et
+# test-install-vm-guest.sh (#3317) : en TCG, il mangeait 141 à 179 s des
+# 180 s de budget ; en KVM, 46 s. uefi reste en TCG (126 s) : sous KVM,
+# OVMF est resté muet 180 s sur une passe sur deux (run 45112741426).
+# uefi32 reste en TCG pour #3199.
 accel=tcg
-if test "$mode" != uefi32 && test -r /dev/kvm && test -w /dev/kvm; then accel=kvm; fi
+if test "$mode" = bios && test -r /dev/kvm && test -w /dev/kvm; then accel=kvm; fi
 accel=${WINLUX_QEMU_ACCEL:-$accel}
 case "$accel" in kvm|tcg) ;; *) echo "accélérateur invalide : $accel" >&2; exit 1 ;; esac
 
