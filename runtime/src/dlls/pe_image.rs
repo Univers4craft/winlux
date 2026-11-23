@@ -515,6 +515,40 @@ mod tests {
         }
     }
 
+    /// #3338 : la table d'exports de l'image kernel32 porte aussi les noms
+    /// que GetProcAddress(kernel32, …) fait suivre vers advapi32 (Reg*) et
+    /// ntdll (RtlFillMemory) : un programme qui lit la table les trouve.
+    #[test]
+    fn kernel32_table_avec_registre_et_rtl_3338() {
+        let h = super::super::module_handle("kernel32").expect("kernel32");
+        unsafe {
+            for name in ["RegOpenKeyExW", "RegQueryValueExW", "RtlFillMemory"] {
+                assert!(
+                    manual_lookup(h, name).is_some(),
+                    "kernel32!{name} absent de la table"
+                );
+            }
+            for &name in super::super::KERNEL32_REGISTRY {
+                assert_eq!(
+                    manual_lookup(h, name).is_some(),
+                    super::super::kernel32_proc(name, false).is_some(),
+                    "kernel32!{name} : table et GetProcAddress divergent"
+                );
+            }
+            // Tout ce que GetProcAddress rend, sauf RaiseException, dont le
+            // relais vit hors du binaire (voir #3348).
+            for name in super::super::kernel32_surface() {
+                if name == "RaiseException" {
+                    continue;
+                }
+                assert!(
+                    manual_lookup(h, name).is_some(),
+                    "kernel32!{name} : GetProcAddress le rend, la table non"
+                );
+            }
+        }
+    }
+
     /// Lecture de la table d'exports comme le fait le bac à sable de
     /// Chromium : en-têtes PE, répertoire, recherche par nom.
     unsafe fn manual_lookup(base: usize, wanted: &str) -> Option<usize> {
