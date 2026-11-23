@@ -61,6 +61,8 @@ const STARS_FILE: &str = "/usr/share/winlux/wallpapers/winlux-prisme-aurore.etoi
 const TWINKLE_MIN_GLOW: f64 = 125.0;
 /// Cadence du scintillement et de l'étoile filante.
 const TWINKLE_TICK: Duration = Duration::from_millis(250);
+/// Sur batterie : deux fois moins d'images, et pas d'étoile filante.
+const TWINKLE_TICK_BATTERY: Duration = Duration::from_millis(500);
 const METEOR_TICK: Duration = Duration::from_millis(33);
 const METEOR_SECONDS: f64 = 1.1;
 /// Contrôles lents : écran éteint, batterie.
@@ -357,25 +359,100 @@ fn wallpaper_of(listing: &str, monitor: &str, desktop: u32) -> Option<String> {
 
 // ── Batterie ───────────────────────────────────────────────────────────────
 
-fn battery_low() -> bool {
+/// (batterie faible, sur batterie) : faible = 20 % ou moins en décharge.
+fn power_state() -> (bool, bool) {
     let dir = std::env::var("WINLUX_FOND_ANIME_POWER")
         .unwrap_or_else(|_| "/sys/class/power_supply".into());
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
+        return (false, false);
     };
-    entries.flatten().any(|e| {
+    let (mut low, mut discharging) = (false, false);
+    for e in entries.flatten() {
         let read = |f: &str| {
             std::fs::read_to_string(e.path().join(f))
                 .unwrap_or_default()
                 .trim()
                 .to_string()
         };
-        read("type") == "Battery"
-            && read("status") == "Discharging"
-            && read("capacity")
-                .parse::<u32>()
-                .is_ok_and(|c| c <= BATTERY_LOW)
-    })
+        if read("type") != "Battery" || read("status") != "Discharging" {
+            continue;
+        }
+        discharging = true;
+        low |= read("capacity")
+            .parse::<u32>()
+            .is_ok_and(|c| c <= BATTERY_LOW);
+    }
+    (low, discharging)
+}
+
+// ── Écran verrouillé ───────────────────────────────────────────────────────
+
+/// Dossier des marqueurs de winlux-lock : son écran est une fenêtre
+/// « popup » hors de la liste des clients, que la règle du plein écran ne
+/// voit pas.
+fn lock_dir() -> PathBuf {
+    std::env::var_os("WINLUX_FOND_ANIME_LOCK_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/run/winlux/lock"))
+}
+
+/// Même nom que winlux-lock.py (`active_file`) : « active » sur :0,
+/// « active-N » sur :N.
+fn lock_active_file() -> PathBuf {
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    let number: String = display
+        .rsplit(':')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    let name = if number.is_empty() || number == "0" {
+        "active".to_string()
+    } else {
+        format!("active-{number}")
+    };
+    lock_dir().join(name)
+}
+
+/// Verrouillé : le marqueur nomme un processus vivant (comme `is_locked`).
+fn screen_locked() -> bool {
+    let Some(pid) = std::fs::read_to_string(lock_active_file())
+        .ok()
+        .and_then(|t| t.trim().parse::<i32>().ok())
+    else {
+        return false;
+    };
+    pid > 0
+        && (unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+/// Surveillance du dossier des marqueurs par inotify : aucun réveil tant
+/// qu'il ne change pas.
+fn watch_lock_dir() -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let dir = std::ffi::CString::new(lock_dir().as_os_str().as_bytes()).ok()?;
+    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    if fd < 0 {
+        return None;
+    }
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    let mask = libc::IN_CREATE
+        | libc::IN_DELETE
+        | libc::IN_CLOSE_WRITE
+        | libc::IN_MOVED_TO
+        | libc::IN_MOVED_FROM;
+    (unsafe { libc::inotify_add_watch(fd, dir.as_ptr(), mask) } >= 0).then_some(owned)
+}
+
+fn drain(fd: &std::os::fd::OwnedFd) {
+    let mut buf = [0u8; 4096];
+    while unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
 }
 
 // ── X11 ────────────────────────────────────────────────────────────────────
@@ -533,6 +610,9 @@ struct Anim {
     saver_on: bool,
     screen_off: bool,
     battery_low: bool,
+    on_battery: bool,
+    locked: bool,
+    lock_watch: Option<std::os::fd::OwnedFd>,
     meteor: Option<Meteor>,
     next_meteor: Instant,
     rng: Rng,
@@ -602,6 +682,9 @@ impl Anim {
             saver_on: false,
             screen_off: false,
             battery_low: false,
+            on_battery: false,
+            locked: false,
+            lock_watch: None,
             meteor: None,
             next_meteor: Instant::now() + Duration::from_secs(20),
             rng: Rng(std::time::SystemTime::now()
@@ -854,7 +937,7 @@ impl Anim {
     }
 
     fn paused(&self) -> bool {
-        self.saver_on || self.screen_off || self.battery_low
+        self.saver_on || self.screen_off || self.battery_low || self.locked
     }
 
     fn visible(&self, monitor: usize) -> bool {
@@ -1170,7 +1253,9 @@ impl Anim {
         self.conn.map_window(self.win)?;
         self.refresh_clients();
         self.check_dpms();
-        self.battery_low = battery_low();
+        (self.battery_low, self.on_battery) = power_state();
+        self.lock_watch = watch_lock_dir();
+        self.locked = screen_locked();
         if let Some(r) = self
             .conn
             .extension_information(screensaver::X11_EXTENSION_NAME)?
@@ -1198,7 +1283,12 @@ impl Anim {
                 next_dpms = now + DPMS_EVERY;
             }
             if now >= next_battery {
-                self.battery_low = battery_low();
+                (self.battery_low, self.on_battery) = power_state();
+                // Dossier créé après le lancement : on le surveille dès qu'il existe.
+                if self.lock_watch.is_none() {
+                    self.lock_watch = watch_lock_dir();
+                    self.locked = screen_locked();
+                }
                 next_battery = now + BATTERY_EVERY;
             }
             let visible = self.any_visible();
@@ -1216,14 +1306,21 @@ impl Anim {
             if visible {
                 if now >= next_frame {
                     let t = self.start.elapsed().as_secs_f64();
-                    if self.meteor.is_none() && now >= self.next_meteor {
+                    if self.meteor.is_none() && now >= self.next_meteor && !self.on_battery {
                         self.start_meteor();
                         self.next_meteor =
                             now + Duration::from_secs_f64(30.0 + 50.0 * self.rng.next());
                     }
                     let meteor = self.meteor_frame();
                     self.twinkle(t);
-                    next_frame = now + if meteor { METEOR_TICK } else { TWINKLE_TICK };
+                    next_frame = now
+                        + if meteor {
+                            METEOR_TICK
+                        } else if self.on_battery {
+                            TWINKLE_TICK_BATTERY
+                        } else {
+                            TWINKLE_TICK
+                        };
                 }
                 wake = wake.min(next_frame);
             }
@@ -1232,16 +1329,29 @@ impl Anim {
                 .saturating_duration_since(Instant::now())
                 .as_millis()
                 .min(i32::MAX as u128) as i32;
-            let mut pfd = libc::pollfd {
-                fd: self.conn.stream().as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
+            let mut pfds = [
+                libc::pollfd {
+                    fd: self.conn.stream().as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: self.lock_watch.as_ref().map_or(-1, |f| f.as_raw_fd()),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
             unsafe {
-                libc::poll(&mut pfd, 1, ms);
+                libc::poll(pfds.as_mut_ptr(), 2, ms);
             }
-            if pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
+            if pfds[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 {
                 return Ok("serveur X fermé");
+            }
+            if pfds[1].revents & libc::POLLIN != 0 {
+                if let Some(fd) = &self.lock_watch {
+                    drain(fd);
+                }
+                self.locked = screen_locked();
             }
         }
     }

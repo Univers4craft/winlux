@@ -15,7 +15,9 @@ for _nom in ("désactivé par défaut, rien ne tourne (#3079)",
              "autre fond (Aurore claire) : l'animation s'arrête d'elle-même (#3079)",
              "compositeur arrêté : l'animation s'arrête d'elle-même (#3079)",
              "désactivé dans Paramètres : l'animation s'arrête (#3079)",
-             "copie wallpaper.bmp de l'installation reconnue comme Aurore par son contenu (#3079)"):
+             "copie wallpaper.bmp de l'installation reconnue comme Aurore par son contenu (#3079)",
+             "écran verrouillé : aucune image dessinée (#3079)",
+             "sur batterie : cadence réduite de moitié (#3079)"):
     ok(_nom in _t, "test du fond animé : " + _nom)
 ok("scripts/test-fond-anime.py" in _ci, "la CI lance le test du fond animé (#3079)")
 ok("def animated_wallpaper" in _p and '"Animer le fond Winlux Aurore": (' in _p,

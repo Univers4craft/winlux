@@ -144,10 +144,11 @@ work = Path(tempfile.mkdtemp(prefix="fond-anime-"))
 xfconf = work / "xfconf.txt"
 power = work / "power"
 (power / "BAT0").mkdir(parents=True)
-for name, value in (("type", "Battery"), ("status", "Discharging"), ("capacity", "80")):
+(work / "lock").mkdir()
+for name, value in (("type", "Battery"), ("status", "Charging"), ("capacity", "80")):
     (power / "BAT0" / name).write_text(value + "\n")
 env = dict(os.environ, XDG_CONFIG_HOME=str(work / "config"), WINLUX_FOND_ANIME_XFCONF=str(xfconf),
-           WINLUX_FOND_ANIME_POWER=str(power),
+           WINLUX_FOND_ANIME_POWER=str(power), WINLUX_FOND_ANIME_LOCK_DIR=str(work / "lock"),
            WINLUX_FOND_ANIME_ETOILES=str(ROOT / "assets" / "wallpapers" / "winlux-prisme-aurore.etoiles"))
 
 
@@ -307,6 +308,18 @@ try:
     time.sleep(0.5)
     check(wakeups(pid, 3) >= 2, "économiseur d'écran coupé : l'animation reprend (#3079)")
 
+    # Écran verrouillé : winlux-lock pose /run/winlux/lock/active (pid vivant) ;
+    # sa fenêtre « popup » échappe à la règle du plein écran.
+    lock = work / "lock" / ("active" if os.environ.get("DISPLAY", ":0").rsplit(":", 1)[-1].split(".")[0] in ("", "0")
+                            else "active-" + os.environ["DISPLAY"].rsplit(":", 1)[-1].split(".")[0])
+    lock.write_text(f"{os.getpid()}\n")
+    time.sleep(0.5)
+    check(wakeups(pid, 4) < 0.5, "écran verrouillé : aucune image dessinée (#3079)")
+    lock.unlink()
+    time.sleep(0.5)
+    ac_rate = wakeups(pid, 4)
+    check(ac_rate >= 2, "écran déverrouillé : l'animation reprend (#3079)")
+
     # Changement de fond : xfdesktop repose sa pixmap, l'animation s'en va.
     wallpaper("winlux-prisme-aurore-clair.png")
     set_atoms(root, "_XROOTPMAP_ID", [1], XA_PIXMAP)
@@ -322,13 +335,25 @@ try:
     check(wait_gone(), "compositeur arrêté : l'animation s'arrête d'elle-même (#3079)")
     compositor(True)
 
+    # Sur batterie : deux fois moins d'images, pas d'étoile filante.
+    (power / "BAT0" / "status").write_text("Discharging\n")
+    cli("disable")
+    cli("enable")
+    pid = wait_running()
+    time.sleep(1)
+    battery_rate = wakeups(pid, 6) if pid else 99
+    check(0.5 < battery_rate < 0.7 * active, "sur batterie : cadence réduite de moitié (#3079)")
+    cli("disable")
+
     # Batterie faible au démarrage : aucune image.
     (power / "BAT0" / "capacity").write_text("15\n")
+    cli("enable")
     cli("ensure")
     pid = wait_running()
     time.sleep(1)
     check(pid is not None and wakeups(pid, 4) < 0.5, "batterie à 15 % sur batterie : aucune image dessinée (#3079)")
     (power / "BAT0" / "capacity").write_text("80\n")
+    (power / "BAT0" / "status").write_text("Charging\n")
 
     cli("disable")
     check(wait_gone(), "désactivé dans Paramètres : l'animation s'arrête (#3079)")
