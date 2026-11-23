@@ -395,7 +395,11 @@ pub fn load_data(path: &Path, tag: usize) -> Result<usize, String> {
             return Ok(m.base | tag);
         }
     }
-    let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    // Projeté, pas lu : seules les pages des en-têtes et des sections sont
+    // touchées, et seule l'image copiée reste ; lire tout le fichier coûtait
+    // sa taille en mémoire pour un chargement « ressources seulement »
+    // (#3244, comme #3164).
+    let file = ImageFile::open(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse_resources(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);
     let base = unsafe { map_aligned(size).ok_or("mémoire insuffisante pour l'image")? };
@@ -1692,6 +1696,72 @@ pub fn mark_initialized(base: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// #3244 : un chargement en données (LoadLibraryEx AS_DATAFILE,
+    /// DONT_RESOLVE_DLL_REFERENCES) ne lit pas tout le fichier. PE32+ minimal
+    /// (une section .rsrc vide) suivi de 64 Mo : moins de 1 Mo lu par ce fil.
+    #[test]
+    fn chargement_en_donnees_sans_lire_le_fichier_3244() {
+        fn lus() -> u64 {
+            std::fs::read_to_string("/proc/thread-self/io")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("rchar:"))
+                        .and_then(|l| l[6..].trim().parse().ok())
+                })
+                .unwrap_or(0)
+        }
+        let mut f = vec![0u8; 0x400];
+        let w16 = |f: &mut Vec<u8>, o: usize, v: u16| f[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        let w32 = |f: &mut Vec<u8>, o: usize, v: u32| f[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        f[0..2].copy_from_slice(b"MZ");
+        w32(&mut f, 0x3c, 0x40);
+        f[0x40..0x44].copy_from_slice(b"PE\0\0");
+        let coff = 0x44;
+        w16(&mut f, coff, 0x8664);
+        w16(&mut f, coff + 2, 1);
+        w16(&mut f, coff + 16, 0xf0);
+        w16(&mut f, coff + 18, 0x2022);
+        let opt = coff + 20;
+        w16(&mut f, opt, 0x20b);
+        w32(&mut f, opt + 32, 0x1000);
+        w32(&mut f, opt + 36, 0x200);
+        w32(&mut f, opt + 56, 0x2000);
+        w32(&mut f, opt + 60, 0x200);
+        w16(&mut f, opt + 68, 2);
+        w32(&mut f, opt + 108, 16);
+        w32(&mut f, opt + 108 + 4 + 2 * 8, 0x1000);
+        w32(&mut f, opt + 108 + 8 + 2 * 8, 16);
+        let sec = opt + 0xf0;
+        f[sec..sec + 5].copy_from_slice(b".rsrc");
+        w32(&mut f, sec + 8, 16);
+        w32(&mut f, sec + 12, 0x1000);
+        w32(&mut f, sec + 16, 0x200);
+        w32(&mut f, sec + 20, 0x200);
+        let dir = std::env::temp_dir().join(format!("winlux-3244-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Gros.dll");
+        std::fs::write(&path, &f).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(64 << 20)
+            .unwrap();
+        let before = lus();
+        let handle = load_data(&path, 2);
+        let read = lus() - before;
+        if let Ok(h) = handle {
+            free_data(h);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(handle.is_ok(), "{handle:?}");
+        assert!(
+            read < 1 << 20,
+            "{read} octets lus pour un chargement en données"
+        );
+    }
+
     use super::*;
 
     /// #1417 : SetDllDirectory("bin64") puis LoadLibrary("zlib1.dll") :

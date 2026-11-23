@@ -5578,8 +5578,18 @@ fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
 
 /// Renvoie le style WS_* de la fenêtre.
+/// Style d'une fenêtre. WS_VISIBLE y suit l'état visible, comme sous
+/// Windows où ShowWindow et SetWindowPos posent et ôtent ce bit (Learn,
+/// « Window Styles », #3247).
 pub fn window_style(hwnd: usize) -> Option<u32> {
-    lock(windows()).get(&hwnd).map(|w| w.style)
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    lock(windows()).get(&hwnd).map(|w| {
+        if w.visible {
+            w.style | WS_VISIBLE
+        } else {
+            w.style & !WS_VISIBLE
+        }
+    })
 }
 
 /// Enfant transparent qui laisse voir son parent : WS_CHILD et
