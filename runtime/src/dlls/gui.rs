@@ -516,6 +516,17 @@ type SentJob = Box<dyn FnOnce() -> isize + Send>;
 /// comme avant #2885, plutôt que de rester bloqué pour toujours.
 const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
 
+thread_local! {
+    /// Profondeur des messages envoyés par un autre fil en cours de
+    /// traitement sur ce fil (InSendMessage, InSendMessageEx, #3104).
+    static IN_SENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Le fil traite-t-il un message envoyé par un autre fil ?
+pub fn in_sent_message() -> bool {
+    IN_SENT.with(|d| d.get()) > 0
+}
+
 /// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
 /// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
 /// les attentes de messages et l'attente d'un SendMessage inter-fils.
@@ -530,7 +541,9 @@ pub fn deliver_sent() {
         };
         let job = lock(&sent.job).take();
         if let Some(job) = job {
+            IN_SENT.with(|d| d.set(d.get() + 1));
             let r = job();
+            IN_SENT.with(|d| d.set(d.get() - 1));
             *lock(&sent.result) = Some(r);
             sent.done.notify_all();
         }
@@ -3811,6 +3824,10 @@ fn change_active_top(new_top: usize) {
             crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
             new_top,
         );
+        crate::dlls::user32_more::notify_shell_hook(
+            crate::dlls::user32_more::HSHELL_WINDOWACTIVATED,
+            new_top,
+        );
     }
 }
 
@@ -4092,9 +4109,7 @@ pub fn pump_backend() {
         // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
         // la boîte Tonalité y laissait un geste à moitié fait, et la piste
         // générée n'était plus jamais redessinée (#1120).
-        let mouse = (0x0200..=0x020E).contains(&e.message)
-            || (0x00A0..=0x00AD).contains(&e.message)
-            || (0x0245..=0x024A).contains(&e.message);
+        let mouse = is_mouse_message(e.message);
         // Souris sur une autre fenêtre (hors molette, livrée à la fenêtre
         // qui a le focus), ou sortie de la fenêtre signalée par le backend.
         if e.message == WM_MOUSELEAVE {
@@ -4173,7 +4188,13 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: if geometry { BACKEND_GEOMETRY } else { promoted },
+            l_private: if geometry {
+                BACKEND_GEOMETRY
+            } else if promoted == 0 && (mouse || (0x0100..=0x0109).contains(&e.message)) {
+                BACKEND_INPUT
+            } else {
+                promoted
+            },
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -4438,6 +4459,17 @@ const SYSTEM_PAINT: u32 = 0x5750;
 /// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
 /// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
 pub const BACKEND_GEOMETRY: u32 = 0x5751;
+/// `l_private` d'un message clavier ou souris venu du serveur X, et non
+/// posté par un programme : GetCurrentInputMessageSource le rattache à son
+/// appareil (#1932).
+pub const BACKEND_INPUT: u32 = 0x5752;
+
+/// Messages souris de la zone client et du cadre, et WM_POINTER*.
+pub fn is_mouse_message(message: u32) -> bool {
+    (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message)
+}
 /// Message interne du backend : le cadre du gestionnaire autour d'une
 /// fenêtre a changé (lParam : gauche, droite, haut, bas sur 16 bits). Jamais
 /// distribué au programme (#2984).
@@ -5578,8 +5610,18 @@ fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
 
 /// Renvoie le style WS_* de la fenêtre.
+/// Style d'une fenêtre. WS_VISIBLE y suit l'état visible, comme sous
+/// Windows où ShowWindow et SetWindowPos posent et ôtent ce bit (Learn,
+/// « Window Styles », #3247).
 pub fn window_style(hwnd: usize) -> Option<u32> {
-    lock(windows()).get(&hwnd).map(|w| w.style)
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    lock(windows()).get(&hwnd).map(|w| {
+        if w.visible {
+            w.style | WS_VISIBLE
+        } else {
+            w.style & !WS_VISIBLE
+        }
+    })
 }
 
 /// Enfant transparent qui laisse voir son parent : WS_CHILD et
@@ -7216,7 +7258,11 @@ pub(crate) mod tests {
         let q = current_queue();
         assert!(pending_paint(hwnd, 0, 0).is_none());
         request_paint(hwnd);
-        let m = take_message(&q, hwnd, 0, 0).expect("WM_PAINT en file");
+        // Filtré sur WM_PAINT : un test voisin qui fait passer le programme
+        // au premier plan poste WM_ACTIVATEAPP à toutes ses fenêtres de
+        // premier niveau, celle-ci comprise, comme Windows le fait pour
+        // toutes les fenêtres de premier niveau de l'application.
+        let m = take_message(&q, hwnd, WM_PAINT, WM_PAINT).expect("WM_PAINT en file");
         assert_eq!(m.message, WM_PAINT);
         // Sans BeginPaint, la zone reste invalidée : WM_PAINT revient dès que
         // la file est vide, mais pas pour un filtre qui l'exclut.
@@ -7227,13 +7273,13 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // BeginPaint valide aussi.
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         let (hdc, _) = begin_paint(hwnd).unwrap();
         end_paint(hwnd, hdc);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         // DefWindowProc valide lui-même (comme BeginPaint/EndPaint sous Windows).
         request_paint(hwnd);
-        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         def_window_proc(hwnd, WM_PAINT, 0, 0);
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);

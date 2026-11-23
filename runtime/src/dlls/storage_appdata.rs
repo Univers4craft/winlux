@@ -108,7 +108,7 @@ impl Kind {
 }
 
 /// Famille du paquet courant, lue dans son AppxManifest.
-fn current_family() -> Option<String> {
+pub(crate) fn current_family() -> Option<String> {
     let f = crate::dlls::lookup("kernel32", "GetCurrentPackageFamilyName")?;
     let f: unsafe extern "win64" fn(*mut u32, *mut u16) -> u32 = unsafe { std::mem::transmute(f) };
     let mut buf = [0u16; 256];

@@ -451,6 +451,10 @@ _TR = {
     "Arrière-plan": ("Background", "Fondo", "Hintergrund"),
     "Winlux Aurore": ("Winlux Aurora", "Winlux Aurora", "Winlux Polarlicht"),
     "Winlux Aurore claire": ("Winlux Aurora light", "Winlux Aurora clara", "Winlux Polarlicht hell"),
+    "Animer le fond Winlux Aurore": ("Animate the Winlux Aurora background", "Animar el fondo Winlux Aurora", "Hintergrund Winlux Polarlicht animieren"),
+    "Les étoiles de Winlux Aurore scintillent et une étoile filante passe de temps en temps. L’animation s’arrête d’elle-même en plein écran, fenêtre agrandie, écran éteint ou batterie faible. Elle coûte environ 2 % d’un cœur du processeur tant que le fond est visible, rien quand il est caché.": ("The stars of Winlux Aurora twinkle and a shooting star passes now and then. The animation stops by itself in full screen, with a maximized window, when the screen is off or the battery is low. It costs about 2% of one processor core while the background is visible, nothing when it is hidden.", "Las estrellas de Winlux Aurora titilan y de vez en cuando pasa una estrella fugaz. La animación se detiene sola en pantalla completa, con una ventana maximizada, con la pantalla apagada o con la batería baja. Cuesta alrededor del 2 % de un núcleo del procesador mientras el fondo está visible, nada cuando está oculto.", "Die Sterne von Winlux Polarlicht funkeln, und ab und zu zieht eine Sternschnuppe vorbei. Die Animation hält von selbst an: im Vollbild, bei maximiertem Fenster, bei ausgeschaltetem Bildschirm oder schwachem Akku. Sie kostet etwa 2 % eines Prozessorkerns, solange der Hintergrund sichtbar ist, und nichts, wenn er verdeckt ist."),
+    "Choisissez le fond Winlux Aurore pour voir l’animation.": ("Choose the Winlux Aurora background to see the animation.", "Elija el fondo Winlux Aurora para ver la animación.", "Wählen Sie den Hintergrund Winlux Polarlicht, um die Animation zu sehen."),
+    "Indisponible sans les effets visuels du bureau.": ("Unavailable without the desktop visual effects.", "No disponible sin los efectos visuales del escritorio.", "Ohne die visuellen Effekte des Desktops nicht verfügbar."),
     "Winlux Nuit": ("Winlux Night", "Winlux Noche", "Winlux Nacht"),
     "Winlux Aube": ("Winlux Dawn", "Winlux Amanecer", "Winlux Morgenröte"),
     "Classique": ("Classic", "Clásico", "Klassisch"),
@@ -977,6 +981,11 @@ GLYPHS = {
     "users": '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 19c1.2-3.5 3.6-5.2 6.5-5.2s5.3 1.7 6.5 5.2"/><path d="M15 4.8a3.5 3.5 0 0 1 0 6.4M17.5 14c2 .7 3.3 2.4 4 5"/>',
     "key": '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2M14 9l2 2"/>',
     "backup": '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>',
+    # À propos de ce PC (#3053) : PC portable, puce, barrette de mémoire, carte graphique.
+    "pc": '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2.5 19h19M10 19l.5-3h3l.5 3"/>',
+    "cpu": '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9.5 3v3.5M14.5 3v3.5M9.5 17.5V21M14.5 17.5V21M3 9.5h3.5M3 14.5h3.5M17.5 9.5H21M17.5 14.5H21"/>',
+    "memory": '<rect x="3" y="7" width="18" height="9" rx="1"/><path d="M6.5 10v3M10 10v3M14 10v3M17.5 10v3M5 16v2.5M19 16v2.5M12 16v2.5"/>',
+    "gpu": '<rect x="3" y="6" width="18" height="11" rx="1.5"/><circle cx="9" cy="11.5" r="3"/><path d="M15 9.5h3M15 13.5h3M6 17v2.5M10 17v2.5"/>',
     "palette": '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.8 0-1.3-1-1.6-1-2.7 0-1 .8-1.6 1.8-1.6H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7" r="1"/>',
 }
 
@@ -2353,6 +2362,7 @@ class ExtraPages:
                    _t("Lever et coucher du soleil calculés pour votre fuseau horaire.") if mode == "auto" else None)
         if tool:
             self.wallpaper_modes(box, tool, moods)
+        self.animated_wallpaper(box)
         self.section(_t("Couleur d’accentuation"))
         palette = Gtk.Box(spacing=8)
         for color in ACCENTS:
@@ -2448,6 +2458,23 @@ class ExtraPages:
                     lambda on: update_start_menu_state(for_you=bool(on)),
                     _t("Fichiers récents, applications habituelles à cette heure et petites choses à faire, calculés sur ce PC sans rien envoyer. Coupé, le menu n’a plus qu’un volet, centré."))
         self.actions(box, [(_t("Effacer l’historique d’utilisation"), lambda: update_start_menu_state(usage=[], recent=[], dismissed=[]))])
+
+    def animated_wallpaper(self, box):
+        """Fond « Winlux Aurore » animé (#3079) : étoiles qui scintillent et
+        étoile filante, coupés dès que le fond est caché. Désactivé par défaut."""
+        if not have("winlux-fond-anime"):
+            return
+        answer = run(["winlux-fond-anime", "status"])
+        state = keyvals(answer.stdout) if answer else {}
+        on = state.get("enabled") == "on"
+        hint = _t("Les étoiles de Winlux Aurore scintillent et une étoile filante passe de temps en temps. "
+                  "L’animation s’arrête d’elle-même en plein écran, fenêtre agrandie, écran éteint ou batterie faible. Elle coûte environ 2 % d’un cœur du processeur tant que le fond est visible, rien quand il est caché.")
+        if on and state.get("reason") == "autre-fond":
+            hint = _t("Choisissez le fond Winlux Aurore pour voir l’animation.")
+        elif on and state.get("reason") == "sans-compositeur":
+            hint = _t("Indisponible sans les effets visuels du bureau.")
+        self.switch(box, _t("Animer le fond Winlux Aurore"), on,
+                    lambda value: self.tool(["winlux-fond-anime", "enable" if value else "disable"]), hint)
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
@@ -3170,11 +3197,15 @@ class ExtraPages:
         if hardware is not None: hardware.cpu_section(self)
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
 
-    # ── À propos : « Votre PC », sous la version et le noyau ──
+    # ── À propos de ce PC ──
 
     def sections_about(self):
+        """En-tête du PC, tuiles du matériel, démarrage mesuré (#3053), puis
+        « Votre PC » ; affichée aussitôt, complétée hors du fil GTK."""
         hardware = hardware_page()
-        if hardware is not None: hardware.pc_section(self, self.status)
+        if hardware is None: return
+        accent = appearance().get("accent", "#6a3df0")
+        hardware.about_panel(self, self.status, accent, lambda glyph, size=24: svg_image(line_svg(glyph, accent), size))
 
     # ── Presse-papiers (Windows + V) ──
 

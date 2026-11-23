@@ -718,6 +718,10 @@ struct ComTraced {
 
 /// Appels COM tracés depuis le démarrage (pour les tests).
 static COM_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub(crate) fn com_calls() -> u64 {
+    COM_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Journal d'une méthode COM tracée, après son retour : table et case,
 /// `this` et les trois arguments suivants, valeur rendue (HRESULT dans
@@ -826,7 +830,7 @@ pub fn com_trace_table<T>(t: &'static T, module: &str, label: &str) -> Option<*c
     Some(com_trace_table_for(t, label) as *const T)
 }
 
-fn com_trace_table_for<T>(t: &'static T, label: &str) -> usize {
+pub(crate) fn com_trace_table_for<T>(t: &'static T, label: &str) -> usize {
     static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
     let key = t as *const T as usize;
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());

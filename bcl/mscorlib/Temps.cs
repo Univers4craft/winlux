@@ -16,6 +16,23 @@ namespace System
         public SystemException(string message, Exception innerException) : base(message, innerException) { }
     }
 
+    // Levée au premier accès à un type dont le constructeur statique a
+    // échoué, puis relevée telle quelle à chaque accès suivant (ECMA-335
+    // §II.10.5.3.3 ; MS Learn, « TypeInitializationException Class ») :
+    // le moteur la construit avec ce constructeur (#2001).
+    public sealed class TypeInitializationException : SystemException
+    {
+        private string _typeName;
+
+        public TypeInitializationException(string fullTypeName, Exception innerException)
+            : base("The type initializer for '" + fullTypeName + "' threw an exception.", innerException)
+        {
+            _typeName = fullTypeName;
+        }
+
+        public string TypeName { get { return _typeName ?? string.Empty; } }
+    }
+
     public class ArithmeticException : SystemException
     {
         public ArithmeticException() { }

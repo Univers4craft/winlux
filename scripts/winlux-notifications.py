@@ -68,6 +68,39 @@ XML = '''<node><interface name="org.freedesktop.Notifications">
 <method name="Clear"/><method name="MarkSeen"/><method name="Dismiss"><arg type="u" direction="in"/></method><method name="Activate"><arg type="u" direction="in"/><arg type="s" direction="in"/></method>
 </interface></node>'''
 
+OBJECT_PATH = "/org/freedesktop/Notifications"
+INTROSPECTABLE = "org.freedesktop.DBus.Introspectable"
+# Signature d'entrée de chaque méthode servie, tirée de XML.
+METHODS = {interface.name: {method.name: "".join(arg.signature for arg in method.in_args)
+                            for method in interface.methods}
+           for interface in Gio.DBusNodeInfo.new_for_xml(XML).interfaces}
+# Membres servis quand l'appel ne nomme pas d'interface (permis par D-Bus).
+OWN_MEMBERS = {name: interface for interface, methods in METHODS.items() for name in methods}
+OWN_MEMBERS["Introspect"] = INTROSPECTABLE
+
+
+class BusReply:
+    """Réponse à un appel reçu par le filtre (#3278) : mêmes noms que
+    Gio.DBusMethodInvocation, sans en garder aucune."""
+    __slots__ = ("connection", "message")
+
+    def __init__(self, connection, message):
+        self.connection, self.message = connection, message
+
+    def send(self, reply):
+        if not self.message.get_flags() & Gio.DBusMessageFlags.NO_REPLY_EXPECTED:
+            self.connection.send_message(reply, Gio.DBusSendMessageFlags.NONE)
+
+    def return_value(self, value):
+        reply = self.message.new_method_reply()
+        if value is not None:
+            reply.set_body(value)
+        self.send(reply)
+
+    def return_dbus_error(self, name, text):
+        self.send(self.message.new_method_error_literal(name, text))
+
+
 class Notifications:
     def __init__(self):
         # Temporaire d'avant #3060, né en 0644 : jamais laissé derrière.
@@ -104,8 +137,46 @@ class Notifications:
 
     def acquired(self, connection, _):
         self.bus = connection
-        for interface in Gio.DBusNodeInfo.new_for_xml(XML).interfaces:
-            connection.register_object("/org/freedesktop/Notifications", interface, self.method, None, None)
+        # Pas de register_object (#3278) : chez PyGObject, chaque appel servi
+        # par une fonction Python garde son GDBusMethodInvocation (message et
+        # paramètres) à jamais, environ 3,6 Ko par notification sur l'ISO
+        # (GLib 2.88, PyGObject 3.56). Le filtre de la connexion reçoit le
+        # message lui-même, et la réponse est construite à partir de lui.
+        connection.add_filter(self.incoming)
+
+    def incoming(self, connection, message, received):
+        """Filtre de la connexion, dans le fil de GDBus : les appels adressés
+        à l'objet des notifications sont servis dans la boucle principale ;
+        tout le reste suit son chemin normal."""
+        if (received and message.get_message_type() == Gio.DBusMessageType.METHOD_CALL
+                and message.get_path() == OBJECT_PATH
+                and (message.get_interface() in (*METHODS, INTROSPECTABLE)
+                     or message.get_interface() is None and message.get_member() in OWN_MEMBERS)):
+            GLib.idle_add(self.dispatch, connection, message, priority=GLib.PRIORITY_DEFAULT)
+            return None
+        return message
+
+    def dispatch(self, connection, message):
+        interface, member = message.get_interface(), message.get_member()
+        reply = BusReply(connection, message)
+        if interface is None:
+            interface = OWN_MEMBERS[member]
+        if interface == INTROSPECTABLE:
+            if member == "Introspect" and message.get_signature() == "":
+                reply.return_value(GLib.Variant("(s)", (XML,)))
+            else:
+                reply.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", f"Méthode inconnue : {member}")
+            return False
+        signature = METHODS.get(interface, {}).get(member)
+        if signature is None:
+            reply.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", f"Méthode inconnue : {interface}.{member}")
+        elif message.get_signature() != signature:
+            reply.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs",
+                                    f"Signature « {message.get_signature()} » au lieu de « {signature} »")
+        else:
+            self.method(connection, message.get_sender(), OBJECT_PATH, interface, member,
+                        message.get_body() or GLib.Variant("()", ()), reply)
+        return False
 
     def method(self, connection, sender, path, interface, method, params, invocation):
         values = params.unpack()
