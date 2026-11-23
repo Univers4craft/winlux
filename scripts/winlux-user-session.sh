@@ -471,6 +471,8 @@ while kill -0 "$wm_pid" 2>/dev/null; do
                 done
                 sleep 1
                 kill -USR1 "$compositor_pid" 2>/dev/null || true
+                # Fond Aurore animé (#3079), seulement s'il est activé dans Paramètres.
+                if test -x /usr/bin/winlux-fond-anime; then /usr/bin/winlux-fond-anime ensure; fi
             ) </dev/null >/dev/null 2>&1 &
         fi
         # Attente sans « sleep 1 » à chaque seconde (#3297) : avec un piège
