@@ -100,6 +100,9 @@ else
 fi
 wm_pid=$!
 pids="$pids $wm_pid"
+# Une fenêtre affichée pendant le démarrage d'openbox ne doit pas attendre un
+# autre événement X (#3190) : réveils tant qu'il démarre.
+if test -x /usr/bin/winlux-wm-reveil; then (/usr/bin/winlux-wm-reveil "$wm_pid" </dev/null >/dev/null 2>&1 &); fi
 # Son (#115) : PipeWire du compte, un flux par programme (volume par appli).
 if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber && ! pgrep -u "$uid" -x pipewire >/dev/null 2>&1; then
     start pipewire.log /usr/bin/pipewire
