@@ -293,6 +293,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod taskschd_dll;
 pub mod teams_win32;
+pub mod textserv;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -1090,7 +1091,7 @@ fn builtins() -> &'static Vec<Builtin> {
             // charger (LoadLibrary de wxWidgets, #795).
             Builtin {
                 name: "msftedit",
-                exports: Exports::new(),
+                exports: textserv::exports(),
                 handle: 0,
             },
             Builtin {
