@@ -12,6 +12,7 @@ pub mod exceptions;
 pub mod fichiers;
 pub mod gc;
 pub mod il;
+pub mod initialisations;
 pub mod interop;
 pub mod marshal;
 pub mod membres;
