@@ -75,6 +75,11 @@ pub(super) enum A {
     /// de MFCreateStreamDescriptor) ; le nombre d'éléments est l'argument
     /// `I` qui le précède (#2428).
     InArr(&'static Iface),
+    /// Tableau d'interfaces rendu (T* de GetMany sur IVectorView<T> ou
+    /// IIterator<T>) : sa capacité est l'argument `I` qui le précède, le
+    /// nombre d'éléments écrits est lu au retour dans l'UINT32* qui le suit.
+    /// Chaque élément revient au code x86 par son mandataire (#3179).
+    OutArr(&'static Iface),
     /// DISPPARAMS* d'IDispatch::Invoke : 16 octets et VARIANT de 16 octets
     /// en x86, 24 et 24 en x64 ; les VARIANT par référence reviennent
     /// (#2771, `com_disp.rs`).
@@ -135,6 +140,23 @@ pub(super) static IUNKNOWN: Iface = Iface {
     iid: ole(0),
     parent: None,
     methods: &[Some(&[Iid, OutQ]), Some(&[]), Some(&[])],
+};
+
+/// IAgileObject : interface marqueur, sans méthode propre au-delà
+/// d'IUnknown (windows-rs 0.62.2, MIT, `Win32/System/Com`). Les objets WinRT
+/// du runtime l'acceptent ; un programme x86 qui la demande pour savoir si
+/// un objet est agile la recevait refusée (outil de déploiement d'Office,
+/// #3178).
+pub(super) static IAGILEOBJECT: Iface = Iface {
+    name: "IAgileObject",
+    iid: guid(
+        0x94EA_2B94,
+        0xE9CC,
+        0x49E0,
+        [0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[],
 };
 
 pub(super) static ICLASSFACTORY: Iface = Iface {
@@ -1059,6 +1081,7 @@ static ALL: &[&Iface] = &[
     &IAUDIOSESSIONCONTROL2,
     &IAUDIOENDPOINTVOLUME,
     &IUNKNOWN,
+    &IAGILEOBJECT,
     &ICLASSFACTORY,
     &IMALLOC,
     &ISEQUENTIALSTREAM,
@@ -1563,6 +1586,9 @@ pub(super) unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: 
     let mut big: Vec<(Vec<u64>, u32, A, u32)> = Vec::new();
     // Tableaux d'interfaces passées : gardés jusqu'au retour.
     let mut arrays: Vec<Vec<u64>> = Vec::new();
+    // Tableaux d'interfaces rendus : image x64, tableau x86, UINT32* du
+    // nombre d'éléments écrits, type des éléments.
+    let mut out_arrays: Vec<(Vec<u64>, u32, u32, &'static Iface)> = Vec::new();
     let mut count = 0u32;
     let mut slots: Vec<u64> = Vec::with_capacity(kinds.len() + 5);
     slots.extend(this);
@@ -1617,6 +1643,16 @@ pub(super) unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: 
                     .collect();
                 slots.push(t.as_ptr() as u64);
                 arrays.push(t);
+            }
+            OutArr(f) => {
+                if v == 0 {
+                    slots.push(0);
+                    continue;
+                }
+                let t = vec![0u64; count.clamp(1, 4096) as usize];
+                slots.push(t.as_ptr() as u64);
+                // L'UINT32* du nombre écrit est la case suivante de la pile.
+                out_arrays.push((t, v, rd(p), f));
             }
             DispParams => match super::com_disp::to64(v) {
                 Some(d) => {
@@ -1687,6 +1723,16 @@ pub(super) unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: 
     let mut xmm0 = 0u64;
     let mut r = super::winlux_wow_call64(target, slots.as_ptr(), n, &mut xmm0);
     drop(arrays);
+    for (t, dst, actual, f) in out_arrays {
+        let written = if (r as i32) >= 0 && actual != 0 {
+            (rd(actual) as usize).min(t.len())
+        } else {
+            0
+        };
+        for (j, &v) in t.iter().enumerate().take(written) {
+            wr(dst + 4 * j as u32, to32(v, Some(f), &f.iid));
+        }
+    }
     for d in &disps64 {
         super::com_disp::back32(d);
     }
@@ -1780,12 +1826,14 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
             return E_NOTIMPL as u64;
         };
         // TYPEATTR / FUNCDESC / VARDESC et tableaux de pointeurs d'un
-        // ITypeInfo x86 lus par le runtime : non traduits dans ce sens
-        // (#2796, #2967).
-        if kinds
-            .iter()
-            .any(|k| matches!(k, DescOut(_) | DescIn | InPtrsNext | OutPtrsNext))
-        {
+        // ITypeInfo x86 lus par le runtime, tableau d'interfaces rendu par
+        // un objet x86 : non traduits dans ce sens (#2796, #2967, #3179).
+        if kinds.iter().any(|k| {
+            matches!(
+                k,
+                DescOut(_) | DescIn | InPtrsNext | OutPtrsNext | OutArr(_)
+            )
+        }) {
             crate::log_warn!(
                 "wow32",
                 "{} : méthode n° {} d'un objet 32 bits, structures ou tableaux non traduits vers x64",
@@ -1813,7 +1861,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                     a.push(v as u32);
                 }
                 // Refusées plus haut.
-                DescOut(_) | DescIn | InPtrsNext | OutPtrsNext => a.push(0),
+                DescOut(_) | DescIn | InPtrsNext | OutPtrsNext | OutArr(_) => a.push(0),
                 StrRet | Pidls => {
                     if v == 0 {
                         a.push(0);
@@ -2171,6 +2219,22 @@ mod tests {
     }
 
     #[test]
+    fn objet_agile_decrit() {
+        // Outil de déploiement d'Office (#3178) : IAgileObject rendue à un
+        // programme x86, sans autre méthode que celles d'IUnknown.
+        let iid = guid(
+            0x94EA_2B94,
+            0xE9CC,
+            0x49E0,
+            [0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90],
+        );
+        let f = by_iid(&iid).expect("IAgileObject décrite");
+        assert!(std::ptr::eq(f, &IAGILEOBJECT));
+        assert_eq!(f.count(), 3);
+        assert!(f.derives(&IUNKNOWN));
+    }
+
+    #[test]
     fn wasapi_decrit() {
         // IMMDeviceEnumerator (refusé avant, banc pygame32) et sa chaîne.
         let e = by_iid(&guid(
@@ -2419,6 +2483,75 @@ mod tests {
                 [0x0100_0001, 0x0100_0002, 0x5555]
             );
             libc::munmap(b as usize as *mut libc::c_void, 8192);
+        }
+    }
+
+    /// Objet COM 64 bits minimal : IUnknown sans effet.
+    unsafe extern "win64" fn faux_qi(_this: u64, _iid: u64, out: *mut u64) -> u32 {
+        *out = 0;
+        E_NOINTERFACE
+    }
+    extern "win64" fn faux_ref(_this: u64) -> u32 {
+        1
+    }
+    static mut FAUX_OBJ: [[usize; 1]; 2] = [[0]; 2];
+
+    unsafe extern "win64" fn faux_get_many(
+        _this: u64,
+        _start: u32,
+        capacity: u32,
+        items: *mut u64,
+        actual: *mut u32,
+    ) -> u64 {
+        assert_eq!(capacity, 3);
+        let objs = std::ptr::addr_of_mut!(FAUX_OBJ);
+        *items = (*objs)[0].as_ptr() as u64;
+        *items.add(1) = (*objs)[1].as_ptr() as u64;
+        *actual = 2;
+        0
+    }
+
+    /// #3179 : GetMany d'IVectorView<T> rend au code x86 un tableau
+    /// d'interfaces. Chaque élément écrit revient par son mandataire, en
+    /// 4 octets ; la case que l'appelé n'a pas remplie reste intacte.
+    #[test]
+    fn tableau_d_interfaces_rendu_3179() {
+        unsafe {
+            let vtbl = Box::leak(Box::new([
+                faux_qi as *const () as usize,
+                faux_ref as *const () as usize,
+                faux_ref as *const () as usize,
+            ]));
+            let objs = std::ptr::addr_of_mut!(FAUX_OBJ);
+            (*objs)[0][0] = vtbl.as_ptr() as usize;
+            (*objs)[1][0] = vtbl.as_ptr() as usize;
+            let b = basse(1);
+            // Pile x86 : startIndex, capacity, items, actual.
+            let (pile, items, actual) = (b, b + 256, b + 512);
+            for j in 0..3 {
+                wr(items + 4 * j, 0x5555);
+            }
+            wr(pile, 0);
+            wr(pile + 4, 3);
+            wr(pile + 8, items);
+            wr(pile + 12, actual);
+            let kinds: &[A] = &[I, I, OutArr(&IUNKNOWN), I];
+            let r = from32(
+                faux_get_many as *const () as usize,
+                Some(0x1234),
+                pile,
+                kinds,
+            );
+            assert_eq!(r, 0);
+            assert_eq!(rd(actual), 2);
+            let (x0, x1) = (rd(items), rd(items + 4));
+            assert!(x0 != 0 && x1 != 0 && x0 != x1);
+            // Mandataire x86 → objet 64 bits qu'il représente.
+            let obj = |x: u32| maps(|m| m.p32_obj.get(&x).copied());
+            assert_eq!(obj(x0), Some((*objs)[0].as_ptr() as u64));
+            assert_eq!(obj(x1), Some((*objs)[1].as_ptr() as u64));
+            assert_eq!(rd(items + 8), 0x5555);
+            libc::munmap(b as usize as *mut libc::c_void, 4096);
         }
     }
 }

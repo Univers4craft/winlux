@@ -514,6 +514,9 @@ unsafe fn create_window_inner(
             if fixed_size_frame(style) {
                 b.set_resizable(hwnd, false);
             }
+            if let Some((minimize, maximize)) = caption_buttons(style) {
+                b.set_caption_buttons(hwnd, minimize, maximize);
+            }
             // Fenêtre possédée : toujours au-dessus de sa propriétaire, comme
             // sous Windows (boîte « Vie privée » de VLC, #1068).
             let owner = owner_top_level(parent);
@@ -2020,6 +2023,13 @@ struct NcCalcSizeParams {
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
     if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        if window_diag() {
+            eprintln!(
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
+                crate::wow32::pointer_size() * 8,
+                gui::window_parent(hwnd).unwrap_or(0)
+            );
+        }
         return;
     }
     let mut pos = WindowPos {
@@ -2038,6 +2048,18 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     gui::reset_default_nccalcsize();
     send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
     let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
+    if window_diag() {
+        let r = params.rects[0];
+        eprintln!(
+            "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE fenêtre ({},{})-({},{}) → client ({},{})-({},{}), \
+             DefWindowProc {}, cadre maison {own}, légende à elle {}, en couches sans titre {} (#3205)",
+            rect.left, rect.top, rect.right, rect.bottom,
+            r.left, r.top, r.right, r.bottom,
+            gui::default_nccalcsize_seen(),
+            has_own_caption(hwnd),
+            drawn_whole(hwnd)
+        );
+    }
     if !own {
         pending_frame().retain(|(h, _, _)| *h != hwnd);
     }
@@ -2655,7 +2677,11 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
                 publish_shared(hwnd);
                 let style = value as u32;
                 if style & WS_CHILD == 0 {
-                    with_backend(|b| b.set_resizable(hwnd, !fixed_size_frame(style)));
+                    with_backend(|b| {
+                        b.set_resizable(hwnd, !fixed_size_frame(style));
+                        let (minimize, maximize) = caption_buttons(style).unwrap_or((true, true));
+                        b.set_caption_buttons(hwnd, minimize, maximize);
+                    });
                 }
             }
         }
@@ -5076,7 +5102,10 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
     let start = std::time::Instant::now();
+    // Inscrite avant toute lecture : un signal postérieur réveille le fil.
+    let mut objects = crate::dlls::kernel32::ObjectWait::new(&hs);
     loop {
+        objects.arm();
         // 1. Les objets. Une socket associée par WSAEventSelect rend son
         //    événement prêt : PuTTY attend ainsi le réseau (avant, on
         //    répondait toujours « un message attend » et il tournait à vide).
@@ -5113,6 +5142,7 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
         //    Les rappels SetWinEventHook en attente sont appelés pendant
         //    l'attente, comme sous Windows.
+        gui::deliver_sent();
         if wake_mask != 0 {
             super::chromium_win32::deliver_win_events();
         }
@@ -5129,11 +5159,40 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
         } else {
             timeout - elapsed
         };
-        // Tranches courtes : les objets et les sockets n'ont pas de
-        // descripteur commun avec la connexion X11.
-        let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
-        if !gui::wait_backend(slice) {
-            std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+        // 4. Le sommeil (#3170) : dans poll(2), jusqu'au signal d'un objet,
+        //    à l'arrivée d'un message (connexion X11, éveil de la file) ou
+        //    au prochain minuteur. Borne de sûreté de 500 ms, comme
+        //    GetMessage ; 10 ms pour les sockets WSAAsyncSelect sondées.
+        //    En headless, sans descripteur de messages, tranches de 10 ms.
+        let wake = if wake_mask != 0 {
+            gui::message_wake_fds()
+        } else {
+            Some(([-1, -1], false))
+        };
+        match wake {
+            Some((_, true)) => continue,
+            Some((fds, false)) => {
+                let cap = if super::ws2_32::async_active() {
+                    10
+                } else {
+                    500
+                };
+                let timer = if wake_mask != 0 {
+                    gui::next_timer_ms(0).unwrap_or(cap)
+                } else {
+                    cap
+                };
+                objects.block(&fds, left.min(timer).min(cap));
+                if wake_mask != 0 {
+                    gui::drain_queue_wake();
+                }
+            }
+            None => {
+                let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
+                if !gui::wait_backend(slice) {
+                    std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+                }
+            }
         }
     }
 }
@@ -5874,8 +5933,46 @@ fn fixed_size_frame(style: u32) -> bool {
         && style & (WS_THICKFRAME | WS_MAXIMIZEBOX) == 0
 }
 
+/// Boutons Réduire et Agrandir d'une fenêtre de premier niveau à barre de
+/// titre (#3064), `None` pour une autre fenêtre. D'après « Window Styles »
+/// (Learn), WS_MINIMIZEBOX et WS_MAXIMIZEBOX donnent chacun leur bouton et
+/// exigent WS_SYSMENU ; une fenêtre outil n'a que Fermer de toute façon.
+fn caption_buttons(style: u32) -> Option<(bool, bool)> {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_SYSMENU: u32 = 0x0008_0000;
+    const WS_MINIMIZEBOX: u32 = 0x0002_0000;
+    const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+    if style & WS_CHILD != 0 || style & WS_CAPTION != WS_CAPTION {
+        return None;
+    }
+    let menu = style & WS_SYSMENU != 0;
+    Some((
+        menu && style & WS_MINIMIZEBOX != 0,
+        menu && style & WS_MAXIMIZEBOX != 0,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// #3064 : Réduire et Agrandir suivent WS_MINIMIZEBOX et WS_MAXIMIZEBOX,
+    /// chacun avec WS_SYSMENU ; une fenêtre sans barre de titre ou un enfant
+    /// ne sont pas concernés.
+    #[test]
+    fn boutons_reduire_agrandir_selon_le_style_3064() {
+        use super::caption_buttons;
+        // WS_OVERLAPPEDWINDOW.
+        assert_eq!(caption_buttons(0x00CF_0000), Some((true, true)));
+        // MessageBox : WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME.
+        assert_eq!(caption_buttons(0x80C8_0080), Some((false, false)));
+        // WS_MINIMIZEBOX seul, avec cadre épais.
+        assert_eq!(caption_buttons(0x00CE_0000), Some((true, false)));
+        // Styles des boutons sans WS_SYSMENU : aucun bouton.
+        assert_eq!(caption_buttons(0x00C3_0000), Some((false, false)));
+        // Sans barre de titre, enfant à barre de titre.
+        assert_eq!(caption_buttons(0x8000_0000), None);
+        assert_eq!(caption_buttons(0x40CF_0000), None);
+    }
 
     /// #3011 : une boîte de message ou un dialogue fixe n'est pas
     /// redimensionnable ; une fenêtre principale, une fenêtre avec Agrandir,

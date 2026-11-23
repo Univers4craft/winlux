@@ -373,11 +373,7 @@ pub fn extract(path: &Path, dest: &Path, password: Option<&str>, progress: &Prog
         }
         set_mtime(&out, dos_to_unix(e.dos_time));
     }
-    for (rel, target) in links {
-        if symlink_stays_inside(&rel, &target) {
-            let _ = std::os::unix::fs::symlink(&target, dest.join(&rel));
-        }
-    }
+    create_links(dest, links)?;
     Ok(())
 }
 
@@ -924,5 +920,33 @@ mod tests {
         let t = 1_761_900_000i64; // 2025
         let back = dos_to_unix(unix_to_dos(t));
         assert!((back - t).abs() <= 2);
+    }
+    /// #3062 : même lien enchaîné dans un zip (attributs Unix de lien).
+    #[test]
+    fn lien_enchaine_hors_du_dossier_retire_3062() {
+        let d = tmp("3062");
+        let src = d.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("f.txt"), "ok").unwrap();
+        std::os::unix::fs::symlink(".", src.join("a")).unwrap();
+        std::os::unix::fs::symlink("a/..", src.join("x")).unwrap();
+        let items: Vec<_> = walk(&src)
+            .unwrap()
+            .into_iter()
+            .map(|e| (archive_name(&e.rel), src.join(&e.rel)))
+            .collect();
+        let z = d.join("a.zip");
+        create(&z, &items, None, &Progress::default()).unwrap();
+        let out = d.join("out");
+        extract(&z, &out, None, &Progress::default()).unwrap();
+        let x = std::fs::symlink_metadata(out.join("x"));
+        eprintln!("zip : x {:?}", x.as_ref().map(|m| m.file_type()));
+        assert!(x.is_err(), "x → a/.. sort du dossier et doit être retiré");
+        assert!(std::fs::symlink_metadata(out.join("a"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(out.join("f.txt")).unwrap(), "ok");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
