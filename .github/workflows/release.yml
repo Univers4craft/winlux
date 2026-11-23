@@ -142,6 +142,7 @@ jobs:
           ls -l /dev/kvm || true
 
       - name: Construire l'ISO
+        id: iso
         run: |
           # The runner boots a cloud (Azure) kernel without built-in virtio
           # disk support; the APT base VM and real PCs need the generic one.
@@ -193,17 +194,34 @@ jobs:
           WINLUX_QEMU_MEMORY: 4096
         run: sh scripts/test-native-session-vm.sh
 
-      - name: Valider l'ISO et l'installation avant publication
+      # Une étape par démarrage et une pour l'installation (#3250) : chacune
+      # tourne dès que l'ISO est construite, même si une autre a échoué, et
+      # le job reste rouge au moindre échec. Une panique uefi32 (#3199) ne
+      # masque plus le test d'installation.
+      - name: Valider l'ISO au démarrage (bios)
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
         env:
           WINLUX_QEMU_MEMORY: 4096
-        run: |
-          if [ "$SKIP_ISO" = "false" ]; then
-            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" bios
-            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi
-            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi32
-            # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
-            WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
-          fi
+        run: sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" bios
+
+      - name: Valider l'ISO au démarrage (uefi)
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
+        env:
+          WINLUX_QEMU_MEMORY: 4096
+        run: sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi
+
+      - name: Valider l'ISO au démarrage (uefi32)
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
+        env:
+          WINLUX_QEMU_MEMORY: 4096
+        run: sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi32
+
+      - name: Valider l'installation avant publication
+        if: ${{ !cancelled() && steps.iso.outcome == 'success' && env.SKIP_ISO == 'false' }}
+        env:
+          # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
+          WINLUX_QEMU_MEMORY: 6144
+        run: sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
 
       # ISO de validation (PR et lancement manuel) en artefact : le fil de test
       # ne peut pas construire d'ISO sur son hôte (base noble) et la récupère
