@@ -739,8 +739,85 @@ unsafe extern "win64" fn get_last_input_info(info: *mut u32) -> i32 {
     1
 }
 
-unsafe extern "win64" fn wait_for_input_idle(_proc: usize, _ms: u32) -> u32 {
-    0
+const WAIT_TIMEOUT: u32 = 258;
+const WAIT_FAILED: u32 = 0xFFFF_FFFF;
+
+/// WaitForInputIdle (MS Learn) : attend que le processus ait fini de
+/// s'initialiser et attende une saisie, jusqu'au délai. Rendait 0 tout de
+/// suite, sans rien regarder (#3288).
+///
+/// Inférence nommée : nous ne voyons pas la file de messages d'un autre
+/// processus. Le processus est tenu pour prêt quand il a publié une fenêtre
+/// de premier niveau dans l'annuaire partagé du compte (#1228, #2046),
+/// c'est-à-dire qu'il a une file et une fenêtre. Un programme console
+/// échoue tout de suite, comme sous Windows ; un processus qui se termine
+/// sans fenêtre aussi.
+unsafe extern "win64" fn wait_for_input_idle(process: usize, ms: u32) -> u32 {
+    let Some(pid) = crate::dlls::kernel32::process_os_pid(process) else {
+        crate::process::set_last_error(6); // ERROR_INVALID_HANDLE
+        return WAIT_FAILED;
+    };
+    // Le processus courant n'attend pas sur lui-même.
+    if pid == std::process::id() as i32 {
+        return 0;
+    }
+    if image_is_console(pid) {
+        crate::process::set_last_error(5);
+        return WAIT_FAILED;
+    }
+    let deadline = (ms != u32::MAX)
+        .then(|| std::time::Instant::now() + std::time::Duration::from_millis(u64::from(ms)));
+    loop {
+        if has_published_window(pid as u32) {
+            return 0;
+        }
+        // Terminé sans fenêtre : rien n'attendra jamais de saisie.
+        if crate::dlls::kernel32::wait_for_single_object(process, 0) == 0 {
+            crate::process::set_last_error(5);
+            return WAIT_FAILED;
+        }
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            return WAIT_TIMEOUT;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+/// Le processus `pid` a-t-il une fenêtre de premier niveau dans l'annuaire ?
+fn has_published_window(pid: u32) -> bool {
+    super::gui_shared::foreign_top_levels()
+        .iter()
+        .any(|l| l.f.pid == pid)
+}
+
+/// Le programme du processus est-il une application console (sous-système
+/// IMAGE_SUBSYSTEM_WINDOWS_CUI dans son en-tête PE, comme le lit le
+/// chargeur) ? Faux si l'en-tête est illisible.
+fn image_is_console(pid: i32) -> bool {
+    const IMAGE_SUBSYSTEM_WINDOWS_CUI: u16 = 3;
+    let Ok(win) = super::win32_basics::foreign_image_path(pid) else {
+        return false;
+    };
+    let Ok(mut f) = std::fs::File::open(crate::paths::to_linux(&win)) else {
+        return false;
+    };
+    let mut head = [0u8; 1024];
+    let n = std::io::Read::read(&mut f, &mut head).unwrap_or(0);
+    pe_subsystem(&head[..n]) == Some(IMAGE_SUBSYSTEM_WINDOWS_CUI)
+}
+
+/// Sous-système d'un en-tête PE (PE32 ou PE32+ : même décalage, 68 octets
+/// après le début de l'en-tête optionnel).
+fn pe_subsystem(head: &[u8]) -> Option<u16> {
+    if head.get(..2)? != b"MZ" {
+        return None;
+    }
+    let lfanew = u32::from_le_bytes(head.get(0x3C..0x40)?.try_into().ok()?) as usize;
+    if head.get(lfanew..lfanew + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let at = lfanew + 24 + 68;
+    Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?))
 }
 
 /// ExitWindowsEx : un programme ne peut pas éteindre Winlux (droit refusé).
@@ -893,6 +970,60 @@ mod tests {
             assert_eq!(out[8], 0x10);
             assert_eq!(out[32], 0x42);
         }
+    }
+}
+
+#[cfg(test)]
+mod attente_saisie_tests {
+    use super::*;
+
+    /// #3288 : WaitForInputIdle ne rend plus « prêt » sans rien regarder.
+    #[test]
+    fn attente_de_saisie_regarde_le_processus_3288() {
+        unsafe {
+            // Soi-même : prêt tout de suite.
+            let moi = crate::dlls::kernel32::get_current_process();
+            assert_eq!(wait_for_input_idle(moi, 0), 0);
+            // Handle invalide : échec.
+            assert_eq!(wait_for_input_idle(0x7fff_fff0, 0), WAIT_FAILED);
+            // Processus sans fenêtre qui tourne encore : délai écoulé.
+            let mut long = std::process::Command::new("sleep")
+                .arg("5")
+                .spawn()
+                .unwrap();
+            let h = crate::dlls::kernel32::open_process(0x1F_0FFF, 0, long.id());
+            assert_ne!(h, 0);
+            let r = wait_for_input_idle(h, 100);
+            println!("sleep 5, délai 100 ms : {r}");
+            assert_eq!(r, WAIT_TIMEOUT);
+            let _ = long.kill();
+            let _ = long.wait();
+            crate::dlls::kernel32::close_handle(h);
+            // Processus qui se termine sans fenêtre : échec, pas « prêt ».
+            let mut court = std::process::Command::new("sleep")
+                .arg("0.2")
+                .spawn()
+                .unwrap();
+            let h = crate::dlls::kernel32::open_process(0x1F_0FFF, 0, court.id());
+            let r = wait_for_input_idle(h, 5000);
+            let _ = court.wait();
+            println!("sleep 0.2, délai 5 s : {r:#x}");
+            assert_eq!(r, WAIT_FAILED);
+            crate::dlls::kernel32::close_handle(h);
+        }
+    }
+
+    #[test]
+    fn sous_systeme_lu_dans_l_en_tete_pe_3288() {
+        let mut h = vec![0u8; 512];
+        h[..2].copy_from_slice(b"MZ");
+        h[0x3C] = 0x80;
+        h[0x80..0x84].copy_from_slice(b"PE\0\0");
+        h[0x80 + 24 + 68] = 3;
+        assert_eq!(pe_subsystem(&h), Some(3));
+        h[0x80 + 24 + 68] = 2;
+        assert_eq!(pe_subsystem(&h), Some(2));
+        assert_eq!(pe_subsystem(b"\x7fELF"), None);
     }
 }
 

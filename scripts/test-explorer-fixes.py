@@ -141,7 +141,7 @@ ok('b"shell:terminal"' in wm_rs and "wm::native_terminal(Some(dir))" in explorer
 com_rs = (ROOT / "runtime/src/dlls/filedialog_com.rs").read_text(encoding="utf-8")
 ole_rs = (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
 apps_rs = (ROOT / "runtime/src/dlls/common_apps.rs").read_text(encoding="utf-8")
-ok("filedialog_com::create_builtin(&guid, &iid, out)" in ole_rs,
+ok("filedialog_com::create_builtin(guid, iid, out)" in ole_rs,
    "CoCreateInstance(CLSID_FileOpenDialog / CLSID_FileSaveDialog) ne rend plus REGDB_E_CLASSNOTREG")
 ok("files::file_dialog(" in com_rs and "pick_folder(" in com_rs,
    "IFileDialog::Show ouvre l'Explorateur Winlux, comme GetOpenFileNameW")
