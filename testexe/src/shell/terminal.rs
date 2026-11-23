@@ -773,7 +773,13 @@ impl Tab {
         Tab {
             active: false,
             pty: 0,
-            screen: Screen::new(),
+            // Écran tout à zéro (.bss) : un écran rempli d'espaces mettait
+            // 5,4 Mo dans .data, lus à chaque lancement de gui_demo.exe
+            // (Explorateur, Paramètres…). Un onglet n'est lu qu'après
+            // open_tab(), qui appelle reinit() ; avant, rows = 0 : rien à lire.
+            // SAFETY : Screen n'a que des entiers, des booléens et des enums
+            // dont la valeur 0 est valide (Parse::Normal).
+            screen: unsafe { core::mem::zeroed() },
         }
     }
 }

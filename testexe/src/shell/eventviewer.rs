@@ -118,7 +118,11 @@ impl Entry {
     }
 }
 
-static mut ENTRIES: [Entry; MAX_ENTRIES] = [EMPTY; MAX_ENTRIES];
+// Tout à zéro (.bss) : avec [EMPTY; …] (level 3, crash -1), 1,4 Mo partaient
+// dans .data, lus à chaque lancement de gui_demo.exe. Seules les entrées
+// [..COUNT] sont lues, et chacune est écrite entière (`ENTRIES[COUNT] = e`).
+// SAFETY : Entry n'a que des entiers et des tableaux d'octets.
+static mut ENTRIES: [Entry; MAX_ENTRIES] = unsafe { core::mem::zeroed() };
 static mut COUNT: usize = 0;
 static mut COUNTS: [usize; LOG_COUNT] = [0; LOG_COUNT];
 /// Index des événements visibles, du plus récent au plus ancien.
