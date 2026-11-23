@@ -10,7 +10,10 @@ BusyBox et des chemins temporaires :
 2. Xorg échoue deux fois sur un système installé : le message d'affichage
    impossible est écrit, aucun shell ne lit l'entrée, et le bouton
    d'alimentation (SIGUSR2 → safe_power) est servi tout de suite.
-3. Écran de secours : pas de bouton Terminal hors session live.
+3. Session qui sort trois fois de suite : écran de secours, puis message
+   quand l'affichage se perd, jamais de shell.
+4. Écran de secours : pas de bouton Terminal hors session live, quel que
+   soit le scénario qui le lance ; proposé en session live.
 """
 import os
 import pathlib
@@ -33,10 +36,11 @@ def function(name):
 
 
 args = re.search(r"^    xorg_args=.*\n", init, re.M).group(0)
-body = args + "".join(function(n) for n in ("xorg_start", "xorg_wait", "display_unavailable", "xorg_recover"))
+body = args + "".join(function(n) for n in ("xorg_start", "xorg_wait", "display_unavailable", "xorg_recover",
+                                           "session_failed"))
 
 
-def scenario(failures, live=False):
+def scenario(failures, live=False, tail=None):
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="xorg-secours-"))
     for d in ("tmp/.X11-unix", "run/winlux", "conf.d", "etc/winlux", "etc/default"):
         (tmp / d).mkdir(parents=True, exist_ok=True)
@@ -63,7 +67,10 @@ time.sleep(60)
     busybox.write_text('#!/bin/sh\ncmd=$1; shift\ncase "$cmd" in chvt) exit 0 ;; esac\nexec "$cmd" "$@"\n')
     update = tmp / "winlux-update"
     update.write_text("#!/bin/sh\nexit 1\n")
-    for f in (xorg, busybox, update):
+    # Faux écran de secours : note son lancement, puis l'affichage se perd.
+    rescue = tmp / "rescue"
+    rescue.write_text(f"#!/bin/sh\necho lance >>{tmp / 'rescue.log'}\nkill \"$XORG_PID\"\n")
+    for f in (xorg, busybox, update, rescue):
         f.chmod(0o755)
     # /tmp/ d'abord : les chemins temporaires insérés ensuite sont sous /tmp.
     text = (body.replace("/tmp/", str(tmp / "tmp") + "/")
@@ -71,7 +78,7 @@ time.sleep(60)
             .replace("/usr/bin/Xorg", str(xorg))
             .replace("/usr/bin/xrandr", str(tmp / "absent-xrandr"))
             .replace("/usr/bin/winlux-update", str(update))
-            .replace("/usr/bin/winlux-rescue-screen", str(tmp / "absent-rescue"))
+            .replace("/usr/bin/winlux-rescue-screen", str(tmp / "rescue"))
             .replace("/usr/share/X11/xorg.conf.d", str(tmp / "conf.d"))
             .replace("/etc/X11/xorg.conf.d", str(tmp / "etc-conf.d"))
             .replace("/etc/winlux/", str(tmp / "etc/winlux") + "/")
@@ -82,13 +89,13 @@ time.sleep(60)
 boot_mark() {{ echo "$1" >>{tmp / 'marks'}; }}
 trap 'echo ALIMENTATION; exit 0' USR2
 {text}
-xorg_start
+{tail or """xorg_start
 xorg_wait
 if ! kill -0 "$xorg_pid" 2>/dev/null; then
     xorg_recover
 fi
 echo SUITE_DE_L_INIT
-kill "$xorg_pid" 2>/dev/null
+kill "$xorg_pid" 2>/dev/null"""}
 """
     proc = subprocess.Popen(["sh", "-c", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, start_new_session=True)
@@ -145,7 +152,27 @@ assert "ALIMENTATION" in out and elapsed < 3, f"bouton d'alimentation pas servi 
 assert (tmp / "run/winlux/xorg-secours/Xorg.second-essai.log").exists()
 print(f"deux échecs : message à l'écran, aucun shell, alimentation servie en {elapsed:.2f} s")
 
-# 3. Écran de secours : Terminal seulement en session live.
+# 3. Session qui ne tient pas (trois sorties rapides) : écran de secours, puis
+#    l'affichage perdu donne le message, jamais un shell.
+tmp, proc = scenario(failures=0, tail="""xorg_start
+xorg_wait
+XORG_PID=$xorg_pid; export XORG_PID
+session_failed
+echo SUITE_DE_L_INIT""")
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline and not (tmp / "tty1").exists():
+    time.sleep(0.05)
+time.sleep(0.3)
+os.killpg(proc.pid, signal.SIGUSR2)
+out = finish(proc, wait=5)
+print(out, end="")
+assert (tmp / "rescue.log").read_text().split() == ["lance"], "écran de secours pas lancé"
+assert "WINLUX_DISPLAY_UNAVAILABLE" in out and "ALIMENTATION" in out
+assert "SHELL_ROOT" not in out and "SUITE_DE_L_INIT" not in out, "shell ou suite après l'échec de session"
+print("session en échec : écran de secours, puis message, aucun shell")
+
+# 4. Écran de secours : Terminal seulement en session live, quel que soit le
+#    scénario qui le lance (il décide lui-même, l'init ne lui passe rien).
 sys.path.insert(0, str(ROOT / "scripts"))
 import importlib.util
 spec = importlib.util.spec_from_file_location("secours", ROOT / "scripts/winlux-rescue-screen.py")
@@ -154,6 +181,9 @@ spec.loader.exec_module(module)
 real_exists = os.path.exists
 module.os.path.exists = lambda p: False if p == "/etc/winlux/live-session" else real_exists(p)
 assert module.terminal_command() is None, "Terminal root proposé sur un système installé"
+module.os.path.exists = lambda p: True if p == "/etc/winlux/live-session" else real_exists(p)
+live_terminal = module.terminal_command()
 module.os.path.exists = real_exists
+print("écran de secours : Terminal en live :", bool(live_terminal) or "aucun terminal installé ici")
 print("écran de secours : pas de Terminal hors session live")
 print("Xorg en échec : OK")
