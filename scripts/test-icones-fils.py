@@ -33,6 +33,7 @@ with tempfile.TemporaryDirectory() as directory:
         g = c["window_icons"].__globals__
         journal = directory / "publications"
         g["WINDOW_ICON_CACHE"] = directory / "window-icons.json"
+        g["ARGB_CACHE"] = directory / "argb"
         g["icon_for"] = lambda target, identity: str(png) if png else "application-x-executable"
         def publish(window, values):
             with open(journal, "a") as handle: handle.write(f"{os.getpid()} {window} {len(values)}\n")
