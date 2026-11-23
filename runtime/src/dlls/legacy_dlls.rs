@@ -252,6 +252,16 @@ pub fn msi_exports() -> super::Exports {
         "MsiEnumComponentQualifiersW" => fn msi_enum_component_qualifiers,
         "MsiEnumComponentQualifiersA" => fn msi_enum_component_qualifiers,
         "MsiEnumRelatedProductsW" => fn msi_enum_related_products,
+        "MsiEnumProductsW" => fn msi_enum_products,
+        "MsiEnumProductsA" => fn msi_enum_products,
+        "MsiConfigureProductW" => fn msi_configure_product,
+        "MsiConfigureProductA" => fn msi_configure_product,
+        "MsiConfigureProductExW" => fn msi_configure_product_ex,
+        "MsiConfigureProductExA" => fn msi_configure_product_ex,
+        "MsiProvideQualifiedComponentW" => fn msi_provide_qualified_component,
+        "MsiProvideQualifiedComponentA" => fn msi_provide_qualified_component,
+        "MsiProvideQualifiedComponentExW" => fn msi_provide_qualified_component_ex,
+        "MsiProvideQualifiedComponentExA" => fn msi_provide_qualified_component_ex,
         "MsiEnumRelatedProductsA" => fn msi_enum_related_products,
         "MsiSourceListAddSourceW" => fn msi_source_list_ok,
         "MsiSourceListAddSourceA" => fn msi_source_list_ok,
@@ -325,6 +335,69 @@ pub extern "win64" fn msi_enum_related_products(_u: usize, _r: u32, _i: u32, _b:
     ERROR_NO_MORE_ITEMS
 }
 
+/// MsiEnumProductsA/W(iProductIndex, lpProductBuf) : aucun produit n'est
+/// inscrit dans Winlux. Learn : ERROR_NO_MORE_ITEMS « There are no products
+/// to return » ; l'outil de déploiement d'Office l'appelle par l'ordinal 45
+/// (#3176). Le tampon (39 caractères) est obligatoire.
+pub extern "win64" fn msi_enum_products(_index: u32, buf: usize) -> u32 {
+    if buf == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    ERROR_NO_MORE_ITEMS
+}
+
+/// MsiConfigureProduct(Ex)A/W(szProduct, iInstallLevel, eInstallState[,
+/// szCommandLine]) : aucun produit n'est inscrit, donc aucun n'est à
+/// configurer. Learn (codes d'erreur de Windows Installer) :
+/// ERROR_UNKNOWN_PRODUCT, « only valid for products that are currently
+/// installed » (ordinal 190, #3176).
+pub extern "win64" fn msi_configure_product(product: usize, _level: i32, _state: i32) -> u32 {
+    if product == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    ERROR_UNKNOWN_PRODUCT
+}
+pub extern "win64" fn msi_configure_product_ex(
+    product: usize,
+    level: i32,
+    state: i32,
+    _command_line: usize,
+) -> u32 {
+    msi_configure_product(product, level, state)
+}
+
+/// MsiProvideQualifiedComponentA/W(szCategory, szQualifier, dwInstallMode,
+/// lpPathBuf, pcchPathBuf) : aucun composant n'est inscrit. Learn :
+/// ERROR_UNKNOWN_COMPONENT, « The specified component is unknown », comme
+/// MsiEnumComponentQualifiers (#2200).
+pub extern "win64" fn msi_provide_qualified_component(
+    category: usize,
+    qualifier: usize,
+    _mode: u32,
+    _path: usize,
+    _pcch_path: usize,
+) -> u32 {
+    if category == 0 || qualifier == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    ERROR_UNKNOWN_COMPONENT
+}
+/// MsiProvideQualifiedComponentExA/W : la même chose, restreinte au produit
+/// `szProduct` ; dwUnused1 et dwUnused2 sont réservés (ordinal 203, #3176).
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn msi_provide_qualified_component_ex(
+    category: usize,
+    qualifier: usize,
+    mode: u32,
+    _product: usize,
+    _unused1: u32,
+    _unused2: u32,
+    path: usize,
+    pcch_path: usize,
+) -> u32 {
+    msi_provide_qualified_component(category, qualifier, mode, path, pcch_path)
+}
+
 // ---------- shfolder.dll ----------
 
 pub fn shfolder_exports() -> super::Exports {
@@ -363,6 +436,54 @@ mod tests {
         assert_eq!(
             msi_enum_component_qualifiers(0, 0, 0, 0, 0, 0),
             ERROR_INVALID_PARAMETER
+        );
+    }
+
+    #[test]
+    fn imports_differes_de_l_outil_office() {
+        // Outil de déploiement d'Office, processus 32 bits (#3176) : les
+        // neuf ordinaux de msi.dll qu'il importe en chargement différé.
+        // msi.dll telle que la monte dlls/mod.rs.
+        let mut e = msi_exports();
+        e.extend(super::super::discord_win32::msi_exports());
+        for n in [90, 8, 141, 190, 113, 39, 173, 203, 45] {
+            assert!(e.contains_key(format!("#{n}").as_str()), "#{n}");
+        }
+        assert_eq!(e.get("#45"), e.get("MsiEnumProductsW"));
+        assert_eq!(e.get("#190"), e.get("MsiConfigureProductExW"));
+        assert_eq!(e.get("#203"), e.get("MsiProvideQualifiedComponentExW"));
+        let mut buf = [0u16; 39];
+        assert_eq!(
+            msi_enum_products(0, buf.as_mut_ptr() as usize),
+            ERROR_NO_MORE_ITEMS
+        );
+        assert_eq!(msi_enum_products(0, 0), ERROR_INVALID_PARAMETER);
+        let produit: Vec<u16> = "{90160000-0011-0000-0000-0000000FF1CE}\0"
+            .encode_utf16()
+            .collect();
+        assert_eq!(
+            msi_configure_product_ex(produit.as_ptr() as usize, 0, 3, 0),
+            ERROR_UNKNOWN_PRODUCT
+        );
+        assert_eq!(
+            msi_configure_product_ex(0, 0, 3, 0),
+            ERROR_INVALID_PARAMETER
+        );
+        let q: Vec<u16> = "1036\0".encode_utf16().collect();
+        let mut path = [0u16; 260];
+        let mut cch = path.len() as u32;
+        assert_eq!(
+            msi_provide_qualified_component_ex(
+                produit.as_ptr() as usize,
+                q.as_ptr() as usize,
+                0,
+                0,
+                0,
+                0,
+                path.as_mut_ptr() as usize,
+                &mut cch as *mut u32 as usize,
+            ),
+            ERROR_UNKNOWN_COMPONENT
         );
     }
 
