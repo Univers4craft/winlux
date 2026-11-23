@@ -870,3 +870,43 @@ fn machine_guid_derive_de_machine_id_et_stable() {
     live::machine_guid(&mut empty, "");
     assert!(empty.get(live::CRYPTOGRAPHY, "MachineGuid").is_none());
 }
+
+/// Police déjà inscrite par un installateur (Gain #3091, comparaison par
+/// ensembles) : chemin complet qui finit par « \fichier » sans tenir compte
+/// de la casse, ou valeur identique : pas de doublon ; une autre police du
+/// même dossier, elle, est ajoutée.
+#[test]
+fn polices_deja_inscrites_jamais_doublees() {
+    let source = Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+    if !source.is_file() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("winlux-fonts-dedup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["deja.ttf", "vu.ttf", "neuve.ttf"] {
+        std::fs::copy(source, dir.join(name)).unwrap();
+    }
+    let mut data = Data::empty();
+    data.raw_ensure(live::FONTS);
+    let set = |data: &mut Data, name: &str, value: &str| {
+        data.set(live::FONTS, name, REG_SZ, utf16z(value));
+    };
+    set(
+        &mut data,
+        "Par installateur (TrueType)",
+        "C:\\Program Files\\Appli\\DEJA.TTF",
+    );
+    set(&mut data, "Valeur identique (TrueType)", "vu.ttf");
+    live::fonts(&mut data, live::FONTS, &dir, false);
+    let values: Vec<String> = data
+        .values(live::FONTS)
+        .iter()
+        .map(|v| string_of(&v.bytes).to_ascii_lowercase())
+        .collect();
+    let count = |f: &str| values.iter().filter(|v| v.ends_with(f)).count();
+    assert_eq!(count("deja.ttf"), 1, "{values:?}");
+    assert_eq!(count("vu.ttf"), 1, "{values:?}");
+    assert_eq!(count("neuve.ttf"), 1, "{values:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
