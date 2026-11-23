@@ -1163,7 +1163,20 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         InvalidateRect(hwnd, core::ptr::null(), 0);
                     }
                 }
-                Sleep(if desktop { 4 } else { 10 });
+                if desktop || gfx::theme_animating() || wm::native_app().is_none() {
+                    Sleep(if desktop { 4 } else { 10 });
+                } else {
+                    // Fenêtre seule (Explorateur…) : on dort jusqu'au prochain
+                    // tic ou jusqu'au premier message, au lieu de tranches de
+                    // 10 ms qui réveillaient le programme 100 fois par seconde
+                    // au repos (#3170). QS_ALLINPUT (0x04FF).
+                    let now = GetTickCount();
+                    let wait = wm::native_tick_ms()
+                        .saturating_sub(now.wrapping_sub(last_tick))
+                        .min(duration.saturating_sub(now.wrapping_sub(start)))
+                        .max(1);
+                    MsgWaitForMultipleObjects(0, core::ptr::null(), 0, wait, 0x04FF);
+                }
             }
         }
 
