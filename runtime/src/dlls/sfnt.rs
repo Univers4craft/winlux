@@ -532,25 +532,57 @@ fn simple_glyph(
     Some(())
 }
 
-type Cache = Mutex<Vec<(PathBuf, u32, Option<Arc<Font>>)>>;
+/// Face analysée, ou fichier illisible tel qu'il était (taille, date) :
+/// un échec n'est gardé que tant que le fichier ne change pas (#3241).
+enum Entry {
+    Font(Arc<Font>),
+    Bad(u64, Option<std::time::SystemTime>),
+}
+
+type Cache = Mutex<Vec<(PathBuf, u32, Entry)>>;
 
 fn cache() -> &'static Cache {
     static C: OnceLock<Cache> = OnceLock::new();
     C.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Taille et date de modification d'un fichier.
+fn stamp(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.len(), m.modified().ok()))
+}
+
 /// Charge (une seule fois par processus) la face `index` du fichier `path`.
+/// Une lecture impossible n'est pas gardée ; un fichier que l'analyse
+/// refuse l'est, jusqu'à ce que sa taille ou sa date change. Une police
+/// lue pendant qu'on la copie redevient ainsi lisible (#3241).
 pub fn load(path: &Path, index: u32) -> Option<Arc<Font>> {
     let mut c = super::lock(cache());
-    if let Some((_, _, f)) = c.iter().find(|(p, i, _)| p == path && *i == index) {
-        return f.clone();
+    let now = stamp(path);
+    if let Some(pos) = c.iter().position(|(p, i, _)| p == path && *i == index) {
+        match &c[pos].2 {
+            Entry::Font(f) => return Some(f.clone()),
+            Entry::Bad(len, date) if now == Some((*len, *date)) => return None,
+            Entry::Bad(..) => {
+                c.remove(pos);
+            }
+        }
     }
-    let f = std::fs::read(path)
-        .ok()
-        .and_then(|d| Font::parse(d, index))
-        .map(Arc::new);
-    c.push((path.to_path_buf(), index, f.clone()));
-    f
+    let data = std::fs::read(path).ok()?;
+    match Font::parse(data, index).map(Arc::new) {
+        Some(f) => {
+            c.push((path.to_path_buf(), index, Entry::Font(f.clone())));
+            Some(f)
+        }
+        None => {
+            // La taille et la date d'avant la lecture : si le fichier a
+            // bougé entre-temps, le prochain appel le relit.
+            if let Some((len, date)) = now {
+                c.push((path.to_path_buf(), index, Entry::Bad(len, date)));
+            }
+            None
+        }
+    }
 }
 
 /// Nombre de faces d'un fichier (1 hors collection).
@@ -704,6 +736,31 @@ pub mod tests {
         }
         out.extend_from_slice(&body);
         out
+    }
+
+    /// #3241 : un fichier lu pendant qu'on l'écrit (vide ou tronqué) ne
+    /// reste pas illisible pour tout le processus une fois complet.
+    #[test]
+    fn police_relue_apres_un_echec_quand_le_fichier_change_3241() {
+        let dir = std::env::temp_dir().join(format!("winlux-3241-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Partielle.ttf");
+        let full = tiny_font();
+        std::fs::write(&path, &full[..full.len() / 3]).unwrap();
+        assert!(load(&path, 0).is_none(), "fichier tronqué");
+        assert!(
+            load(&path, 0).is_none(),
+            "échec gardé tant que rien ne change"
+        );
+        std::fs::write(&path, &full).unwrap();
+        assert!(load(&path, 0).is_some(), "fichier complet relu");
+        // Lecture impossible (fichier absent) : rien n'est gardé.
+        let absent = dir.join("Absente.ttf");
+        let _ = std::fs::remove_file(&absent);
+        assert!(load(&absent, 0).is_none());
+        std::fs::write(&absent, &full).unwrap();
+        assert!(load(&absent, 0).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[derive(Default)]
