@@ -93,14 +93,15 @@ def desktop_names():
 
 
 def windows():
-    """[(id hexadécimal, bureau, titre)] des fenêtres normales."""
+    """[(id hexadécimal, bureau, titre)] des fenêtres normales ; bureau -1 :
+    sur tous les bureaux."""
     found = []
     for line in _run(["wmctrl", "-l"]).splitlines():
         parts = line.split(None, 3)
         if len(parts) < 3: continue
         try: desktop = int(parts[1])
         except ValueError: continue
-        if desktop < 0: continue
+        if desktop < -1: continue
         kind = _run(["xprop", "-id", parts[0], "_NET_WM_WINDOW_TYPE"])
         if "_NET_WM_WINDOW_TYPE_NORMAL" not in kind and "_NET_WM_WINDOW_TYPE_DIALOG" not in kind \
                 and "_NET_WM_WINDOW_TYPE(ATOM)" in kind:
@@ -108,6 +109,12 @@ def windows():
         title = parts[3] if len(parts) > 3 else ""
         found.append((parts[0], desktop, title))
     return found
+
+
+def on_desktop(found, current):
+    """Fenêtres de `found` à montrer sur le bureau `current` : les siennes et
+    celles affichées sur tous les bureaux (bureau -1, #3346)."""
+    return [item for item in found if item[1] in (current, -1)]
 
 
 def removal_moves(count, removed, placed):
@@ -339,7 +346,7 @@ def run_view():
             for child in self.flow.get_children() + self.desks.get_children(): child.destroy()
             desks = desktops() or [(0, display_name(0, ""), True)]
             current = next((number for number, _, on in desks if on), 0)
-            shown = [item for item in windows() if item[1] == current and item[2] not in ("xfce4-panel", "xfdesktop")]
+            shown = [item for item in on_desktop(windows(), current) if item[2] not in ("xfce4-panel", "xfdesktop")]
             shown = [item for item in shown if int(item[0], 16) != self.own_id()]
             if not shown:
                 label = Gtk.Label(label=_t("Aucune fenêtre ouverte sur ce bureau."))
