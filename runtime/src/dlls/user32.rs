@@ -1034,9 +1034,11 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
 /// Chromium ne recalcule sa zone cliente (et la taille de sa surface de
 /// rendu) que sur WM_WINDOWPOSCHANGED : sans lui, Claude agrandi gardait son
 /// contenu en 1000x800 dans un coin, le reste noir, et ses boutons ne
-/// répondaient plus (#1476).
+/// répondaient plus (#1476). Un programme 32 bits le reçoit aussi :
+/// wow32::user traduit WINDOWPOS en disposition x86 à l'aller et au retour
+/// (#3394).
 unsafe fn geometry_changed(hwnd: usize, message: u32) {
-    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+    if gui::window_parent(hwnd).unwrap_or(0) != 0 {
         return;
     }
     let Some(rect) = gui::window_rect(hwnd) else {
