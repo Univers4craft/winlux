@@ -853,6 +853,8 @@ pub unsafe extern "win64" fn reg_flush_key(handle: usize) -> i32 {
     match reg::handle_path(handle) {
         Ok(p) => status(reg::read(|d| {
             if d.exists(&p) {
+                // Écriture différée (#3429) : RegFlushKey la force.
+                reg::flush();
                 Ok(())
             } else {
                 Err(ERROR_FILE_NOT_FOUND)
