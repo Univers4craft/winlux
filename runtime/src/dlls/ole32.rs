@@ -915,80 +915,8 @@ pub unsafe extern "win64" fn co_create_instance(
         .find(|entry| entry.clsid == guid && (entry.context & ctx) != 0)
     else {
         drop(factories);
-        // Classes intégrées au runtime (planificateur de tâches…).
-        if let Some(hr) = crate::dlls::taskschd::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Classes audio intégrées (MMDeviceEnumerator, DirectSound, XAudio2 2.7).
-        if let Some(hr) = super::audio_com::create_builtin(&guid, riid, out) {
-            return hr;
-        }
-        // Boîtes Ouvrir/Enregistrer de Vista (IFileOpenDialog/IFileSaveDialog).
-        if let Some(hr) = super::filedialog_com::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Raccourcis Windows (ShellLink : Discord, Electron, #1732).
-        if let Some(hr) = super::shell_link::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // DirectInput 8 et 7 par CoCreateInstance (SDL 2, #1516).
-        if let Some(hr) = super::dinput8::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Graphe de lecture DirectShow (quartz.dll, #835).
-        if let Some(hr) = super::quartz::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // DirectPlay et son lobby (dplayx.dll, #836).
-        if let Some(hr) = super::dplayx::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // DirectPlay 8 (dpnet.dll, #863).
-        if let Some(hr) = super::dpnet::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Listes de raccourcis de la barre des tâches (WinSCP, #905).
-        if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Contrôle navigateur web « Shell.Explorer » (#2228).
-        if let Some(hr) = super::webbrowser::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Bouton de la barre des tâches : progression, icône superposée (#1434).
-        if let Some(hr) = super::taskbarlist_com::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Pare-feu, ancienne interface HNetCfg.FwMgr (SteamService, #1919).
-        if let Some(hr) = super::netfw::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Profils de saisie du Text Services Framework (CEF de Steam, #1602).
-        if let Some(hr) = super::msctf_profiles::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Annotations d'accessibilité (AccPropServices, VCL, #1114).
-        if let Some(hr) = super::oleacc_props::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // WMI en lecture (WbemLocator, ROOT\\CIMV2, #1198).
-        if let Some(hr) = super::wbem::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Documents XML MSXML (DOMDocument 2.6 à 6.0, #1084).
-        if let Some(hr) = super::msxml::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Gestionnaire de listes de réseaux (module réseau de Qt 5, iCUE #1844).
-        if let Some(hr) = super::netlistmgr::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
-        if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
-            return hr;
-        }
-        // Options globales du runtime COM (IGlobalOptions, Teams #2208).
-        if let Some(hr) = super::global_options::create_builtin(&guid, &iid, out) {
+        // Classes intégrées au runtime, sans inscription préalable.
+        if let Some(hr) = builtin_instance(&guid, &iid, out) {
             return hr;
         }
         // Serveur en processus inscrit au registre (InprocServer32, #16).
@@ -1091,6 +1019,128 @@ pub unsafe extern "win64" fn co_create_instance_ex(
     }
 }
 
+/// Classes intégrées au runtime, créées sans inscription préalable : la
+/// chaîne commune à CoCreateInstance et à CoGetClassObject (#3294).
+///
+/// # Safety
+/// `out` doit être inscriptible.
+unsafe fn builtin_instance(guid: &Guid, iid: &Guid, out: *mut *mut c_void) -> Option<i32> {
+    // Classes intégrées au runtime (planificateur de tâches…).
+    if let Some(hr) = crate::dlls::taskschd::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Classes audio intégrées (MMDeviceEnumerator, DirectSound, XAudio2 2.7).
+    if let Some(hr) = super::audio_com::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Boîtes Ouvrir/Enregistrer de Vista (IFileOpenDialog/IFileSaveDialog).
+    if let Some(hr) = super::filedialog_com::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Raccourcis Windows (ShellLink : Discord, Electron, #1732).
+    if let Some(hr) = super::shell_link::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // DirectInput 8 et 7 par CoCreateInstance (SDL 2, #1516).
+    if let Some(hr) = super::dinput8::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Graphe de lecture DirectShow (quartz.dll, #835).
+    if let Some(hr) = super::quartz::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // DirectPlay et son lobby (dplayx.dll, #836).
+    if let Some(hr) = super::dplayx::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // DirectPlay 8 (dpnet.dll, #863).
+    if let Some(hr) = super::dpnet::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Listes de raccourcis de la barre des tâches (WinSCP, #905).
+    if let Some(hr) = super::jumplist_com::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Contrôle navigateur web « Shell.Explorer » (#2228).
+    if let Some(hr) = super::webbrowser::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Bouton de la barre des tâches : progression, icône superposée (#1434).
+    if let Some(hr) = super::taskbarlist_com::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Pare-feu, ancienne interface HNetCfg.FwMgr (SteamService, #1919).
+    if let Some(hr) = super::netfw::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Profils de saisie du Text Services Framework (CEF de Steam, #1602).
+    if let Some(hr) = super::msctf_profiles::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Annotations d'accessibilité (AccPropServices, VCL, #1114).
+    if let Some(hr) = super::oleacc_props::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // WMI en lecture (WbemLocator, ROOT\\CIMV2, #1198).
+    if let Some(hr) = super::wbem::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Documents XML MSXML (DOMDocument 2.6 à 6.0, #1084).
+    if let Some(hr) = super::msxml::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Gestionnaire de listes de réseaux (module réseau de Qt 5, iCUE #1844).
+    if let Some(hr) = super::netlistmgr::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
+    if let Some(hr) = super::uianimation::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    // Options globales du runtime COM (IGlobalOptions, Teams #2208).
+    if let Some(hr) = super::global_options::create_builtin(guid, iid, out) {
+        return Some(hr);
+    }
+    None
+}
+
+/// CoGetClassObject pour une classe intégrée (#3294) : Learn décrit
+/// CoCreateInstance comme CoGetClassObject(IID_IClassFactory) puis
+/// CreateInstance, donc toute classe que sert `builtin_instance` a aussi
+/// sa fabrique. La classe est reconnue en créant puis relâchant une
+/// instance, comme le ferait un CoCreateInstance.
+///
+/// # Safety
+/// `riid` et `out` doivent être valides.
+unsafe fn builtin_class_object(
+    guid: &Guid,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> Option<i32> {
+    let mut probe: *mut c_void = std::ptr::null_mut();
+    if builtin_instance(guid, &super::audio_com::IID_IUNKNOWN, &mut probe)? != S_OK {
+        return None;
+    }
+    if !probe.is_null() {
+        let vt = *(probe as *const *const usize);
+        let release: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(2));
+        release(probe);
+    }
+    Some(super::audio_com::factory_for_clsid(
+        *guid,
+        builtin_from_factory,
+        riid,
+        out,
+    ))
+}
+
+unsafe fn builtin_from_factory(guid: &Guid, riid: *const Guid, out: *mut *mut c_void) -> i32 {
+    match super::audio_com::read_guid(riid) {
+        Some(iid) => builtin_instance(guid, &iid, out).unwrap_or(0x8004_0154u32 as i32),
+        None => E_INVALIDARG,
+    }
+}
+
 // ---------- CoGetClassObject ----------
 
 pub unsafe extern "win64" fn co_get_class_object(
@@ -1121,8 +1171,7 @@ pub unsafe extern "win64" fn co_get_class_object(
         if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
             return hr;
         }
-        // Raccourcis Windows : la même classe que CoCreateInstance (#3294).
-        if let Some(hr) = super::shell_link::class_object(&guid, riid, out) {
+        if let Some(hr) = builtin_class_object(&guid, riid, out) {
             return hr;
         }
         if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
@@ -2050,5 +2099,99 @@ mod tests {
         assert_eq!(crate::dlls::kernel32::global_size(global), input.len());
         assert_eq!(unsafe { stream_release(stream) }, 0);
         assert!(lookup_global_memory(global).is_none());
+    }
+
+    /// #3294 : chaque classe intégrée que CoCreateInstance crée a aussi sa
+    /// fabrique par CoGetClassObject, et CreateInstance y rend le même
+    /// résultat (Learn, CoCreateInstance, Remarques).
+    #[test]
+    fn classes_integrees_servies_par_cogetclassobject_3294() {
+        use super::super::audio_com::{IID_ICLASSFACTORY, IID_IUNKNOWN};
+        macro_rules! g {
+            ($e:expr) => {
+                unsafe { *(&$e as *const _ as *const Guid) }
+            };
+        }
+        let mut classes: Vec<Guid> = vec![
+            g!(super::super::taskschd::CLSID_TASK_SCHEDULER),
+            g!(super::super::filedialog_com::CLSID_FILE_OPEN_DIALOG),
+            g!(super::super::filedialog_com::CLSID_FILE_SAVE_DIALOG),
+            g!(super::super::shell_link::CLSID_SHELL_LINK),
+            g!(super::super::dinput8::CLSID_DIRECTINPUT),
+            g!(super::super::dinput8::CLSID_DIRECTINPUT8),
+            g!(super::super::quartz::CLSID_FILTER_GRAPH),
+            g!(super::super::quartz::CLSID_FILTER_GRAPH_NO_THREAD),
+            g!(super::super::dplayx::CLSID_DIRECTPLAY),
+            g!(super::super::dplayx::CLSID_DIRECTPLAYLOBBY),
+            g!(super::super::dpnet::CLSID_DIRECTPLAY8CLIENT),
+            g!(super::super::dpnet::CLSID_DIRECTPLAY8SERVER),
+            g!(super::super::dpnet::CLSID_DIRECTPLAY8PEER),
+            g!(super::super::dpnet::CLSID_DIRECTPLAY8ADDRESS),
+            g!(super::super::jumplist_com::CLSID_DESTINATION_LIST),
+            g!(super::super::jumplist_com::CLSID_ENUMERABLE_OBJECT_COLLECTION),
+            g!(super::super::webbrowser::CLSID_WEB_BROWSER),
+            g!(super::super::webbrowser::CLSID_WEB_BROWSER_V1),
+            g!(super::super::taskbarlist_com::CLSID_TASKBAR_LIST),
+            g!(super::super::netfw::CLSID_NET_FW_MGR),
+            g!(super::super::netfw::CLSID_NET_FW_AUTHORIZED_APPLICATION),
+            g!(super::super::msctf_profiles::CLSID_TF_INPUT_PROCESSOR_PROFILES),
+            g!(super::super::oleacc_props::CLSID_ACC_PROP_SERVICES),
+            g!(super::super::wbem::CLSID_WBEM_LOCATOR),
+            g!(super::super::netlistmgr::CLSID_NETWORK_LIST_MANAGER),
+            g!(super::super::uianimation::CLSID_MANAGER),
+            g!(super::super::uianimation::CLSID_LIBRARY),
+            g!(super::super::uianimation::CLSID_FACTORY),
+            g!(super::super::uianimation::CLSID_TIMER),
+            g!(super::super::global_options::CLSID_GLOBAL_OPTIONS),
+        ];
+        for (c, _) in super::super::msxml::CLASSES {
+            classes.push(g!(*c));
+        }
+        unsafe fn release(p: *mut c_void) {
+            let vt = *(p as *const *const usize);
+            let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(2));
+            f(p);
+        }
+        let mut servies = 0;
+        for clsid in &classes {
+            unsafe {
+                let mut direct: *mut c_void = std::ptr::null_mut();
+                let hr = co_create_instance(clsid, 0, 1, &IID_IUNKNOWN, &mut direct);
+                if hr != S_OK {
+                    continue;
+                }
+                release(direct);
+                let mut cf: *mut c_void = std::ptr::null_mut();
+                let hr = co_get_class_object(
+                    clsid,
+                    1,
+                    std::ptr::null_mut(),
+                    &IID_ICLASSFACTORY,
+                    &mut cf,
+                );
+                assert_eq!(hr, S_OK, "CoGetClassObject {}", guid_text(clsid));
+                let vt = *(cf as *const *const usize);
+                type Create = unsafe extern "win64" fn(
+                    *mut c_void,
+                    *mut c_void,
+                    *const Guid,
+                    *mut *mut c_void,
+                ) -> i32;
+                let create: Create = std::mem::transmute(*vt.add(3));
+                let mut obj: *mut c_void = std::ptr::null_mut();
+                let hr = create(cf, std::ptr::null_mut(), &IID_IUNKNOWN, &mut obj);
+                assert_eq!(hr, S_OK, "CreateInstance {}", guid_text(clsid));
+                assert!(!obj.is_null());
+                release(obj);
+                release(cf);
+                servies += 1;
+            }
+        }
+        // Chacune se crée directement aujourd'hui : aucune ne doit manquer.
+        assert_eq!(servies, classes.len());
+        eprintln!(
+            "#3294 : {servies} classes intégrées sur {} servies par CoGetClassObject",
+            classes.len()
+        );
     }
 }
