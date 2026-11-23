@@ -516,6 +516,17 @@ type SentJob = Box<dyn FnOnce() -> isize + Send>;
 /// comme avant #2885, plutôt que de rester bloqué pour toujours.
 const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
 
+thread_local! {
+    /// Profondeur des messages envoyés par un autre fil en cours de
+    /// traitement sur ce fil (InSendMessage, InSendMessageEx, #3104).
+    static IN_SENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Le fil traite-t-il un message envoyé par un autre fil ?
+pub fn in_sent_message() -> bool {
+    IN_SENT.with(|d| d.get()) > 0
+}
+
 /// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
 /// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
 /// les attentes de messages et l'attente d'un SendMessage inter-fils.
@@ -530,7 +541,9 @@ pub fn deliver_sent() {
         };
         let job = lock(&sent.job).take();
         if let Some(job) = job {
+            IN_SENT.with(|d| d.set(d.get() + 1));
             let r = job();
+            IN_SENT.with(|d| d.set(d.get() - 1));
             *lock(&sent.result) = Some(r);
             sent.done.notify_all();
         }
