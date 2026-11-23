@@ -1348,9 +1348,13 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
                 /usr/bin/winlux --boot-time record 2>/dev/null || true
                 echo "WINLUX_BOOT_PHASES=$(/usr/bin/winlux --boot-time | /bin/busybox sed -n 's/^boot_phases=//p')"
             fi
-            while /bin/busybox kill -0 "$session_pid" 2>/dev/null; do
-                request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
-                update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
+            # Un tour par seconde, en commandes internes du shell (kill, read) :
+            # quatre processus par seconde pour un bureau immobile (deux cat en
+            # sous-shell, kill, sleep), il n'en reste qu'un, le sleep, qui fait
+            # aussi récolter les orphelins par l'init.
+            while kill -0 "$session_pid" 2>/dev/null; do
+                request=; read -r request 2>/dev/null </run/winlux/session-action || :
+                update=; read -r update 2>/dev/null </run/winlux/update-action || :
                 # « Se déconnecter » (#1564) : la session se ferme, applications
                 # comprises, et la suivante s'ouvre sur l'écran de connexion.
                 if test "$request" = logoff-session; then
@@ -1430,9 +1434,13 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             /usr/bin/winlux --boot-time record 2>/dev/null || true
             echo "WINLUX_BOOT_PHASES=$(/usr/bin/winlux --boot-time | /bin/busybox sed -n 's/^boot_phases=//p')"
         fi
-        while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
-            request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
-            update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
+        # Un tour par seconde, en commandes internes du shell (kill, read) :
+        # quatre processus par seconde pour un bureau immobile (deux cat en
+        # sous-shell, kill, sleep), il n'en reste qu'un, le sleep, qui fait
+        # aussi récolter les orphelins par l'init.
+        while kill -0 "$desktop_pid" 2>/dev/null; do
+            request=; read -r request 2>/dev/null </run/winlux/session-action || :
+            update=; read -r update 2>/dev/null </run/winlux/update-action || :
             if test "$request" = restart-session && ! /usr/bin/winlux-update --busy; then
                 /bin/busybox rm -f /run/winlux/session-action
                 if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
