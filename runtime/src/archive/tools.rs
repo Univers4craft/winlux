@@ -46,6 +46,18 @@ pub fn bsdtar() -> Option<PathBuf> {
     find(&["bsdtar"])
 }
 
+/// Commande d'un outil d'archive (7-Zip, unrar, unar, bsdtar) sous une
+/// locale UTF-8 fixe. Ces outils convertissent les noms d'entrée selon la
+/// locale héritée : sous C, bsdtar écrit « été » en caractères de
+/// remplacement sans erreur et ne relit plus aucun nom accentué (#3282).
+/// C.UTF-8 est intégrée à la glibc depuis 2.35, sans fichier de locale.
+/// Les messages restent en anglais, ce que `run_archiver` reconnaît.
+pub fn archiver(tool: &Path) -> Command {
+    let mut c = Command::new(tool);
+    c.env("LC_ALL", "C.UTF-8");
+    c
+}
+
 /// Décompresse `archive` à travers un filtre (`xz -dc`…) ; la lecture du
 /// fichier source alimente la progression.
 pub fn filter_read(

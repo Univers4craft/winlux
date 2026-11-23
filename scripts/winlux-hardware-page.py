@@ -174,6 +174,36 @@ _TR = {
     "Adaptateur détecté": ("Adapter detected", "Adaptador detectado", "Adapter erkannt"),
     "Détecté": ("Detected", "Detectado", "Erkannt"),
     "Machine virtuelle": ("Virtual machine", "Máquina virtual", "Virtuelle Maschine"),
+    # À propos de ce PC (#3053)
+    "Nom du PC": ("PC name", "Nombre del PC", "PC-Name"),
+    "Copier": ("Copy", "Copiar", "Kopieren"),
+    "Copié": ("Copied", "Copiado", "Kopiert"),
+    "Mémoire": ("Memory", "Memoria", "Arbeitsspeicher"),
+    "{cores} cœurs": ("{cores} cores", "{cores} núcleos", "{cores} Kerne"),
+    "{count} disques": ("{count} drives", "{count} discos", "{count} Laufwerke"),
+    "et {count} autre(s)": ("and {count} more", "y {count} más", "und {count} weitere"),
+    "Détection du matériel…": ("Detecting hardware…", "Detectando el hardware…", "Hardware wird erkannt…"),
+    "Démarrage": ("Startup", "Arranque", "Start"),
+    "Dernier démarrage, de l’allumage du noyau jusqu’au bureau.": ("Last startup, from kernel start to the desktop.", "Último arranque, desde el inicio del núcleo hasta el escritorio.", "Letzter Start, vom Kernelstart bis zum Desktop."),
+    "Meilleur : {value}": ("Best: {value}", "Mejor: {value}", "Bestwert: {value}"),
+    "Précédent : {value}": ("Previous: {value}", "Anterior: {value}", "Vorheriger: {value}"),
+    "{count} démarrages mesurés": ("{count} startups measured", "{count} arranques medidos", "{count} Starts gemessen"),
+    "Le plus rapide jamais mesuré sur ce PC.": ("The fastest ever measured on this PC.", "El más rápido medido en este PC.", "Der schnellste je auf diesem PC gemessene Start."),
+    "Étape la plus longue : {name}, {value}.": ("Longest step: {name}, {value}.", "Paso más largo: {name}, {value}.", "Längster Schritt: {name}, {value}."),
+    "Derniers démarrages": ("Recent startups", "Últimos arranques", "Letzte Starts"),
+    "Pas encore mesuré : le temps s’affiche dès qu’un démarrage est allé jusqu’au bureau.": ("Not measured yet: the time appears once a startup has reached the desktop.", "Aún no medido: el tiempo aparece cuando un arranque llega al escritorio.", "Noch nicht gemessen: Die Zeit erscheint, sobald ein Start den Desktop erreicht hat."),
+    "Mesuré par l’init à chaque étape ; le micrologiciel du PC avant le noyau n’est pas compté.": ("Measured by init at each step; the PC firmware before the kernel is not counted.", "Medido por init en cada paso; el firmware del PC antes del núcleo no se cuenta.", "Von init bei jedem Schritt gemessen; die Firmware des PCs vor dem Kernel zählt nicht mit."),
+    "Noyau": ("Kernel", "Núcleo", "Kernel"),
+    "Vérification du système": ("System check", "Comprobación del sistema", "Systemprüfung"),
+    "Pilotes": ("Drivers", "Controladores", "Treiber"),
+    "Détection du matériel": ("Hardware detection", "Detección del hardware", "Hardwareerkennung"),
+    "Services": ("Services", "Servicios", "Dienste"),
+    "Session": ("Session", "Sesión", "Sitzung"),
+    "Bureau": ("Desktop", "Escritorio", "Desktop"),
+    "Spécifications de Winlux": ("Winlux specifications", "Especificaciones de Winlux", "Winlux-Spezifikationen"),
+    "Winlux {version} · noyau {kernel}": ("Winlux {version} · kernel {kernel}", "Winlux {version} · núcleo {kernel}", "Winlux {version} · Kernel {kernel}"),
+    "version de développement": ("development version", "versión de desarrollo", "Entwicklungsversion"),
+    "Temps de démarrage": ("Startup time", "Tiempo de arranque", "Startzeit"),
     "o": ("B", "B", "B"),
     "Ko": ("KB", "KB", "KB"),
     "Mo": ("MB", "MB", "MB"),
@@ -499,15 +529,401 @@ def pc_rows(r, status=None):
     return [(title, value) for title, value in rows if value]
 
 
-def pc_section(w, status=None):
-    """Section « Votre PC », sous la version et le noyau de la page À propos."""
-    rows = pc_rows(report(), status)
+def pc_section(w, status=None, r=None):
+    """Section « Votre PC », sous la version et le noyau de la page À propos ;
+    r : relevé déjà lu (la page À propos ne lance jamais winlux-drivers ici)."""
+    rows = pc_rows(report() if r is None else r, status)
     if not rows:
         return
     w.section(_t("Votre PC"), _t("Tout ce que Winlux a détecté sur cette machine."))
     box = w.card()
     for title, value in rows:
         w.row(box, title, None, value)
+
+
+# ── À propos de ce PC (#3053) ─────────────────────────────────────────────
+# En-tête (nom du PC, modèle, version de Winlux, noyau), quatre tuiles
+# (processeur, mémoire, stockage, carte graphique) et le temps de démarrage
+# mesuré par l'init. Tout est lu dans des fichiers : la page s'affiche
+# aussitôt ; seul un relevé du matériel absent est demandé hors du fil GTK,
+# puis la page se complète.
+
+BOOT_ROOT = Path(os.environ.get("WINLUX_BOOT_ROOT", "/"))
+BOOT_HISTORY = 20
+BOOT_STEPS = {"init": "Noyau", "recovery": "Vérification du système", "drivers": "Pilotes",
+              "hardware": "Détection du matériel", "services": "Services", "xorg": "Affichage",
+              "session": "Session", "desktop": "Bureau"}
+REMOVABLE = ("usb", "sd")
+
+
+def cached_report():
+    """Relevé déjà écrit par winlux-control, None s'il n'existe pas encore."""
+    try:
+        text = REPORT.read_text(errors="replace")
+    except OSError:
+        return None
+    values = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    return values or None
+
+
+def _read(path):
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+def boot_facts(root=None):
+    """Dernier démarrage d'après les repères de l'init : chaque étape note
+    /proc/uptime au moment où elle commence (/run/winlux/boot-times), et
+    `winlux --boot-time record` garde les totaux (/var/lib/winlux/boot-history).
+    Une mesure, jamais une valeur estimée : {} tant que le bureau n'est pas lancé."""
+    root = Path(root or BOOT_ROOT)
+    marks = []
+    for line in _read(root / "run/winlux/boot-times").splitlines():
+        parts = line.split()
+        try:
+            at = float(parts[1])
+        except (IndexError, ValueError):
+            continue
+        if at >= 0 and at == at and at != float("inf"):
+            marks.append((parts[0], at))
+    if not any(name == "desktop" for name, _ in marks):
+        return {}
+    total = round(next(at for name, at in marks if name == "desktop") * 1000)
+    phases, previous = [], 0.0
+    for name, at in marks:
+        phases.append((name, max(0, round((at - previous) * 1000))))
+        previous = max(previous, at)
+        if name == "desktop":
+            break
+    history = []
+    for line in _read(root / "var/lib/winlux/boot-history").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            history.append(int(parts[1]))
+    # L'historique contient déjà ce démarrage une fois enregistré.
+    earlier = history[:-1] if history and history[-1] == total else history
+    facts = {"total_ms": total, "phases": [(n, ms) for n, ms in phases if ms or n == "init"],
+             "history": (earlier + [total])[-BOOT_HISTORY:], "count": len(earlier) + 1}
+    if earlier:
+        facts["previous_ms"] = earlier[-1]
+        facts["best_ms"] = min(earlier + [total])
+    slow = [(ms, n) for n, ms in phases[1:]]
+    if slow:
+        ms, name = max(slow)
+        facts["slowest"] = (name, ms)
+    return facts
+
+
+def seconds(ms):
+    text = f"{ms / 1000:.1f} s"
+    return text if _LANG == "en" else text.replace(".", ",")
+
+
+def short_cpu(name):
+    """« 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz » → « 11th Gen Intel Core i5-1135G7 »."""
+    for mark in ("(R)", "(r)", "(TM)", "(tm)", "®", "™"):
+        name = name.replace(mark, "")
+    name = name.split(" @ ")[0]
+    words = [word for word in name.split() if word not in ("CPU", "Processor")]
+    return " ".join(words)
+
+
+def short_gpu(name):
+    """« Intel Corporation … Integrated Graphics Controller » → « Intel … Integrated Graphics »."""
+    words = [word for word in name.replace("Corporation", "").replace("[", "").replace("]", "").split()]
+    if words and words[-1] == "Controller":
+        words.pop()
+    return " ".join(words)
+
+
+def highlights(r):
+    """(pictogramme, titre, valeur, détail) des quatre caractéristiques détectées."""
+    tiles = []
+    if r.get("pc_cpu_model"):
+        cores = _int(r.get("pc_cpu_cores")) or _int(r.get("pc_cpu_threads"))
+        threads = _int(r.get("pc_cpu_threads"))
+        detail = ""
+        if cores and threads and threads != cores:
+            detail = _t("{cores} cœurs, {threads} threads").format(cores=cores, threads=threads)
+        elif cores:
+            detail = _t("{cores} cœurs").format(cores=cores)
+        tiles.append(("cpu", _t("Processeur"), short_cpu(r["pc_cpu_model"]), detail))
+    if _int(r.get("pc_memory_kb")):
+        tiles.append(("memory", _t("Mémoire"), size_text(_int(r["pc_memory_kb"]) * 1024, binary=True), ""))
+    disks = [i for i in range(min(8, _int(r.get("pc_disk_count"))))
+             if r.get(f"pc_disk{i}_kind") not in REMOVABLE and _int(r.get(f"pc_disk{i}_size"))]
+    if disks:
+        size = sum(_int(r.get(f"pc_disk{i}_size")) for i in disks)
+        free = min(size, sum(_int(r.get(f"pc_disk{i}_free")) for i in disks if _int(r.get(f"pc_disk{i}_mounted"))))
+        parts = [_t("{count} disques").format(count=len(disks))] if len(disks) > 1 else []
+        kind = r.get(f"pc_disk{disks[0]}_kind")
+        if len(disks) == 1 and kind in DISK_KINDS:
+            parts.append(_t(DISK_KINDS[kind]))
+        if free:
+            parts.append(_t("{size} libres").format(size=size_text(free)))
+        tiles.append(("drive", _t("Stockage"), size_text(size), " · ".join(parts)))
+    gpus_found = _split(r.get("pc_gpus"))
+    if gpus_found:
+        more = _t("et {count} autre(s)").format(count=len(gpus_found) - 1) if len(gpus_found) > 1 else ""
+        tiles.append(("gpu", _t("Carte graphique"), short_gpu(gpus_found[0]), more))
+    return tiles
+
+
+def about_identity(r, status):
+    """(nom du PC, modèle, ligne Winlux · noyau)."""
+    import socket
+    name = _read(Path("/etc/hostname")).strip() or socket.gethostname()
+    virtual = r.get("drivers_virtual", "")
+    if virtual:
+        model = _t("Machine virtuelle") + " " + VM_NAMES.get(virtual, virtual)
+    else:
+        model = " ".join(part for part in (r.get("pc_vendor", ""), r.get("pc_model", "")) if part)
+    version = (status.get("version") or _read(Path("/usr/share/winlux/version")).strip().splitlines() or [""])
+    version = version if isinstance(version, str) else version[0]
+    if not version or version == "developpement":
+        version = _t("version de développement")
+    kernel = status.get("kernel") or os.uname().release
+    return name, model, _t("Winlux {version} · noyau {kernel}").format(version=version, kernel=kernel)
+
+
+def about_text(r, status, boot):
+    """Texte du bouton Copier : ce que la page montre, en lignes « titre : valeur »."""
+    name, _, system = about_identity(r, status)
+    lines = [f"{_t('Nom du PC')} : {name}", system]  # fabricant et modèle : dans pc_rows
+    lines += [f"{title} : {value}" for title, value in pc_rows(r, status)]
+    if boot:
+        lines.append(f"{_t('Temps de démarrage')} : {seconds(boot['total_ms'])}")
+    return "\n".join(lines) + "\n"
+
+
+def _mix(first, second, amount):
+    a = [int(first[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(second[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * amount) for x, y in zip(a, b))
+
+
+def _rgb(color):
+    return tuple(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+
+
+def phase_colors(accent, count):
+    """Une teinte de l'accent par étape, deux voisines toujours bien distinctes
+    (lisibles sur une carte claire comme sombre)."""
+    steps = (0.0, 0.5, 0.2, 0.65, 0.1, 0.4, 0.3, 0.58)
+    return [_mix(accent, "#ffffff", steps[i % len(steps)]) for i in range(count)]
+
+
+def _bar(phases, colors, height=14):
+    """Barre des étapes, chacune à proportion de sa durée."""
+    from gi.repository import Gtk
+    area = Gtk.DrawingArea(hexpand=True)
+    area.set_size_request(-1, height)
+    total = sum(ms for _, ms in phases) or 1
+
+    def draw(widget, cr):
+        width = widget.get_allocated_width()
+        x = 0.0
+        radius = height / 2
+        cr.new_sub_path()
+        cr.arc(radius, radius, radius, 1.5708, 4.7124)
+        cr.arc(width - radius, radius, radius, -1.5708, 1.5708)
+        cr.close_path()
+        cr.clip()
+        for (_, ms), color in zip(phases, colors):
+            span = width * ms / total
+            cr.set_source_rgb(*_rgb(color))
+            cr.rectangle(x, 0, span + 0.5, height)
+            cr.fill()
+            x += span
+        return False
+    area.connect("draw", draw)
+    return area
+
+
+def _history(values, accent, dim, height=56):
+    """Les derniers démarrages, le dernier dans la couleur d'accentuation."""
+    from gi.repository import Gtk
+    area = Gtk.DrawingArea(hexpand=True)
+    area.set_size_request(-1, height)
+    top = max(values) or 1
+
+    def draw(widget, cr):
+        width = widget.get_allocated_width()
+        slot = width / max(len(values), 10)
+        bar = max(3.0, slot * 0.6)
+        start = width - slot * len(values)
+        for i, ms in enumerate(values):
+            h = max(3.0, (height - 2) * ms / top)
+            x = start + i * slot + (slot - bar) / 2
+            cr.set_source_rgb(*_rgb(accent if i == len(values) - 1 else dim))
+            r = min(3.0, bar / 2)
+            cr.new_sub_path()
+            cr.arc(x + r, height - h + r, r, 3.1416, 4.7124)
+            cr.arc(x + bar - r, height - h + r, r, -1.5708, 0)
+            cr.line_to(x + bar, height)
+            cr.line_to(x, height)
+            cr.close_path()
+            cr.fill()
+        return False
+    area.connect("draw", draw)
+    return area
+
+
+def _label(text, css=None, markup=None, **kw):
+    from gi.repository import Gtk
+    label = Gtk.Label(xalign=0, wrap=True, **kw)
+    if markup is not None:
+        label.set_markup(markup)
+    else:
+        label.set_text(text)
+    if css:
+        label.get_style_context().add_class(css)
+    return label
+
+
+def about_top(w, box, r, status, boot, accent, icon, pending):
+    """En-tête, tuiles et démarrage, dans box (au-dessus de la carte Winlux)."""
+    from gi.repository import Gdk, GLib, Gtk
+    body, w.body = w.body, box
+    try:
+        name, model, system = about_identity(r, status)
+        copy = []
+
+        def copied():
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(about_text(r, status, boot), -1)
+            button = copy[0]
+            button.set_label("✓ " + _t("Copié"))
+            GLib.timeout_add(2000, lambda: button.set_label(_t("Copier")) and False)
+        hero, _ = w.hero("pc", name, "\n".join(part for part in (model, system) if part),
+                         [(_t("Copier"), copied)])
+        copy += [child for child in hero.get_children()[-1].get_children() if isinstance(child, Gtk.Button)]
+        hero.set_name("about-hero")
+
+        tiles = highlights(r)
+        if tiles:
+            # Quatre tuiles de même largeur, deux par ligne sur un petit écran.
+            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                               min_children_per_line=2, max_children_per_line=4,
+                               row_spacing=10, column_spacing=10)
+            flow.set_name("about-tiles")
+            for glyph, title, value, detail in tiles:
+                tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                tile.get_style_context().add_class("card")
+                image = icon(glyph, 28)
+                image.set_halign(Gtk.Align.START)
+                tile.pack_start(image, False, False, 2)
+                tile.pack_start(_label(title, "subtitle"), False, False, 0)
+                strong = _label(value, markup=f"<span size='large' weight='bold'>{GLib.markup_escape_text(value)}</span>",
+                                max_width_chars=12, lines=3, ellipsize=3)
+                strong.set_tooltip_text(value)
+                tile.pack_start(strong, False, False, 0)
+                if detail:
+                    tile.pack_start(_label(detail, "subtitle", max_width_chars=12), False, False, 0)
+                flow.add(tile)
+
+            def balance(widget, allocation):
+                # Quatre de front ou deux par deux, jamais trois et une seule.
+                per_line = 4 if allocation.width >= 640 or len(tiles) < 4 else 2
+                if widget.get_max_children_per_line() != per_line:
+                    GLib.idle_add(widget.set_max_children_per_line, per_line)
+            flow.connect("size-allocate", balance)
+            box.pack_start(flow, False, False, 0)
+        elif pending:
+            w.hint(_t("Détection du matériel…"))
+
+        w.section(_t("Démarrage"))
+        card = w.card()
+        card.set_name("about-boot")
+        if not boot:
+            w.hint(_t("Pas encore mesuré : le temps s’affiche dès qu’un démarrage est allé jusqu’au bureau."), card)
+        else:
+            line = Gtk.Box(spacing=16)
+            big = _label(seconds(boot["total_ms"]),
+                         markup=f"<span size='xx-large' weight='bold'>{seconds(boot['total_ms'])}</span>")
+            big.set_name("about-boot-total")
+            big.set_valign(Gtk.Align.CENTER)
+            line.pack_start(big, False, False, 0)
+            texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+            texts.pack_start(_label(_t("Dernier démarrage, de l’allumage du noyau jusqu’au bureau.")), False, False, 0)
+            facts = []
+            if boot.get("best_ms") == boot["total_ms"] and boot["count"] > 1:
+                facts.append(_t("Le plus rapide jamais mesuré sur ce PC."))
+            elif boot.get("best_ms"):
+                facts.append(_t("Meilleur : {value}").format(value=seconds(boot["best_ms"])))
+            if boot.get("previous_ms"):
+                facts.append(_t("Précédent : {value}").format(value=seconds(boot["previous_ms"])))
+            if boot["count"] > 1:
+                facts.append(_t("{count} démarrages mesurés").format(count=boot["count"]))
+            if facts:
+                texts.pack_start(_label(" · ".join(facts), "subtitle"), False, False, 0)
+            line.pack_start(texts, True, True, 0)
+            card.pack_start(line, False, False, 0)
+            phases = boot["phases"]
+            colors = phase_colors(accent, len(phases))
+            card.pack_start(_bar(phases, colors), False, False, 2)
+            legend = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
+                                 row_spacing=4, column_spacing=16)
+            for (step, ms), color in zip(phases, colors):
+                item = _label("", markup=f"<span foreground='{color}'>●</span> "
+                                         f"{GLib.markup_escape_text(_t(BOOT_STEPS.get(step, step)))} "
+                                         f"<b>{seconds(ms)}</b>")
+                legend.add(item)
+            card.pack_start(legend, False, False, 0)
+            if boot.get("slowest"):
+                step, ms = boot["slowest"]
+                w.hint(_t("Étape la plus longue : {name}, {value}.").format(
+                    name=_t(BOOT_STEPS.get(step, step)), value=seconds(ms)), card)
+            if len(boot["history"]) > 1:
+                card.pack_start(_label(_t("Derniers démarrages"), "subtitle"), False, False, 4)
+                card.pack_start(_history(boot["history"], accent, _mix(accent, "#9aa0b4", 0.7)), False, False, 0)
+            w.hint(_t("Mesuré par l’init à chaque étape ; le micrologiciel du PC avant le noyau n’est pas compté."), card)
+        w.section(_t("Spécifications de Winlux"))
+    finally:
+        w.body = body
+
+
+def about_panel(w, status, accent, icon):
+    """Page À propos : s'affiche aussitôt avec ce qui est déjà relevé ; un
+    relevé du matériel absent est demandé hors du fil GTK, puis la page se
+    complète (jamais sur une autre page affichée entre-temps)."""
+    import threading
+    from gi.repository import GLib, Gtk
+    status = status or {}
+    r = cached_report()
+    boot = boot_facts()
+    top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    bottom = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    w.body.pack_start(top, False, False, 0)
+    state = getattr(w, "state_card", None)
+    children = w.body.get_children()
+    if state is not None and state in children:
+        w.body.reorder_child(top, children.index(state))
+    w.body.pack_start(bottom, False, False, 0)
+
+    def fill(values, pending):
+        for child in top.get_children() + bottom.get_children():
+            child.destroy()
+        about_top(w, top, values, status, boot, accent, icon, pending)
+        body, w.body = w.body, bottom
+        try:
+            pc_section(w, status, values)
+        finally:
+            w.body = body
+
+    fill(r or {}, r is None)
+    w._about_panel = top
+    if r is not None:
+        return
+
+    def done(values):
+        if getattr(w, "_about_panel", None) is top and top.get_parent() is not None and values:
+            fill(values, False)
+            top.show_all()
+            bottom.show_all()
+        return False
+    threading.Thread(target=lambda: GLib.idle_add(done, report()), daemon=True).start()
 
 
 # ── Page Matériel et pilotes ───────────────────────────────────────────────
