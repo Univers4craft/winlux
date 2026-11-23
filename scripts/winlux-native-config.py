@@ -2,6 +2,7 @@
 """Seed native desktop defaults once; retain personal configuration afterwards."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import pwd
@@ -32,6 +33,7 @@ _COL = {"en": 0, "es": 1, "de": 2}
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
     'Configuration Openbox personnalisée illisible : migration des raccourcis ignorée.': ('Custom Openbox configuration unreadable: shortcut migration skipped.', 'Configuración personalizada de Openbox ilegible: se omite la migración de los atajos.', 'Benutzerdefinierte Openbox-Konfiguration nicht lesbar: Übernahme der Tastenkürzel übersprungen.'),
+    'Bureau {n}': ('Desktop {n}', 'Escritorio {n}', 'Desktop {n}'),
 }
 
 
@@ -847,6 +849,36 @@ def migrate_openbox(openbox_config, default_rc):
 
 
 migrate_openbox(openbox_config, source / "config/openbox/rc.xml")
+# Noms des bureaux virtuels qu'openbox affiche dans sa bulle (Win+Ctrl+←/→) et
+# son menu de fenêtre : « Bureau Winlux » était figé en français pour le
+# premier, alors que la vue des tâches dit « Bureau 1 » (#3351). Un nom livré
+# ou générique suit la langue de la session ; un nom choisi reste.
+GENERIC_DESKTOP_NAME = re.compile(r"\s*((desktop|bureau|workspace|espace de travail|escritorio|[áa]rea de trabajo"
+                                  r"|arbeitsfl[äa]che|arbeitsbereich|schreibtisch)\s*\d*|bureau winlux)?\s*", re.I)
+
+
+def localize_desktop_names(openbox_config):
+    namespace = "http://openbox.org/3.4/rc"
+    try:
+        ET.register_namespace("", namespace)
+        tree = ET.parse(openbox_config)
+    except (OSError, ET.ParseError):
+        return False
+    names = tree.getroot().find(f"{{{namespace}}}desktops/{{{namespace}}}names")
+    changed = False
+    for number, name in enumerate(names if names is not None else []):
+        wanted = _t("Bureau {n}").format(n=number + 1)
+        if GENERIC_DESKTOP_NAME.fullmatch(name.text or "") and name.text != wanted:
+            name.text = wanted
+            changed = True
+    if changed:
+        temporary = openbox_config.with_suffix(".xml.tmp")
+        tree.write(temporary, encoding="utf-8", xml_declaration=True)
+        temporary.replace(openbox_config)
+    return changed
+
+
+localize_desktop_names(openbox_config)
 # Action « Open Terminal Here » d'origine (anglaise) du menu des dossiers et du
 # bureau : remplacée par celle livrée, traduite.
 uca = home / ".config/Thunar/uca.xml"
