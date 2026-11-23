@@ -910,3 +910,50 @@ fn polices_deja_inscrites_jamais_doublees() {
     assert_eq!(count("neuve.ttf"), 1, "{values:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn ecriture_sans_relecture_garde_les_changements_d_une_autre_appli() {
+    // #3429 : une écriture ne relit plus le fichier s'il n'a pas changé ;
+    // s'il a changé (autre appli), elle doit le relire et ne rien écraser.
+    let _s = Sandbox::new("sans-relecture");
+    let k = "hkcu\\Software\\Jeu";
+    write(|d| {
+        d.set(k, "A", REG_DWORD, 1u32.to_le_bytes().to_vec());
+        Ok(())
+    })
+    .unwrap();
+    write(|d| {
+        d.set(k, "B", REG_DWORD, 2u32.to_le_bytes().to_vec());
+        Ok(())
+    })
+    .unwrap();
+    let mut other = read(|d| Ok(d.clone())).unwrap();
+    other.set(k, "C", REG_DWORD, 3u32.to_le_bytes().to_vec());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let tmp = store_path().with_extension("autre");
+    std::fs::write(&tmp, serialize(&other)).unwrap();
+    std::fs::rename(&tmp, store_path()).unwrap();
+    write(|d| {
+        d.set(k, "D", REG_DWORD, 4u32.to_le_bytes().to_vec());
+        Ok(())
+    })
+    .unwrap();
+    let disk = load_file(&store_path()).unwrap();
+    for (n, v) in [("A", 1u32), ("B", 2), ("C", 3), ("D", 4)] {
+        assert_eq!(
+            disk.get(k, n).map(|x| x.bytes.clone()),
+            Some(v.to_le_bytes().to_vec()),
+            "valeur {n} sur le disque"
+        );
+    }
+    // Une écriture ratée ne laisse pas de copie à moitié modifiée.
+    assert!(write(|d| {
+        d.set(k, "E", REG_DWORD, 5u32.to_le_bytes().to_vec());
+        Err::<(), i32>(5)
+    })
+    .is_err());
+    assert!(read(|d| Ok(d.get(k, "E").is_none())).unwrap());
+    // RegFlushKey force le vidage différé.
+    flush();
+    assert!(crate::dlls::lock(&FLUSH_PENDING.0).is_none());
+}
