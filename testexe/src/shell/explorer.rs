@@ -6762,6 +6762,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         let c = cells(&r);
                         let max = (content_height(pn, &r, &c) - (r.bottom - r.top)).max(0);
                         pn.scroll_target = pn.scroll_target.clamp(0, max);
+                        // Un cran part tout de suite, sans animation : avant,
+                        // la liste ne bougeait qu'au tic suivant (#3155).
+                        pn.scroll = pn.scroll_target;
                     }
                     update_hover(&geo, x, y);
                     return true;
@@ -7574,6 +7577,31 @@ unsafe fn watch_drives() -> bool {
     true
 }
 
+/// Cadence de `tick()` voulue par l'Explorateur, en ms : 500 au repos,
+/// plus vite tant qu'un défilement, une vignette ou une copie avance (#3155).
+/// Avant, tout attendait le tic de 500 ms : un cran de molette défilait
+/// par sauts pendant 2,5 s, les vignettes arrivaient après 600 ms.
+pub unsafe fn tick_ms() -> u32 {
+    if NTABS == 0 {
+        return 500;
+    }
+    for i in 0..NTABS {
+        for which in 0..2 {
+            let pn = &TABS[i].panes[which];
+            if pn.scroll != pn.scroll_target {
+                return 16;
+            }
+        }
+    }
+    if crate::thumbs::waiting() {
+        return 40;
+    }
+    if JOB != 0 || copy::busy() {
+        return 100;
+    }
+    500
+}
+
 pub unsafe fn tick(_f: &Frame) -> bool {
     let refreshed = watch_folders() | watch_drives();
     let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
@@ -7826,6 +7854,56 @@ unsafe fn layout_regression() {
     check!(on_tab && empty, "Onglets dans la barre de titre : vide = deplacer la fenetre (#888)");
 }
 
+/// Un cran de molette déplace la liste tout de suite, et la boucle n'accélère
+/// que pendant un défilement en cours : au repos, le tic reste à 500 ms (#3155).
+unsafe fn wheel_tick_checks() {
+    let f = Frame {
+        outer: rect(0, 0, 980, 650),
+        title: rect(0, 0, 980 - 138, 40),
+        client: rect(0, 40, 980, 650),
+    };
+    let saved_view = VIEW;
+    VIEW = View::Details;
+    let p = pane();
+    let old_loc = p.loc;
+    p.count = 0;
+    for i in 0..300u32 {
+        let mut name = *b"fichier-000.txt";
+        name[8] = b'0' + (i / 100) as u8;
+        name[9] = b'0' + (i / 10 % 10) as u8;
+        name[10] = b'0' + (i % 10) as u8;
+        add_entry(p, &name, false, false, 0, 0, None);
+    }
+    rebuild_view(p);
+    p.scroll = 0;
+    p.scroll_target = 0;
+    let idle = tick_ms();
+    let r = pane_rect_inner(&geo(&f), 0);
+    mouse(
+        Mouse::Wheel(-120),
+        (r.left + r.right) / 2,
+        (r.top + r.bottom) / 2,
+        &f,
+    );
+    let p = pane();
+    let moved = p.scroll > 0 && p.scroll == p.scroll_target;
+    let after = tick_ms();
+    p.scroll_target = p.scroll + 200;
+    let animating = tick_ms();
+    p.scroll_target = p.scroll;
+    check!(
+        moved,
+        "Explorateur : un cran de molette fait defiler la liste tout de suite (#3155)"
+    );
+    check!(
+        idle == 500 && after == 500 && animating < 50,
+        "Explorateur : tic a 500 ms au repos, accelere seulement pendant un defilement (#3155)"
+    );
+    VIEW = saved_view;
+    p.loc = old_loc;
+    reload(p);
+}
+
 pub unsafe fn regression_checks() {
     // Dossier accentué réel (VM de l'ISO) : « Téléchargements » doit s'ouvrir,
     // pas « Ce dossier est introuvable ». Seulement si le test le demande.
@@ -8062,6 +8140,7 @@ pub unsafe fn regression_checks() {
     row_icon_checks();
     pick::regression();
     places_and_hover_checks();
+    wheel_tick_checks();
     props::regression(root);
     icons::regression();
     home::regression();

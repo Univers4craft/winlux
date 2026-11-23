@@ -24,6 +24,7 @@ colonnes, quatre quarts.
     winlux-snap ontop [FENÊTRE]          Windows + Ctrl + T : toujours au premier plan
     winlux-snap watch                    ancrage à la souris (lancé avec la session)
     winlux-snap restore-group FENÊTRE    remet le groupe d'ancrage de FENÊTRE au premier plan
+    winlux-snap resnap                   replace les fenêtres ancrées (écran changé, lancé par watch)
 
 À la souris (winlux-snap watch) : une fenêtre glissée par sa barre de titre
 jusqu'au bord gauche ou droit prend la moitié de l'écran, jusqu'à un coin un
@@ -353,6 +354,21 @@ def keep_on_screen(window, area, rect):
     x, y = inside_position(last, area)
     if (x, y) != last[:2]:
         _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},-1,-1"])
+
+
+def resnap():
+    """Replace chaque fenêtre ancrée dans sa case, recalculée pour la zone de
+    travail actuelle : après un changement de définition ou d'écran, une
+    moitié reste une moitié (#2908)."""
+    areas = work_areas()
+    for line in _run(["wmctrl", "-l"]).splitlines():
+        window = line.split(None, 1)[0] if line.strip() else ""
+        zone = get_prop(window, "_WINLUX_SNAP") if window else ""
+        if zone not in ZONES: continue
+        geometry = window_geometry(window)
+        center = (geometry[0] + geometry[2] // 2, geometry[1] + geometry[3] // 2) if geometry else (0, 0)
+        snap(window, zone, pick_area(areas, center))
+    return 0
 
 
 def leave_snap(window):
@@ -1528,6 +1544,23 @@ def watch():
         GLib.timeout_add(100, tick)
         return False
 
+    # Définition ou écrans changés : les fenêtres ancrées suivent (#2908),
+    # une fois la zone de travail mise à jour par openbox et le panneau.
+    pending = {"id": 0}
+
+    def screen_changed(*_):
+        if pending["id"]: GLib.source_remove(pending["id"])
+
+        def run():
+            pending["id"] = 0
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "resnap"],
+                             stdout=subprocess.DEVNULL, start_new_session=True)
+            return False
+        pending["id"] = GLib.timeout_add(1200, run)
+
+    screen = Gdk.Screen.get_default()
+    screen.connect("size-changed", screen_changed)
+    screen.connect("monitors-changed", screen_changed)
     GLib.timeout_add(100, tick)
     Gtk.main()
     return 0
@@ -1566,6 +1599,8 @@ def main(argv):
         return group_popup(argv[2], tuple(int(v) for v in argv[3:7]))
     if len(argv) == 3 and argv[1] == "restore-group":
         return restore_group(argv[2])
+    if len(argv) == 2 and argv[1] == "resnap":
+        return resnap()
     if len(argv) == 2 and argv[1] == "watch":
         return watch()
     if len(argv) in (4, 6) and argv[1] == "drop" and (argv[3] in ZONES or argv[3] in ("maximize", "float")):
