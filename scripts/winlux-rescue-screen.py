@@ -6,6 +6,7 @@ Lancé par l'init (root, DISPLAY=:0) quand les services de la session
 faire, montre la fin du journal et propose Redémarrer, Éteindre et, s'il y
 en a un, un terminal. Textes en français, anglais, allemand et espagnol.
 """
+import glob
 import os
 import shutil
 import signal
@@ -85,7 +86,8 @@ def language():
 
 def log_tail(limit=60):
     lines = []
-    for path in LOGS:
+    # Session du compte qui ne tient pas (#3148) : son propre journal aussi.
+    for path in LOGS + tuple(sorted(glob.glob("/run/winlux/session-*.log"))):
         try:
             with open(path, encoding="utf-8", errors="replace") as stream:
                 content = stream.read().strip().splitlines()
@@ -107,6 +109,10 @@ def power(action):
 
 
 def terminal_command():
+    # Lancé en root par l'init : un terminal serait une console root sans mot
+    # de passe. Seule la session live (déjà root) le propose (#3148).
+    if not os.path.exists("/etc/winlux/live-session"):
+        return None
     for name in ("xfce4-terminal", "xterm"):
         path = shutil.which(name)
         if path:
