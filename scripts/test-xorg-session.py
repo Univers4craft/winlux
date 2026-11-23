@@ -27,9 +27,12 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 source = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 init = re.search(r'^cat >"\$stage/init" <<.INIT.\n(.*?)^INIT$', source, re.S | re.M).group(1)
-match = re.search(r"^    /bin/busybox touch /run/winlux/splash.stop\n(.*?^    xorg_pid=\$!)$", init, re.S | re.M)
-assert match, "lancement de Xorg :0 introuvable dans l'init"
-launch = match.group(1)
+# Le lancement est la fonction xorg_start (réutilisée par la seconde
+# tentative de #3148) : ses arguments, son corps, puis son appel.
+args = re.search(r"^    xorg_args=.*\n", init, re.M)
+match = re.search(r"^    xorg_start\(\) \{\n.*?^    \}\n", init, re.S | re.M)
+assert args and match, "lancement de Xorg :0 introuvable dans l'init"
+launch = args.group(0) + match.group(0) + "    xorg_start\n"
 assert "/usr/bin/Xorg" in launch
 
 with tempfile.TemporaryDirectory() as tmp:

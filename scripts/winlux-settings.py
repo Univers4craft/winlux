@@ -335,6 +335,7 @@ _TR = {
     'Temps de démarrage pas encore mesuré.': ('Startup time not measured yet.', 'Tiempo de arranque aún no medido.', 'Startzeit noch nicht gemessen.'),
     'Noyau et micrologiciel': ('Kernel and firmware', 'Núcleo y firmware', 'Kernel und Firmware'),
     'Vérification du système': ('System check', 'Comprobación del sistema', 'Systemprüfung'),
+    'Affichage de secours': ('Fallback display', 'Pantalla de emergencia', 'Notfallanzeige'),
     'Pilotes': ('Drivers', 'Controladores', 'Treiber'),
     'Détection du matériel': ('Hardware detection', 'Detección del hardware', 'Hardwareerkennung'),
     'Services': ('Services', 'Servicios', 'Dienste'),
@@ -517,7 +518,7 @@ def gpu_summary():
 
 BOOT_STEPS = {"init": "Noyau et micrologiciel", "recovery": "Vérification du système", "drivers": "Pilotes",
               "hardware": "Détection du matériel", "services": "Services", "xorg": "Affichage",
-              "session": "Session", "desktop": "Bureau"}
+              "xorg-secours": "Affichage de secours", "session": "Session", "desktop": "Bureau"}
 
 
 def seconds(ms):

@@ -1178,16 +1178,98 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1 || true
     fi
     xorg_args=':0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log'
-    if command -v setsid >/dev/null 2>&1; then
-        # Xorg est épargné par le tueur du noyau (#2132) : seul Xorg, car un
-        # réglage posé sur la session passerait à toutes ses applications.
-        # shellcheck disable=SC2016
-        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; echo -900 >/proc/self/oom_score_adj 2>/dev/null; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
-    else
-        # shellcheck disable=SC2086
-        /usr/bin/Xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
-    fi
-    xorg_pid=$!
+    xorg_start() {
+        if command -v setsid >/dev/null 2>&1; then
+            # Xorg est épargné par le tueur du noyau (#2132) : seul Xorg, car un
+            # réglage posé sur la session passerait à toutes ses applications.
+            # shellcheck disable=SC2016
+            setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; echo -900 >/proc/self/oom_score_adj 2>/dev/null; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+        else
+            # shellcheck disable=SC2086
+            /usr/bin/Xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+        fi
+        xorg_pid=$!
+    }
+    # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
+    xorg_wait() {
+        for attempt in $(/bin/busybox seq 1 100); do
+            if test -S /tmp/.X11-unix/X0; then
+                ! test -x /usr/bin/xrandr && break
+                DISPLAY=:0 /usr/bin/xrandr --query >/dev/null 2>&1 && break
+            fi
+            /bin/busybox kill -0 "$xorg_pid" 2>/dev/null || break
+            /bin/busybox sleep 0.1
+        done
+    }
+    # Affichage impossible (#3148) : plus de console root sans mot de passe
+    # sur un système installé. Un message dit quoi faire, sur l'écran et la
+    # console ; l'init reste à l'écoute (sleep & wait) pour que le bouton
+    # d'alimentation éteigne proprement. La session live garde son shell.
+    display_unavailable() {
+        if test -e /etc/winlux/live-session; then /bin/sh; return; fi
+        unavailable_lang=$(/bin/busybox sed -n 's/^LANG=\([a-z][a-z]\).*/\1/p' /etc/default/locale 2>/dev/null | /bin/busybox head -n 1)
+        case "$unavailable_lang" in
+            en) unavailable_text="Winlux could not start the display.
+Press the power button briefly to shut down. At the next start, choose « Winlux secours » (key S) in the boot menu, then « Restore the previous version ».
+Log: /run/winlux/xorg-secours" ;;
+            de) unavailable_text="Winlux konnte die Anzeige nicht starten.
+Drücken Sie kurz den Netzschalter, um auszuschalten. Wählen Sie beim nächsten Start im Startmenü « Winlux secours » (Taste S) und dann « Vorherige Version wiederherstellen ».
+Protokoll: /run/winlux/xorg-secours" ;;
+            es) unavailable_text="Winlux no pudo iniciar la pantalla.
+Pulse brevemente el botón de encendido para apagar. En el próximo inicio, elija « Winlux secours » (tecla S) en el menú de inicio y luego « Restaurar la versión anterior ».
+Registro: /run/winlux/xorg-secours" ;;
+            *) unavailable_text="Winlux n'a pas pu démarrer l'affichage.
+Appuyez brièvement sur le bouton d'alimentation pour éteindre. Au démarrage suivant, choisissez « Winlux secours » (touche S) dans le menu de démarrage, puis « Restaurer le point de restauration précédent ».
+Journal : /run/winlux/xorg-secours" ;;
+        esac
+        /bin/busybox chvt 1 2>/dev/null || true
+        while :; do
+            printf '\033[2J\033[H%s\n' "$unavailable_text" >/dev/tty1 2>/dev/null || true
+            echo "WINLUX_DISPLAY_UNAVAILABLE"
+            /bin/busybox sleep 3600 &
+            wait "$!"
+        done
+    }
+    # Xorg sorti au démarrage (#3148) : seconde tentative sans la configuration
+    # générée par Winlux (winlux-hardware : *-winlux-*.conf), Xorg choisissant
+    # lui-même son pilote (modesetting, sinon fbdev). Les fichiers écartés et
+    # le premier journal restent dans /run/winlux/xorg-secours ; winlux-hardware
+    # les réécrit au démarrage suivant. Les fichiers des paquets ne bougent pas.
+    xorg_recover() {
+        /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
+        /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
+        /bin/busybox mkdir -p /run/winlux/xorg-secours
+        /bin/busybox cp /tmp/Xorg.0.log /run/winlux/xorg-secours/Xorg.premier-essai.log 2>/dev/null || true
+        for xorg_conf in /usr/share/X11/xorg.conf.d/*-winlux-*.conf /etc/X11/xorg.conf.d/*-winlux-*.conf; do
+            test -f "$xorg_conf" && /bin/busybox mv "$xorg_conf" /run/winlux/xorg-secours/
+        done
+        echo "Winlux : Xorg n'a pas démarré, seconde tentative avec l'affichage générique (#3148)"
+        /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+        xorg_start
+        xorg_wait
+        if /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
+            boot_mark xorg-secours
+            return 0
+        fi
+        /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
+        /bin/busybox cp /tmp/Xorg.0.log /run/winlux/xorg-secours/Xorg.second-essai.log 2>/dev/null || true
+        display_unavailable
+    }
+    # Session du compte qui ne tient pas (#3148) : l'écran de secours au lieu
+    # d'une console root, tant que l'affichage vit.
+    session_failed() {
+        /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
+        while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+            if test -x /usr/bin/winlux-rescue-screen; then
+                NO_AT_BRIDGE=1 /usr/bin/winlux-rescue-screen >>/run/winlux/rescue-screen.log 2>&1 &
+                wait "$!"
+            fi
+            /bin/busybox sleep 2 &
+            wait "$!"
+        done
+        display_unavailable
+    }
+    xorg_start
     # Bus D-Bus, polkit, udisks, réseau, impression et son n'ont pas besoin de
     # l'écran : ils démarrent pendant que Xorg s'initialise.
     # Système installé : seuls les services système (root) ; le son et le bus
@@ -1206,22 +1288,12 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         exec /usr/bin/winlux-native-session --early
     ) >/run/winlux/native-early.log 2>&1 &
     echo "$!" >/run/winlux/session-early.pid
-    # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
-    for attempt in $(/bin/busybox seq 1 100); do
-        if test -S /tmp/.X11-unix/X0; then
-            ! test -x /usr/bin/xrandr && break
-            DISPLAY=:0 /usr/bin/xrandr --query >/dev/null 2>&1 && break
-        fi
-        /bin/busybox kill -0 "$xorg_pid" 2>/dev/null || break
-        /bin/busybox sleep 0.1
-    done
+    xorg_wait
     boot_mark xorg
     echo "Winlux Xorg input probe:"
     /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error|cursor|config' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
-        /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
-        /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
-        /bin/sh
+        xorg_recover
     fi
     export DISPLAY=:0 XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
     export XDG_CONFIG_DIRS=/etc/xdg
@@ -1382,15 +1454,15 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
                 quick_exits=$((quick_exits + 1))
                 if test "$quick_exits" -ge 3; then
                     /bin/busybox tail -n 40 "/run/winlux/session-$desktop_user.log" >&2
-                    /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
-                    /bin/sh
+                    session_failed
                 fi
             else
                 quick_exits=0
             fi
             /bin/busybox sleep 1
         done
-        /bin/sh
+        # Affichage perdu pendant la session (#3148) : pas de console root.
+        display_unavailable
     fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)

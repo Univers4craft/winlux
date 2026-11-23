@@ -840,6 +840,7 @@ fn boot_step_label(key: &[u8]) -> &'static [u8] {
         b"hardware" => t(b"D\xE9tection du mat\xE9riel", b"Hardware detection"),
         b"services" => t(b"Services", b"Services"),
         b"xorg" => t(b"Affichage", b"Display"),
+        b"xorg-secours" => t(b"Affichage de secours", b"Fallback display"),
         b"session" => t(b"Session", b"Session"),
         b"desktop" => t(b"Bureau", b"Desktop"),
         _ => b"?",
