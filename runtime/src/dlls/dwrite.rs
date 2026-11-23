@@ -36,6 +36,10 @@ mod sets;
 #[path = "dwrite_text.rs"]
 mod text_ext;
 
+/// IDWriteGdiInterop et IDWriteFontResource (#3078).
+#[path = "dwrite_gdi.rs"]
+mod gdi_interop;
+
 const E_NOT_SUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
 const DWRITE_E_FILEFORMAT: i32 = 0x8898_5000u32 as i32;
 const DWRITE_E_FILENOTFOUND: i32 = 0x8898_5003u32 as i32;
@@ -172,12 +176,42 @@ fn extra() -> &'static Mutex<Vec<FaceInfo>> {
 fn system_faces() -> &'static Vec<FaceInfo> {
     static S: OnceLock<Vec<FaceInfo>> = OnceLock::new();
     S.get_or_init(|| {
-        super::gdi32_fonts::all_faces()
-            .iter()
-            .filter(|f| !f.cff)
-            .map(info)
-            .collect()
+        with_windows_families(
+            super::gdi32_fonts::all_faces()
+                .iter()
+                .filter(|f| !f.cff)
+                .map(info)
+                .collect(),
+        )
     })
+}
+
+/// Les polices Windows absentes (Segoe UI, Arial…) sont aussi des familles
+/// de la collection système, sous leur nom, avec les faces de leur
+/// remplaçante libre, comme dans l'énumération GDI (#1670). Un programme qui
+/// bâtit sa liste de familles en parcourant la collection (Qt) y trouve
+/// ainsi la police d'interface que NONCLIENTMETRICS annonce, au lieu de se
+/// rabattre sur une famille sans rapport (#3078).
+fn with_windows_families(real: Vec<FaceInfo>) -> Vec<FaceInfo> {
+    let has = |n: &str| real.iter().any(|f| f.family.eq_ignore_ascii_case(n));
+    let mut out = real.clone();
+    for name in super::gdi32_fonts::WINDOWS_FAMILIES {
+        if has(name) {
+            continue;
+        }
+        let Some(sub) = substitutes(name).iter().find(|s| has(s)) else {
+            continue;
+        };
+        out.extend(
+            real.iter()
+                .filter(|f| f.family.eq_ignore_ascii_case(sub))
+                .map(|f| FaceInfo {
+                    family: name.to_string(),
+                    ..f.clone()
+                }),
+        );
+    }
+    out
 }
 
 fn families() -> Vec<Family> {
@@ -823,8 +857,8 @@ static FACTORY_VT: VTable<57> = VTable([
     register_loader as *const (), // RegisterFontFileLoader
     register_loader as *const (), // UnregisterFontFileLoader
     create_text_format as *const (),
-    not_implemented as *const (), // CreateTypography
-    not_implemented as *const (), // GetGdiInterop
+    not_implemented as *const (),              // CreateTypography
+    gdi_interop::get_gdi_interop as *const (), // GetGdiInterop (#3078)
     create_text_layout as *const (),
     gdi_compatible_layout as *const (),
     ellipsis_trimming_sign as *const (), // CreateEllipsisTrimmingSign
@@ -1878,8 +1912,8 @@ static FACE_VT: VTable<60> = VTable([
     sets::nothing1 as *const (), // ReleaseGlyphImageData
     sets::get_zero as *const (), // IDWriteFontFace5::GetFontAxisValueCount
     sets::face_axis_values as *const (),
-    sets::get_false as *const (), // HasVariations
-    unsupported!("IDWriteFontFace5::GetFontResource"),
+    sets::get_false as *const (),            // HasVariations
+    gdi_interop::face_resource as *const (), // IDWriteFontFace5::GetFontResource (#3078)
     sets::face_equals as *const (),
     sets::face_family_names6 as *const (), // IDWriteFontFace6
     sets::face_face_names6 as *const (),
@@ -3603,6 +3637,54 @@ pub mod tests {
             assert_eq!(find("Segoe UI"), (1, 1));
             assert_eq!(find("Police Inventée"), (0, u32::MAX));
         }
+    }
+
+    #[test]
+    fn collection_systeme_enumere_segoe_ui_3078() {
+        let face = |family: &str, path: &str| FaceInfo {
+            family: family.into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            path: path.into(),
+            index: 0,
+        };
+        let real = vec![
+            face("Classic Console", "/f/clacon.ttf"),
+            face("Liberation Sans", "/f/LiberationSans-Regular.ttf"),
+            face("Liberation Serif", "/f/LiberationSerif-Regular.ttf"),
+            face("Special Elite", "/f/SpecialElite.ttf"),
+        ];
+        let fams = group(with_windows_families(real));
+        let by = |n: &str| {
+            fams.iter()
+                .find(|f| f.name == n)
+                .map(|f| f.faces[0].path.clone())
+        };
+        // La police d'interface annoncée par NONCLIENTMETRICS est une famille
+        // énumérable, servie par la remplaçante sans empattements.
+        assert_eq!(by("Segoe UI"), Some("/f/LiberationSans-Regular.ttf".into()));
+        assert_eq!(
+            by("Times New Roman"),
+            Some("/f/LiberationSerif-Regular.ttf".into())
+        );
+        // Sans remplaçante (aucune police à chasse fixe ici), pas de famille.
+        assert_eq!(by("Consolas"), None);
+        // Une vraie famille du même nom passe avant l'alias.
+        let fams = group(with_windows_families(vec![
+            face("Segoe UI", "/f/segoeui.ttf"),
+            face("Liberation Sans", "/f/LiberationSans-Regular.ttf"),
+        ]));
+        let segoe: Vec<_> = fams
+            .iter()
+            .filter(|f| f.name.eq_ignore_ascii_case("segoe ui"))
+            .collect();
+        assert_eq!(segoe.len(), 1);
+        assert_eq!(segoe[0].faces.len(), 1);
+        assert_eq!(
+            segoe[0].faces[0].path,
+            std::path::PathBuf::from("/f/segoeui.ttf")
+        );
     }
 
     #[test]

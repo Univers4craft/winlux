@@ -79,7 +79,10 @@ if test -e "$early_failed"; then
 fi
 test -e "$early_done" || early_services
 # Gestionnaire de fenêtres lancé d'emblée : il est prêt quand la barre arrive.
-/usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
+"$wm" --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
@@ -239,13 +242,15 @@ nice -n 10 /usr/bin/winlux-applications watch </dev/null >>/run/winlux/applicati
 echo $! > /run/winlux/catalogue.pid
 # Demandes ponctuelles des navigateurs : deux tests de fichier, pas de Python.
 (
+    # Compte lu une fois : « $(id -u) » lançait deux programmes toutes les 5 s (#3130).
+    uid=$(id -u)
     while :; do
-        if test -O "/run/winlux/browser-chooser-$(id -u)"; then
-            rm -f "/run/winlux/browser-chooser-$(id -u)"
+        if test -O "/run/winlux/browser-chooser-$uid"; then
+            rm -f "/run/winlux/browser-chooser-$uid"
             /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
         fi
         # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
-        if test -f "/run/winlux/browser-pending-$(id -u)"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
+        if test -f "/run/winlux/browser-pending-$uid"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
         sleep 5
     done
 ) </dev/null >/run/winlux/catalogue.log 2>&1 &
