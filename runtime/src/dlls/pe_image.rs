@@ -212,8 +212,21 @@ fn code_ranges() -> &'static [(usize, usize)] {
     })
 }
 
+/// Relais exécutables construits à l'exécution hors du binaire (pages de
+/// `seh::code_stub`, comme celui de RaiseException) : ce sont des fonctions,
+/// leur nom doit figurer dans la table d'exports (#3348).
+static RUNTIME_CODE: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Déclare `[start, start + len)` comme code construit à l'exécution.
+pub(crate) fn register_runtime_code(start: usize, len: usize) {
+    super::lock(&RUNTIME_CODE).push((start, start + len));
+}
+
 fn is_code(addr: usize) -> bool {
     code_ranges().iter().any(|&(a, b)| addr >= a && addr < b)
+        || super::lock(&RUNTIME_CODE)
+            .iter()
+            .any(|&(a, b)| addr >= a && addr < b)
 }
 
 fn put16(img: &mut [u8], at: usize, v: u16) {
@@ -535,17 +548,34 @@ mod tests {
                     "kernel32!{name} : table et GetProcAddress divergent"
                 );
             }
-            // Tout ce que GetProcAddress rend, sauf RaiseException, dont le
-            // relais vit hors du binaire (voir #3348).
+            // Tout ce que GetProcAddress rend, RaiseException compris, dont
+            // le relais vit hors du binaire (#3348).
             for name in super::super::kernel32_surface() {
-                if name == "RaiseException" {
-                    continue;
-                }
                 assert!(
                     manual_lookup(h, name).is_some(),
                     "kernel32!{name} : GetProcAddress le rend, la table non"
                 );
             }
+        }
+    }
+
+    /// #3348 : RaiseException, dont le relais est construit hors du
+    /// binaire, figure dans la table de kernel32 et y mène à ce relais.
+    #[test]
+    fn raise_exception_dans_la_table_3348() {
+        let h = super::super::module_handle("kernel32").expect("kernel32");
+        let relais = crate::dlls::seh::raise_exception_export();
+        assert_eq!(
+            super::super::kernel32_proc("RaiseException", false),
+            Some(relais)
+        );
+        unsafe {
+            let stub = manual_lookup(h, "RaiseException").expect("RaiseException dans la table");
+            // jmp qword ptr [rip+2] ; ud2 ; .quad cible
+            assert_eq!(
+                std::ptr::read_unaligned((stub + 8) as *const u64),
+                relais as u64
+            );
         }
     }
 
