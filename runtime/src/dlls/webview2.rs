@@ -612,6 +612,9 @@ fn helper_available() -> bool {
             .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&cmd[0]).is_file()))
 }
 
+/// HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED).
+const E_ACCESSDENIED: i32 = 0x8007_0005u32 as i32;
+
 unsafe extern "win64" fn create_environment_with_options(
     _browser_folder: *const u16,
     user_data_folder: *const u16,
@@ -631,13 +634,45 @@ unsafe extern "win64" fn create_environment_with_options(
             language = wstr(p);
         }
     }
+    // Dossier de données réellement utilisé (#3276) : celui de
+    // l'application, ou le dossier par défaut de WebView2, créé ici. Le
+    // moteur y range ses données et UserDataFolder le rend.
+    let exe = crate::loader::main_module().map(|m| crate::paths::to_windows(&m.path));
+    let package = super::kernel32_misc::current_package()
+        .and(super::storage_appdata::current_family())
+        .map(|f| super::storage_appdata::folder_path(&f, super::storage_appdata::Kind::Local));
+    let resolved = resolve_user_data_folder(&wstr(user_data_folder), exe.as_deref(), package);
+    let linux = resolved.as_deref().map(crate::paths::to_linux);
+    if let Err(e) = linux
+        .as_ref()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        .and_then(std::fs::create_dir_all)
+    {
+        // « WebView2 creation fails if the compiled code is running in a
+        // directory in which the process does not have permission to create a
+        // new directory » (WebView2.idl) : le rappel reçoit l'échec.
+        crate::log_warn!(
+            "webview2",
+            "dossier de données {:?} impossible à créer ({e}) : E_ACCESSDENIED",
+            resolved
+        );
+        add_ref(handler);
+        post(
+            dispatcher_window(),
+            Box::new(move || unsafe {
+                invoke(handler, E_ACCESSDENIED as u32 as usize, 0);
+                release(handler);
+            }),
+        );
+        return S_OK;
+    }
     let env = Arc::new(Env {
         dispatcher: dispatcher_window(),
-        user_data: crate::paths::to_linux(&wstr(user_data_folder))
-            .to_string_lossy()
-            .into_owned(),
+        user_data: linux
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         language,
-        user_data_win: wstr(user_data_folder),
+        user_data_win: resolved.unwrap_or_default(),
         profile: Mutex::new(ProfileState::default()),
         cookies: Mutex::new(Vec::new()),
     });
@@ -706,6 +741,50 @@ unsafe extern "win64" fn compare_browser_versions(
     S_OK
 }
 
+/// Dossier de données de WebView2 (#3276), d'après WebView2.idl
+/// (CreateCoreWebView2EnvironmentWithOptions) :
+/// - donné absolu : tel quel ;
+/// - donné relatif : « relative to the compiled code for the current
+///   process », donc au dossier du programme ;
+/// - absent, programme empaqueté : « the app data folder for the package »,
+///   ici son LocalState (inférence nommée : le dossier local du paquet) ;
+/// - absent, programme classique : `{Executable File Name}.WebView2` à côté
+///   du programme.
+fn resolve_user_data_folder(
+    given: &str,
+    exe: Option<&str>,
+    package_local: Option<String>,
+) -> Option<String> {
+    let given = given.trim();
+    let dir_of = |e: &str| e.rsplit_once('\\').map(|(d, _)| d.to_string());
+    if !given.is_empty() {
+        let b = given.as_bytes();
+        let absolute = given.starts_with("\\\\")
+            || (b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'));
+        if absolute {
+            return Some(given.to_string());
+        }
+        let rel = given.trim_start_matches(['.', '\\', '/']);
+        return exe.and_then(dir_of).map(|d| format!("{d}\\{rel}"));
+    }
+    package_local.or_else(|| exe.map(|e| format!("{e}.WebView2")))
+}
+
+/// ICoreWebView2Environment7::get_UserDataFolder : « the value passed in by
+/// the developer … or the calculated one for default handling. It will
+/// always be an absolute path. »
+unsafe extern "win64" fn env_user_data_folder(this: usize, out: *mut *mut u16) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let folder = com(this)
+        .env
+        .as_ref()
+        .map(|e| e.user_data_win.clone())
+        .unwrap_or_default();
+    co_string(&folder, out)
+}
+
 fn environment_methods() -> Vec<(usize, usize)> {
     vec![
         (0, env_create_controller as *const () as usize),
@@ -718,6 +797,8 @@ fn environment_methods() -> Vec<(usize, usize)> {
         // ICoreWebView2Environment8 / 13 : processus du moteur (#2581).
         (15, env_get_process_infos as *const () as usize),
         (22, env_get_process_extended_infos as *const () as usize),
+        // ICoreWebView2Environment7 (#3276).
+        (12, env_user_data_folder as *const () as usize),
     ]
 }
 
@@ -4276,5 +4357,56 @@ mod tests {
             E_POINTER
         );
         com_release(ctrl);
+    }
+
+    /// #3276 : dossier de données de WebView2 calculé comme le dit l'IDL,
+    /// et rendu par ICoreWebView2Environment7::get_UserDataFolder.
+    #[test]
+    fn dossier_de_donnees_3276() {
+        let exe = Some("C:\\Program Files\\Demo\\demo.exe");
+        assert_eq!(
+            resolve_user_data_folder("D:\\Données\\Vue", exe, None).as_deref(),
+            Some("D:\\Données\\Vue")
+        );
+        assert_eq!(
+            resolve_user_data_folder("\\\\serveur\\part", exe, None).as_deref(),
+            Some("\\\\serveur\\part")
+        );
+        assert_eq!(
+            resolve_user_data_folder(".\\cache", exe, None).as_deref(),
+            Some("C:\\Program Files\\Demo\\cache")
+        );
+        assert_eq!(
+            resolve_user_data_folder("", exe, None).as_deref(),
+            Some("C:\\Program Files\\Demo\\demo.exe.WebView2")
+        );
+        let local = "C:\\Users\\a\\AppData\\Local\\Packages\\F_x\\LocalState".to_string();
+        assert_eq!(
+            resolve_user_data_folder("", exe, Some(local.clone())),
+            Some(local)
+        );
+        assert_eq!(resolve_user_data_folder("", None, None), None);
+
+        assert_eq!(
+            vtable(Family::Environment)[3 + 12],
+            env_user_data_folder as *const () as usize
+        );
+        let env = Arc::new(Env {
+            dispatcher: 0,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: "C:\\Program Files\\Demo\\demo.exe.WebView2".to_string(),
+            profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
+        });
+        let obj = new_com(Family::Environment, Some(env), None, Args::default());
+        let mut p: *mut u16 = std::ptr::null_mut();
+        assert_eq!(unsafe { env_user_data_folder(obj, &mut p) }, S_OK);
+        assert_eq!(wstr(p), "C:\\Program Files\\Demo\\demo.exe.WebView2");
+        assert_eq!(
+            unsafe { env_user_data_folder(obj, std::ptr::null_mut()) },
+            E_POINTER
+        );
+        com_release(obj);
     }
 }
