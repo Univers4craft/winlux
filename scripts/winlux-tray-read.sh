@@ -2,7 +2,7 @@
 # Greffons genmon de la barre des tâches (/usr/bin/winlux-tray KIND).
 #
 # Chaque greffon relançait un Python toutes les 2 à 5 s (environ 80 par
-# minute). Le service résident `winlux-tray serve` (/usr/lib/winlux/winlux-tray)
+# minute ; le clavier tactile, osk, jusqu'au #3419). Le service résident `winlux-tray serve` (/usr/lib/winlux/winlux-tray)
 # calcule ces lignes dans un seul processus et les dépose dans
 # ~/.cache/winlux/tray-out ; ce lecteur les recopie avec les seules commandes
 # internes du shell. Service absent ou sortie pas encore calculée : il le
@@ -10,7 +10,7 @@
 tray=${WINLUX_TRAY_PROGRAM:-/usr/lib/winlux/winlux-tray}
 out=${XDG_CACHE_HOME:-$HOME/.cache}/winlux/tray-out
 case "${1:-}" in
-    balance|status|search|notifications)
+    balance|status|search|notifications|osk)
         pid= comm= panel= stat= caller= caller_comm=
         { read -r pid <"$out/serve.pid"; } 2>/dev/null
         # Une barre ne reçoit que les sorties calculées pour elle (#2467) :
