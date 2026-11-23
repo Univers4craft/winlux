@@ -1009,28 +1009,38 @@ mod tests {
         }
     }
 
-    /// Dossier temporaire propre à un test, effacé à la fin.
-    struct DossierDeTest(PathBuf);
+    /// Dossier temporaire propre à un test, effacé à la fin. Il tient aussi
+    /// le verrou de l'environnement des tests : `un_service_ne_demande_pas`
+    /// pose WINLUX_SERVICE_NAME pour tout le processus, et une question posée
+    /// au même moment par un autre fil serait refusée et mémorisée comme
+    /// celle d'un service (#3375).
+    struct DossierDeTest {
+        dir: PathBuf,
+        _garde: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl DossierDeTest {
         fn new() -> Self {
+            let garde = crate::mounts::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let dir =
                 std::env::temp_dir().join(format!("winlux-permissions-{}-{n}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
-            DossierDeTest(dir)
+            DossierDeTest { dir, _garde: garde }
         }
 
         fn path(&self) -> &Path {
-            &self.0
+            &self.dir
         }
     }
 
     impl Drop for DossierDeTest {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 
