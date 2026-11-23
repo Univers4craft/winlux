@@ -2422,6 +2422,10 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         // cocher et boutons radio à 96 ppp. wxWidgets l'ajoute à la largeur
         // du libellé ; à 0, ses libellés finissaient en « … » (#842).
         71 | 72 => 15,
+        // SM_CONVERTIBLESLATEMODE : 0 en mode tablette, non nul sinon
+        // (Learn, GetSystemMetrics). Un PC sans interrupteur mode tablette
+        // n'est jamais en mode tablette (#1933).
+        0x2003 => crate::dlls::evdev::slate_mode_metric(),
         90 => 96, // LOGPIXELSX
         91 => 96, // LOGPIXELSY
         _ => 0,
