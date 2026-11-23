@@ -1616,6 +1616,98 @@ fn new_graph() -> usize {
     g as usize
 }
 
+// ---------- Énumérateur système de périphériques (devenum, #3296) ----------
+
+const CLSID_SYSTEM_DEVICE_ENUM: Guid = guid(
+    0x62BE_5D10,
+    0x60EB,
+    0x11D0,
+    [0xBD, 0x3B, 0x00, 0xA0, 0xC9, 0x11, 0xCE, 0x86],
+);
+const IID_ICREATE_DEV_ENUM: Guid = guid(
+    0x2984_0822,
+    0x5B84,
+    0x11D0,
+    [0xBD, 0x3B, 0x00, 0xA0, 0xC9, 0x11, 0xCE, 0x86],
+);
+
+/// ICreateDevEnum : identité COM, compteur de références.
+#[repr(C)]
+struct DevEnum {
+    vtbl: usize,
+    refs: AtomicU32,
+}
+
+unsafe extern "win64" fn de_qi(this: usize, iid: *const Guid, out: usize) -> i32 {
+    if out == 0 {
+        return E_POINTER;
+    }
+    put_ptr(out, 0);
+    if iid.is_null() {
+        return E_INVALIDARG;
+    }
+    if *iid != IID_IUNKNOWN && *iid != IID_ICREATE_DEV_ENUM {
+        return E_NOINTERFACE;
+    }
+    de_addref(this);
+    put_ptr(out, this);
+    S_OK
+}
+unsafe extern "win64" fn de_addref(this: usize) -> u32 {
+    (*(this as *const DevEnum))
+        .refs
+        .fetch_add(1, Ordering::Relaxed)
+        + 1
+}
+unsafe extern "win64" fn de_release(this: usize) -> u32 {
+    let n = (*(this as *const DevEnum))
+        .refs
+        .fetch_sub(1, Ordering::AcqRel)
+        - 1;
+    if n == 0 {
+        drop(Box::from_raw(this as *mut DevEnum));
+    }
+    n
+}
+/// ICreateDevEnum::CreateClassEnumerator. Learn : une catégorie absente ou
+/// vide rend S_FALSE et `*ppEnumMoniker` = NULL. Winlux ne publie aucun
+/// filtre de capture DirectShow (caméras, micros) : chaque catégorie est
+/// donc vide. Les programmes passent alors par WASAPI ou Media Foundation.
+unsafe extern "win64" fn de_create_class_enumerator(
+    _this: usize,
+    category: *const Guid,
+    out: usize,
+    _flags: u32,
+) -> i32 {
+    if out == 0 {
+        return E_POINTER;
+    }
+    put_ptr(out, 0);
+    if category.is_null() {
+        return E_INVALIDARG;
+    }
+    S_FALSE
+}
+
+fn dev_enum_vtable() -> usize {
+    vtable_sig(
+        "ICreateDevEnum",
+        &[
+            (f(de_qi as *const ()), "ip"),
+            (f(de_addref as *const ()), ""),
+            (f(de_release as *const ()), ""),
+            (f(de_create_class_enumerator as *const ()), "ipi"),
+        ],
+    )
+}
+
+fn new_dev_enum() -> usize {
+    Box::into_raw(Box::new(DevEnum {
+        vtbl: dev_enum_vtable(),
+        refs: AtomicU32::new(1),
+    })) as usize
+}
+
 /// Classes DirectShow intégrées (appelé par CoCreateInstance).
 ///
 /// # Safety
@@ -1627,6 +1719,14 @@ pub unsafe fn create_builtin(
 ) -> Option<i32> {
     let clsid: &Guid = &*(clsid as *const super::ole32::Guid as *const Guid);
     let iid: &Guid = &*(iid as *const super::ole32::Guid as *const Guid);
+    if *clsid == CLSID_SYSTEM_DEVICE_ENUM {
+        let e = new_dev_enum();
+        let mut p: usize = 0;
+        let hr = de_qi(e, iid, &mut p as *mut usize as usize);
+        de_release(e);
+        *out = p as *mut std::ffi::c_void;
+        return Some(hr);
+    }
     if *clsid != CLSID_FILTER_GRAPH && *clsid != CLSID_FILTER_GRAPH_NO_THREAD {
         return None;
     }
@@ -1660,6 +1760,51 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3296 : CoCreateInstance(CLSID_SystemDeviceEnum) sert ICreateDevEnum,
+    /// et une catégorie vide rend S_FALSE avec un énumérateur NULL (Learn),
+    /// pas S_OK ni un énumérateur vide.
+    #[test]
+    fn enumerateur_systeme_directshow_categorie_vide_3296() {
+        // CLSID_VideoInputDeviceCategory {860BB310-5D01-11D0-BD3B-00A0C911CE86}
+        let video = guid(
+            0x860B_B310,
+            0x5D01,
+            0x11D0,
+            [0xBD, 0x3B, 0x00, 0xA0, 0xC9, 0x11, 0xCE, 0x86],
+        );
+        unsafe {
+            let mut p: *mut std::ffi::c_void = std::ptr::null_mut();
+            let clsid =
+                &*(&CLSID_SYSTEM_DEVICE_ENUM as *const Guid as *const super::super::ole32::Guid);
+            let iid = &*(&IID_ICREATE_DEV_ENUM as *const Guid as *const super::super::ole32::Guid);
+            assert_eq!(create_builtin(clsid, iid, &mut p), Some(S_OK));
+            assert!(!p.is_null());
+            let vt = *(p as *const *const usize);
+            let create: unsafe extern "win64" fn(usize, *const Guid, usize, u32) -> i32 =
+                std::mem::transmute(*vt.add(3));
+            let mut e: usize = 0xdead;
+            assert_eq!(
+                create(p as usize, &video, &mut e as *mut usize as usize, 0),
+                S_FALSE
+            );
+            assert_eq!(e, 0, "énumérateur NULL pour une catégorie vide");
+            let mut autre: usize = 0;
+            let qi: unsafe extern "win64" fn(usize, *const Guid, usize) -> i32 =
+                std::mem::transmute(*vt);
+            assert_eq!(
+                qi(
+                    p as usize,
+                    &IID_IFILTERGRAPH,
+                    &mut autre as *mut usize as usize
+                ),
+                E_NOINTERFACE
+            );
+            assert_eq!(autre, 0);
+            let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vt.add(2));
+            assert_eq!(release(p as usize), 0);
+        }
+    }
 
     #[test]
     fn volume_en_decibels() {
