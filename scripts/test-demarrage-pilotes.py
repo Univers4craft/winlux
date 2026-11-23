@@ -8,8 +8,9 @@ un faux udevadm :
   sont chargées avant le repère drivers, en un seul modprobe ;
 - les autres (son, USB…) sont chargées après, en arrière-plan, et un pilote
   lent (1,5 s ici) ne retarde pas le repère ;
-- udev.done n'apparaît qu'après le reste, et wait_drivers attend pilotes.done
-  puis rend la main au bout de sa limite si rien n'arrive.
+- udev.done n'apparaît qu'après le reste, la suite (droits, inventaire) est
+  réveillée par le tube pilotes.fifo, sans boucle d'attente ;
+- wait_drivers attend pilotes.done puis rend la main au bout de sa limite.
 """
 import pathlib
 import re
@@ -56,6 +57,10 @@ case "$*" in *pci:son*) sleep 1.5 ;; esac
     script = f"""
 boot_mark() {{ read -r up idle </proc/uptime; echo "repère $1 @$up" >>{log}; }}
 {text}
+# La suite des pilotes (droits, inventaire) lit le tube : rien ne tourne
+# en boucle d'ici là.
+read -r drivers_ready <{tmp / 'run/pilotes.fifo'}
+echo "suite $drivers_ready" >>{log}
 wait
 """
     started = time.monotonic()
@@ -76,7 +81,8 @@ wait
         assert f"--subsystem-match={sub}" in trigger, trigger
     t_mark = float(lines[mark].split("@")[1])
     t_rest = float(lines[rest].split("@")[1])
-    assert lines[-2].startswith("udevadm trigger --action=add") and "subsystem" not in lines[-2], lines[-2:]
+    assert lines[-1] == "suite pret", lines[-1:]
+    assert lines[-3].startswith("udevadm trigger --action=add") and "subsystem" not in lines[-3], lines[-3:]
     done = float((tmp / "run/udev.done").read_text())
     assert done >= t_rest + 1.4, f"udev.done avant la fin du reste ({done} < {t_rest} + 1,5)"
     assert t_mark < t_rest + 1.0, "le repère drivers a attendu le pilote lent"
@@ -85,7 +91,7 @@ wait
     # wait_drivers : rend la main dès pilotes.done, et au bout de sa limite sinon.
     wait = re.search(r"^wait_drivers\(\) \{\n.*?^\}\n", init, re.S | re.M).group(0)
     wait = wait.replace("/run/winlux", str(tmp / "run")).replace("/bin/busybox", str(busybox))
-    quick = wait.replace("-lt 600", "-lt 10")
+    quick = wait.replace("-lt 300", "-lt 10")
     (tmp / "run/pilotes.done").unlink(missing_ok=True)
     t0 = time.monotonic()
     r = subprocess.run(["sh", "-c", quick + "\nwait_drivers; echo rendu"], capture_output=True, text=True, timeout=10)
@@ -97,4 +103,29 @@ wait
     t0 = time.monotonic()
     assert "rendu" in p.communicate(timeout=5)[0] and time.monotonic() - t0 < 1, "wait_drivers ne voit pas pilotes.done"
     print("wait_drivers : rend la main dès pilotes.done, et après sa limite sinon")
+    # Suite des pilotes : attend le tube, puis droits, pilotes.done, inventaire.
+    chain = re.search(r"^\(\n    read -r drivers_ready <.*?^\) &\n", init, re.S | re.M)
+    assert chain, "suite des pilotes introuvable"
+    run = tmp / "run2"
+    run.mkdir()
+    fifo = run / "pilotes.fifo"
+    subprocess.run(["mkfifo", str(fifo)], check=True)
+    chain_text = chain.group(0).replace("/run/winlux", str(run)).replace("/bin/busybox", str(busybox))
+    chain_text = re.sub(r"/usr/bin/systemctl", str(tmp / "absent"), chain_text)
+    chain_text = re.sub(r"/usr/sbin/NetworkManager", "/bin/sh", chain_text)
+    order = tmp / "ordre"
+    script = f"""
+device_access() {{ test -e {run}/pilotes.done && echo "droits APRÈS pilotes.done" >>{order} || echo droits >>{order}; }}
+hardware_rest() {{ test -e {run}/pilotes.done && echo inventaire >>{order}; }}
+{chain_text}
+sleep 0.5
+test -e {order} && echo "TROP TOT" >>{order}
+echo pret >{fifo}
+wait
+"""
+    r = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=20)
+    got = order.read_text().split() if order.exists() else []
+    print("suite :", got, r.stderr.strip())
+    assert got == ["droits", "inventaire"] and (run / "pilotes.done").exists(), got
+    print("suite des pilotes : rien avant le tube, puis droits, pilotes.done, inventaire")
 print("pilotes au démarrage : OK")

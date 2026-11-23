@@ -729,7 +729,9 @@ kernel_modules=/lib/modules/$(/bin/busybox uname -r)
 # USB, Bluetooth, capteurs, CUDA…) se charge pendant que Xorg démarre :
 # sur le PC de référence, Xorg attendait 4,7 s de pilotes dont il ne se
 # sert pas (#3415). /run/winlux/pilotes.done marque la fin ; les
-# services système et la session l'attendent (wait_drivers).
+# services système et la session l'attendent (wait_drivers). La suite (droits
+# des périphériques, inventaire, services des paquets) est enchaînée par un
+# tube nommé, sans boucle d'attente qui réveille la machine.
 pci_modalias() {
     for pci_dev in /sys/bus/pci/devices/*; do
         read -r pci_class 2>/dev/null <"$pci_dev/class" || continue
@@ -739,7 +741,8 @@ pci_modalias() {
         esac
     done
 }
-/bin/busybox rm -f /run/winlux/pilotes.done /run/winlux/udev.done
+/bin/busybox rm -f /run/winlux/pilotes.done /run/winlux/udev.done /run/winlux/pilotes.fifo
+/bin/busybox mkfifo -m 600 /run/winlux/pilotes.fifo
 if test -x /usr/sbin/modprobe; then
     pci_modalias affichage | /bin/busybox xargs /usr/sbin/modprobe -a -b -q 2>/dev/null || true
     /usr/bin/udevadm trigger --action=add --subsystem-match=drm --subsystem-match=graphics \
@@ -752,6 +755,8 @@ if test -x /usr/sbin/modprobe; then
         /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
         read -r udev_uptime udev_idle </proc/uptime 2>/dev/null
         echo "${udev_uptime:-?}" >/run/winlux/udev.done
+        # Bloque sans rien consommer jusqu'à ce que la suite lise le tube.
+        echo pret >/run/winlux/pilotes.fifo
     ) &
 else
     for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
@@ -759,13 +764,14 @@ else
     /usr/bin/udevadm trigger --action=add 2>/dev/null || true
     /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
     echo 0 >/run/winlux/udev.done
+    (echo pret >/run/winlux/pilotes.fifo) &
 fi
 # Fin du chargement des pilotes, droits des périphériques compris : au plus
 # 30 s, puis on continue (un pilote bloqué n'empêche pas d'ouvrir la session).
 wait_drivers() {
     drivers_wait=0
-    while ! test -e /run/winlux/pilotes.done && test "$drivers_wait" -lt 600; do
-        /bin/busybox sleep 0.05
+    while ! test -e /run/winlux/pilotes.done && test "$drivers_wait" -lt 300; do
+        /bin/busybox sleep 0.1
         drivers_wait=$((drivers_wait + 1))
     done
     test -e /run/winlux/pilotes.done || echo "Winlux : pilotes pas prêts après 30 s, on continue" >&2
@@ -852,9 +858,9 @@ fi
 # précède Xorg ; le reste de l'inventaire, le contrôle des firmwares et le
 # profil d'utilisation (sysctl, gouverneur CPU, E/S) suivent en arrière-plan.
 /usr/bin/winlux-hardware display >/dev/null 2>&1 || true
-(
-    # Inventaire du son, du Wi-Fi, du Bluetooth… une fois leurs pilotes chargés.
-    while ! test -e /run/winlux/udev.done; do /bin/busybox sleep 0.05; done
+# Inventaire du son, du Wi-Fi, du Bluetooth…, une fois leurs pilotes chargés
+# (lancé par la suite des pilotes, plus bas).
+hardware_rest() {
     /usr/bin/winlux-hardware rest >/dev/null 2>&1 || true
     /usr/bin/winlux-firmware >/dev/null 2>&1 || true
     # Système installé : microcode et pilotes suivis à chaque démarrage, puis
@@ -870,7 +876,7 @@ fi
     if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
         /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
     fi
-) &
+}
 boot_mark hardware
 /bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom /dev/ptmx /dev/tty
 # Droits des périphériques, une fois tous les pilotes chargés (lancé plus bas,
@@ -1016,10 +1022,19 @@ fi
 # Comptes à jour (winlux-web, réparation) : les droits des périphériques
 # suivent la fin du chargement des pilotes.
 (
-    while ! test -e /run/winlux/udev.done; do /bin/busybox sleep 0.05; done
+    read -r drivers_ready </run/winlux/pilotes.fifo
     device_access
     /bin/busybox touch /run/winlux/pilotes.done
+    hardware_rest &
+    # Services des paquets APT et réseau sans NetworkManager : après les
+    # pilotes (USB, Wi-Fi en clé…), sans retenir l'affichage.
+    if test -x /usr/bin/systemctl; then /usr/bin/systemctl --boot-start; fi
+    if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
+    wait
 ) &
+# Démarrages de test (sans bureau) : tous les pilotes d'abord, comme avant
+# #3415, pour que les tests ne partagent pas la machine avec udev.
+/bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline || wait_drivers
 # Aucun navigateur à installer au démarrage : l'utilisateur choisit le sien.
 browser_setup_pid=
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
@@ -1027,9 +1042,7 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
 # Démarrer les services systemd activés par les paquets APT.
-# Après les pilotes (USB, Wi-Fi en clé…), sans retenir l'affichage.
-if test -x /usr/bin/systemctl; then (wait_drivers; /usr/bin/systemctl --boot-start) & fi
-if ! test -x /usr/sbin/NetworkManager; then (wait_drivers; /usr/bin/winlux-network start) & fi
+# (lancés par la suite des pilotes, plus haut : #3415)
 # Services maison : pare-feu (nftables, journal des blocages, alertes) et
 # planificateur de tâches (déclencheurs horaires, démarrage, événements).
 /usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
