@@ -566,7 +566,7 @@ jobs:
           deps="autoconf automake libtool gettext autopoint pkg-config libglib2.0-dev libxml2-dev
             libpango1.0-dev libx11-dev libxft-dev libxrandr-dev libxinerama-dev libxcursor-dev
             libstartup-notification0-dev libsm-dev libxext-dev libimlib2-dev librsvg2-dev libxi-dev
-            openbox xvfb xdotool x11-utils x11-apps imagemagick gcc-mingw-w64-x86-64-win32"
+            openbox xvfb xdotool x11-utils x11-apps imagemagick wmctrl python3-gi gir1.2-gtk-3.0 gcc-mingw-w64-x86-64-win32"
           sudo apt-get install -y -q $deps || { sudo apt-get update -q && sudo apt-get install -y -q $deps; }
           sh scripts/build-openbox.sh build/openbox
           WINLUX_OPENBOX=build/openbox/openbox /usr/bin/python3 -B scripts/test-openbox-boutons.py
@@ -671,6 +671,14 @@ jobs:
 
       - name: Programmes Windows 32 bits (#232)
         run: sh scripts/test-wow32.sh
+
+      - name: Cadre maison d'un programme 32 bits, WM_NCCALCSIZE sur SWP_FRAMECHANGED (#3353)
+        run: sh scripts/test-cadre-maison32.sh
+
+      - name: Programme 32 bits agrandi par openbox, WM_WINDOWPOSCHANGED avant WM_SIZE (#3394)
+        run: |
+          sudo apt-get install -y -q openbox wmctrl x11-utils xdotool || { sudo apt-get update -q && sudo apt-get install -y -q openbox wmctrl x11-utils xdotool; }
+          sh scripts/test-agrandie32.sh
 
       - name: winlux --inspect projette un gros .exe au lieu de le copier (#2918)
         run: sh scripts/test-inspect-projete.sh
@@ -884,6 +892,9 @@ jobs:
 
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
+
+      - name: Ancrage au repos, aucun réveil souris immobile (#3279)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-ancrage-repos.py
 
       - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py

@@ -163,14 +163,54 @@ pub fn run_archiver(mut cmd: Command, has_password: bool, progress: &Progress) -
         });
     }
     if !status.success() {
-        let last = err_text
-            .lines()
-            .chain(out_text.lines())
-            .rfind(|l| !l.trim().is_empty())
-            .unwrap_or("échec de l'outil d'archive")
-            .trim()
-            .to_string();
+        if only_refused_links(&err_text) {
+            // 7-Zip a refusé lui-même les liens qui sortent du dossier et
+            // extrait tout le reste : c'est le résultat voulu (#3325, #3405).
+            return Ok(());
+        }
+        // L'erreur est sur stderr ; stdout ne porte que la progression.
+        let last_line = |t: &str| {
+            t.lines()
+                .rfind(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string())
+        };
+        let last = last_line(&err_text)
+            .or_else(|| last_line(&out_text))
+            .unwrap_or_else(|| "échec de l'outil d'archive".into());
         return Err(ArcError::Io(std::io::Error::other(last)));
     }
     Ok(())
+}
+
+/// Les seules erreurs de l'outil sont des liens dangereux qu'il a ignorés
+/// (7-Zip 23 : « ERROR: Dangerous link path was ignored : nom : cible »,
+/// code de sortie 2). Le reste de l'archive est extrait.
+fn only_refused_links(err_text: &str) -> bool {
+    let mut lines = err_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .peekable();
+    lines.peek().is_some() && lines.all(|l| l.starts_with("ERROR: Dangerous link path was ignored"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #3405 : la sortie exacte de 7-Zip 23.01 sur un 7z qui contient des
+    /// liens vers /etc et « ../../.. ».
+    #[test]
+    fn liens_refuses_par_7zip_ne_sont_pas_un_echec_3405() {
+        let err = "ERROR: Dangerous link path was ignored : ./remonte : ../../..\n\
+                   ERROR: Dangerous link path was ignored : ./absolu : /etc\n";
+        assert!(only_refused_links(err));
+        assert!(!only_refused_links(""));
+        assert!(!only_refused_links(
+            "ERROR: Dangerous link path was ignored : ./a : /etc\nERROR: Data Error : f.txt\n"
+        ));
+        assert!(!only_refused_links(
+            "ERROR: Can not open the file as archive\n"
+        ));
+    }
 }

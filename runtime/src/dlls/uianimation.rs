@@ -25,19 +25,19 @@ const S_FALSE: i32 = 1;
 /// UI_E_STORYBOARD_ACTIVE.
 const UI_E_STORYBOARD_ACTIVE: i32 = 0x8002_0001u32 as i32;
 
-const CLSID_MANAGER: Guid = guid(
+pub(crate) const CLSID_MANAGER: Guid = guid(
     0x4c1fc63a,
     0x695c,
     0x47e8,
     [0xa3, 0x39, 0x1a, 0x19, 0x4b, 0xe3, 0xd0, 0xb8],
 );
-const CLSID_LIBRARY: Guid = guid(
+pub(crate) const CLSID_LIBRARY: Guid = guid(
     0x1d6322ad,
     0xaa85,
     0x4ef5,
     [0xa8, 0x28, 0x86, 0xd7, 0x10, 0x67, 0xd1, 0x45],
 );
-const CLSID_FACTORY: Guid = guid(
+pub(crate) const CLSID_FACTORY: Guid = guid(
     0x8a9b1cdd,
     0xfcd7,
     0x419c,
@@ -49,7 +49,7 @@ const IID_FACTORY: Guid = guid(
     0x45ad,
     [0xbb, 0xb1, 0x6d, 0xfc, 0x81, 0x53, 0x74, 0x3d],
 );
-const CLSID_TIMER: Guid = guid(
+pub(crate) const CLSID_TIMER: Guid = guid(
     0xbfcd4a0c,
     0x06b6,
     0x4384,

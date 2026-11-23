@@ -1438,7 +1438,8 @@ unsafe extern "win64" fn GetGestureInfo(_handle: usize, _info: *mut u8) -> i32 {
     0
 }
 
-/// SetGestureConfig / CloseGestureInfoHandle : acceptés sans effet.
+/// CloseGestureInfoHandle : aucun handle de geste n'est jamais émis.
+/// SetGestureConfig est servi par `tactile` (#1932).
 unsafe extern "win64" fn GestureOk(_a: usize, _b: usize, _c: usize, _d: usize, _e: usize) -> i32 {
     1
 }
@@ -1607,7 +1608,6 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "EnableNonClientDpiScaling" => fn WindowOk,
         "RegisterTouchWindow" => fn WindowOk2,
         "GetGestureInfo" => fn GetGestureInfo,
-        "SetGestureConfig" => fn GestureOk,
         "CloseGestureInfoHandle" => fn GestureOk,
         "UnregisterTouchWindow" => fn WindowOk,
         "SetWindowDisplayAffinity" => fn SetWindowDisplayAffinity,

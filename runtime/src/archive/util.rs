@@ -213,11 +213,27 @@ pub fn create_links(dest: &Path, links: Vec<(PathBuf, String)>) -> io::Result<()
             made.push(rel);
         }
     }
+    remove_escaping(dest, &made)
+}
+
+/// Après une extraction par un outil externe (7-Zip, unrar, unar, bsdtar),
+/// qui crée les liens lui-même : retire ceux qui mènent hors de `dest`
+/// (#3325), avec la même règle que `create_links`.
+pub fn remove_escaping_links(dest: &Path) -> io::Result<()> {
+    let links: Vec<PathBuf> = walk(dest)?
+        .into_iter()
+        .filter(|e| e.meta.file_type().is_symlink())
+        .map(|e| e.rel)
+        .collect();
+    remove_escaping(dest, &links)
+}
+
+fn remove_escaping(dest: &Path, made: &[PathBuf]) -> io::Result<()> {
     // Retirer un lien peut en rendre un autre sortant : on recommence
     // jusqu'à ce qu'aucun ne sorte plus.
     loop {
         let mut removed = false;
-        for rel in &made {
+        for rel in made {
             let p = dest.join(rel);
             let is_link = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink());
             if is_link && link_escapes(dest, rel) {

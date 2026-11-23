@@ -564,7 +564,7 @@ class Popup(Gtk.Application):
         self.kind=self.KINDS[kind]
         super().__init__(application_id="org.winlux.Popup."+self.kind,flags=Gio.ApplicationFlags.FLAGS_NONE)
         self.window=None;self.timer=0;self.child=None;self.backend=None
-        self.updating=False;self.anchor=None;self.modes_busy=False
+        self.updating=False;self.anchor=None;self.modes_busy=False;self.refresh_source=0
 
     # ── Ouverture, ancrage et fermeture ─────────────────────────────────────
 
@@ -594,6 +594,7 @@ class Popup(Gtk.Application):
         self.on_open()
         self.window.show_all()
         self.refresh()
+        self.start_refresh()
         self.window.present()
         display=self.window.get_display()
         monitor=display.get_monitor_at_point(*display.get_default_seat().get_pointer().get_position()[1:])
@@ -647,7 +648,6 @@ class Popup(Gtk.Application):
         self.panels=[]
         getattr(self,"build_"+self.kind)()
         self.window.connect("size-allocate",self.shape)
-        GLib.timeout_add_seconds(1,self.refresh)
 
     def panel(self,width=360):
         frame=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=0)
@@ -701,9 +701,16 @@ class Popup(Gtk.Application):
         except OSError:pass
 
     def refresh(self):
-        if not self.window or not self.window.get_visible():return True
+        # Rafraîchi chaque seconde tant que le panneau est ouvert ; caché, le
+        # minuteur s'arrête : le processus résident ne se réveille plus (#3315).
+        if not self.window or not self.window.get_visible():
+            self.refresh_source=0
+            return False
         getattr(self,"refresh_"+self.kind)()
         return True
+
+    def start_refresh(self):
+        if not self.refresh_source:self.refresh_source=GLib.timeout_add_seconds(1,self.refresh)
 
     # ── Son ─────────────────────────────────────────────────────────────────
 
@@ -1181,7 +1188,8 @@ class Popup(Gtk.Application):
         self.scroll.add(self.cards)
         # Tout l'historique gardé par le démon se relit (#3058) : les cartes
         # s'ajoutent par tranches au bas du défilement, l'ouverture reste rapide.
-        self.pending=[]
+        self.pending=[];self.shown={};self.reading=None
+        self.empty=self.label(_t("Aucune nouvelle notification"),"dim",xalign=0.5,margin=18)
         self.scroll.connect("edge-reached",lambda _,edge:edge==Gtk.PositionType.BOTTOM and self.more_cards())
         body.pack_start(self.scroll,False,False,0)
         self.snapshot=None
@@ -1273,19 +1281,69 @@ class Popup(Gtk.Application):
                     None,None,Gio.DBusCallFlags.NONE,3000,None,None,None)
             except GLib.Error:
                 pass
-        for child in self.cards.get_children():self.cards.remove(child)
-        self.pending=[item for item in reversed(history) if isinstance(item,dict)]
-        self.more_cards()
-        if not self.cards.get_children():
-            self.cards.pack_start(self.label(_t("Aucune nouvelle notification"),"dim",xalign=0.5,margin=18),False,False,0)
+        self.show_items([item for item in reversed(history) if isinstance(item,dict)])
         self.clear.set_visible(bool(history))
         self.clear.set_no_show_all(not history)
         self.cards.show_all()
 
+    @staticmethod
+    def card_key(item):
+        """Ce que montre une carte : le marqueur « nouvelle » n'y paraît pas,
+        MarkSeen ne la refait donc pas (#3342)."""
+        return json.dumps({key:value for key,value in item.items() if key!="nouvelle"},sort_keys=True,ensure_ascii=False)
+
+    def show_items(self,items):
+        """Liste mise à jour en place (#3342) : les cartes inchangées restent,
+        les nouvelles s'ajoutent en tête, les effacées partent. Autant de
+        cartes qu'avant restent chargées, et la lecture reste sur la même
+        carte même quand d'autres arrivent au-dessus."""
+        shown=getattr(self,"shown",{})
+        keep=CARDS_PER_PAGE
+        for index,item in enumerate(items):
+            if item.get("id") in shown:keep=max(keep,index+1)
+        visible,self.pending=items[:keep],items[keep:]
+        anchor=self.reading_anchor()
+        if self.empty.get_parent():self.cards.remove(self.empty)
+        fresh={}
+        for index,item in enumerate(visible):
+            identity,key=item.get("id"),self.card_key(item)
+            previous=shown.pop(identity,None)
+            if previous and previous[0]==key:card=previous[1]
+            else:
+                if previous:self.cards.remove(previous[1])
+                card=self.notification_card(item);self.cards.pack_start(card,False,False,0)
+            self.cards.reorder_child(card,index);fresh[identity]=(key,card)
+        for _,card in shown.values():self.cards.remove(card)
+        self.shown=fresh
+        if not fresh:self.cards.pack_start(self.empty,False,False,0)
+        if anchor:self.keep_reading(*anchor)
+
+    def reading_anchor(self):
+        """Première carte visible et son décalage, quand la liste est défilée."""
+        value=self.scroll.get_vadjustment().get_value()
+        if value<=0:return None
+        for card in self.cards.get_children():
+            area=card.get_allocation()
+            if area.y+area.height>value:return card,value-area.y
+        return None
+
+    def keep_reading(self,card,offset):
+        """Après la mise en page, la même carte revient au même endroit."""
+        if getattr(self,"reading",None):self.cards.disconnect(self.reading)
+        def placed(*_):
+            self.cards.disconnect(self.reading);self.reading=None
+            if card.get_parent() is self.cards:
+                self.scroll.get_vadjustment().set_value(card.get_allocation().y+offset)
+        self.reading=self.cards.connect_after("size-allocate",placed)
+
     def more_cards(self,count=CARDS_PER_PAGE):
         """Tranche suivante de l'historique (#3058), plus récentes d'abord."""
         batch,self.pending=self.pending[:count],self.pending[count:]
-        for item in batch:self.cards.pack_start(self.notification_card(item),False,False,0)
+        shown=getattr(self,"shown",{})
+        for item in batch:
+            card=self.notification_card(item);self.cards.pack_start(card,False,False,0)
+            shown[item.get("id")]=(self.card_key(item),card)
+        self.shown=shown
         if batch:self.cards.show_all()
         return bool(batch)
 
