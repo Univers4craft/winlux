@@ -189,6 +189,20 @@ try:
     got = wait(lambda: frame(drawn) if abs(frame(drawn)[2] - first[2]) <= 4 else None)
     assert got and not snap["get_prop"](drawn, "_WINLUX_SNAP"), f"barre dessinée, décrochée : taille d'avant attendue, {frame(drawn)}"
 
+    # Écran changé : resnap remet chaque fenêtre ancrée dans sa case
+    # recalculée, sans toucher aux autres (#2908).
+    subprocess.run([sys.executable, "-B", str(HERE / "winlux-snap.py"), "place", "half:right", window], env=env, timeout=10)
+    time.sleep(0.5)
+    x("wmctrl", "-i", "-r", window, "-e", "0,900,100,636,900")  # taille d'une autre définition
+    x("wmctrl", "-i", "-r", drawn, "-e", "0,200,150,500,300")
+    time.sleep(0.5)
+    loose = frame(drawn)
+    assert subprocess.run([sys.executable, "-B", str(HERE / "winlux-snap.py"), "resnap"], env=env, timeout=20).returncode == 0
+    want = snap["zone_rect"]("half:right", area)
+    got = wait(lambda: frame(window) if all(abs(a - b) <= 4 for a, b in zip(frame(window), want)) else None)
+    assert got, f"resnap : moitié droite {want} attendue, {frame(window)}"
+    assert frame(drawn) == loose, f"resnap : une fenêtre non ancrée ne bouge pas, {frame(drawn)}"
+
     # Survol du bouton Agrandir : la grille s'ouvre sans clic.
     x("wmctrl", "-i", "-r", window, "-e", "0,300,200,500,300")
     time.sleep(0.6)

@@ -25,6 +25,21 @@ pub const TLS_EXPANSION_SLOTS: usize = 1024;
 
 static THREAD_TEBS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
 
+/// Annuaire des TEB, lisible depuis un autre processus (#2024) : sous
+/// Windows, NtQueryInformationThread(ThreadBasicInformation) donne le TEB du
+/// fil d'un autre processus, que crashpad lit ensuite. Chez nous un TEB est
+/// une page quelconque : son adresse est publiée ici, et l'adresse de
+/// l'annuaire dans le PEB, à `PEB_WINLUX_TEB_DIR`, au-delà de la fin du PEB
+/// de Windows (moins de 0x800 octets en x64), donc hors de tout champ qu'un
+/// programme lirait. Entrées de 16 octets (tid, TEB) ; tid 0 = libre.
+///
+/// Zone propre à Winlux : de 0xF00 à la fin de la page du PEB (0x1000), hors
+/// du PEB documenté. Ne jamais y placer un champ du PEB de Windows, et ne
+/// jamais y mettre autre chose que l'adresse de cet annuaire.
+pub const PEB_WINLUX_TEB_DIR: usize = 0xF00;
+pub const TEB_DIR_SLOTS: usize = 4096;
+static TEB_DIR: AtomicUsize = AtomicUsize::new(0);
+
 pub const PEB_BEING_DEBUGGED: usize = 0x02;
 pub const PEB_IMAGE_BASE: usize = 0x10;
 pub const PEB_PROCESS_PARAMETERS: usize = 0x20;
@@ -85,18 +100,53 @@ pub fn peb() -> usize {
     PEB.load(Ordering::Relaxed)
 }
 
-/// Adresse du TEB du thread courant (lue via GS, comme le ferait un programme Windows).
-#[inline]
-pub fn teb() -> usize {
-    // Ne pas lire GS:[0x30] avant l'initialisation du TEB : le processus hôte
-    // Linux a généralement un GS nul, et une lecture absolue à 0x30 segfault.
-    // ARCH_GET_GS vérifie d'abord qu'un TEB Winlux a effectivement été installé.
+thread_local! {
+    /// Base de GS connue pour ce fil ; `usize::MAX` = pas encore lue.
+    /// Const et sans destructeur : lisible jusque dans un gestionnaire de
+    /// signal et pendant la fin du fil.
+    static GS_BASE: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Pose la base de GS du fil courant (ARCH_SET_GS) et tient le cache de
+/// `teb()` à jour. Tout changement de GS passe par ici.
+pub(crate) fn set_gs_base(base: usize) -> bool {
+    // Cache invalidé d'abord : un signal reçu entre les deux relit GS.
+    let _ = GS_BASE.try_with(|c| c.set(usize::MAX));
+    let rc = unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1001, base) };
+    if rc == 0 {
+        let _ = GS_BASE.try_with(|c| c.set(base));
+    }
+    rc == 0
+}
+
+/// Base de GS lue au noyau (ARCH_GET_GS), sans cache.
+fn read_gs_base() -> usize {
     let mut base = 0usize;
     let rc = unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1004, &mut base as *mut usize) };
     if rc != 0 {
         return 0;
     }
     base
+}
+
+/// Adresse du TEB du thread courant (base de GS, comme la verrait un programme Windows).
+#[inline]
+pub fn teb() -> usize {
+    // Ne pas lire GS:[0x30] avant l'initialisation du TEB : le processus hôte
+    // Linux a généralement un GS nul, et une lecture absolue à 0x30 segfault.
+    // La base vient d'un cache par fil : posée par set_gs_base, sinon lue une
+    // fois au noyau à la première utilisation (fil créé hors de notre chemin).
+    // Avant, chaque appel coûtait un arch_prctl (EnterCriticalSection,
+    // GetLastError, GetCurrentThreadId…).
+    match GS_BASE.try_with(|c| c.get()) {
+        Ok(usize::MAX) => {
+            let base = read_gs_base();
+            let _ = GS_BASE.try_with(|c| c.set(base));
+            base
+        }
+        Ok(base) => base,
+        Err(_) => read_gs_base(),
+    }
 }
 
 pub fn set_last_error(code: u32) {
@@ -124,10 +174,7 @@ pub struct TestTeb {
 #[cfg(test)]
 impl Drop for TestTeb {
     fn drop(&mut self) {
-        assert_eq!(
-            unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1001, self.previous) },
-            0
-        );
+        assert!(set_gs_base(self.previous));
     }
 }
 #[cfg(test)]
@@ -137,7 +184,7 @@ pub fn test_teb() -> TestTeb {
     let base = bytes.as_mut_ptr() as usize;
     unsafe {
         *((base + 0x30) as *mut usize) = base;
-        assert_eq!(libc::syscall(libc::SYS_arch_prctl, 0x1001, base), 0);
+        assert!(set_gs_base(base));
     }
     TestTeb {
         previous,
@@ -190,6 +237,26 @@ pub fn quote_arg(a: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::quote_arg;
+
+    /// Le cache de teb() suit chaque changement de GS et rend ce que le noyau
+    /// rend (ARCH_GET_GS), y compris dans un fil qui n'a jamais posé GS.
+    #[test]
+    fn teb_en_cache_suit_la_base_de_gs() {
+        std::thread::spawn(|| {
+            assert_eq!(super::teb(), super::read_gs_base(), "premier appel");
+            let mut a = Box::new([0u8; 4096]);
+            let mut b = Box::new([0u8; 4096]);
+            let (a, b) = (a.as_mut_ptr() as usize, b.as_mut_ptr() as usize);
+            assert!(super::set_gs_base(a));
+            assert_eq!((super::teb(), super::read_gs_base()), (a, a));
+            assert!(super::set_gs_base(b));
+            assert_eq!((super::teb(), super::read_gs_base()), (b, b));
+            assert!(super::set_gs_base(0));
+            assert_eq!((super::teb(), super::read_gs_base()), (0, 0));
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn quote_les_arguments_necessitant_des_guillemets() {
@@ -420,6 +487,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let mut command_line_w = cmd_w;
     command_line_w.push(0);
     PEB.store(peb, Ordering::Relaxed);
+    publish_teb_dir();
     if crate::wow32::active() {
         crate::wow32::init_peb32(exe.base);
     } else {
@@ -452,7 +520,7 @@ pub fn init_thread() -> usize {
         *((teb + TEB_TID) as *mut usize) = libc::gettid() as usize;
         *((teb + TEB_PEB) as *mut usize) = peb();
         // ARCH_SET_GS : sous Linux x86-64, glibc utilise FS pour son TLS ; GS est libre.
-        if libc::syscall(libc::SYS_arch_prctl, 0x1001, teb) != 0 {
+        if !set_gs_base(teb) {
             panic!("arch_prctl(ARCH_SET_GS) a échoué");
         }
     }
@@ -467,6 +535,7 @@ pub fn init_thread() -> usize {
     if !threads.contains(&teb) {
         threads.push(teb);
     }
+    teb_dir_set(unsafe { libc::gettid() } as u64, teb);
     teb
 }
 
@@ -545,6 +614,163 @@ fn remove_signal_stack() {
     }
 }
 
+/// Annuaire des TEB, alloué au premier fil ; appelé sous le verrou de
+/// `THREAD_TEBS`, comme ses écritures.
+fn teb_dir() -> usize {
+    let d = TEB_DIR.load(Ordering::Acquire);
+    if d != 0 {
+        return d;
+    }
+    let d = alloc_zeroed(TEB_DIR_SLOTS * 16);
+    TEB_DIR.store(d, Ordering::Release);
+    publish_teb_dir();
+    d
+}
+
+/// Inscrit l'adresse de l'annuaire dans le PEB, s'il existe déjà.
+fn publish_teb_dir() {
+    let (p, d) = (peb(), TEB_DIR.load(Ordering::Acquire));
+    if p != 0 && d != 0 {
+        unsafe { *((p + PEB_WINLUX_TEB_DIR) as *mut usize) = d };
+    }
+}
+
+/// Entrée (tid, TEB) : le TEB d'abord, le tid ensuite, qui la valide pour
+/// un lecteur d'un autre processus.
+fn teb_dir_set(tid: u64, teb: usize) {
+    let d = teb_dir();
+    unsafe {
+        let entries = d as *mut [u64; 2];
+        let free = (0..TEB_DIR_SLOTS).find(|&i| {
+            let e = &*entries.add(i);
+            e[0] == 0 || e[1] == teb as u64
+        });
+        if let Some(i) = free {
+            let e = entries.add(i);
+            std::ptr::write_volatile(&mut (*e)[0], 0);
+            std::ptr::write_volatile(&mut (*e)[1], teb as u64);
+            std::sync::atomic::fence(Ordering::Release);
+            std::ptr::write_volatile(&mut (*e)[0], tid);
+        }
+    }
+}
+
+fn teb_dir_clear(teb: usize) {
+    let d = TEB_DIR.load(Ordering::Acquire);
+    if d == 0 {
+        return;
+    }
+    unsafe {
+        let entries = d as *mut [u64; 2];
+        for i in 0..TEB_DIR_SLOTS {
+            let e = entries.add(i);
+            if (*e)[1] == teb as u64 {
+                std::ptr::write_volatile(&mut (*e)[0], 0);
+                std::ptr::write_volatile(&mut (*e)[1], 0);
+            }
+        }
+    }
+}
+
+/// TEB d'un fil de ce processus, d'après l'annuaire.
+pub fn teb_of_tid(tid: i32) -> Option<usize> {
+    let d = TEB_DIR.load(Ordering::Acquire);
+    if d == 0 || tid <= 0 {
+        return None;
+    }
+    let _g = THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entries = d as *const [u64; 2];
+    (0..TEB_DIR_SLOTS)
+        .map(|i| unsafe { *entries.add(i) })
+        .find(|e| e[0] == tid as u64)
+        .map(|e| e[1] as usize)
+}
+
+/// TEB du fil `tid` du processus `pid`, lu par /proc/<pid>/mem dans son
+/// annuaire (#2024). Chaque entrée est vérifiée sur le TEB lui-même (champ
+/// Self et identifiant du fil) : un fil qui finit pendant la lecture ne
+/// donne jamais une adresse fausse.
+pub fn foreign_teb_of_tid(pid: i32, tid: i32) -> Option<usize> {
+    use std::os::unix::fs::FileExt;
+    let mem = std::fs::File::open(format!("/proc/{pid}/mem")).ok()?;
+    teb_in_dir(|at, buf| mem.read_exact_at(buf, at as u64).is_ok(), tid)
+}
+
+/// Recherche du TEB de `tid` dans l'annuaire d'un processus dont la mémoire
+/// se lit par `read(adresse, tampon)`.
+fn teb_in_dir(read: impl Fn(usize, &mut [u8]) -> bool, tid: i32) -> Option<usize> {
+    let word = |at: usize| -> Option<u64> {
+        let mut b = [0u8; 8];
+        read(at, &mut b).then(|| u64::from_le_bytes(b))
+    };
+    let dir = word(PEB_FIXED + PEB_WINLUX_TEB_DIR)? as usize;
+    if dir == 0 || tid <= 0 {
+        return None;
+    }
+    let mut raw = vec![0u8; TEB_DIR_SLOTS * 16];
+    if !read(dir, &mut raw) {
+        return None;
+    }
+    let (entries, _) = raw.as_chunks::<16>();
+    entries
+        .iter()
+        .map(|c| {
+            let (t, teb) = c.split_at(8);
+            (
+                u64::from_le_bytes(t.try_into().unwrap()),
+                u64::from_le_bytes(teb.try_into().unwrap()) as usize,
+            )
+        })
+        .filter(|&(t, teb)| t == tid as u64 && teb != 0)
+        .find(|&(_, teb)| {
+            word(teb + TEB_SELF) == Some(teb as u64) && word(teb + TEB_TID) == Some(tid as u64)
+        })
+        .map(|(_, teb)| teb)
+}
+
+#[cfg(test)]
+mod tests_annuaire_teb {
+    use super::*;
+
+    /// L'annuaire se lit depuis une mémoire étrangère : seule l'entrée dont
+    /// le TEB confirme son adresse et son fil est rendue (#2024).
+    #[test]
+    fn teb_d_un_fil_lu_dans_l_annuaire_d_un_autre_processus() {
+        use std::collections::HashMap;
+        let dir = 0x7000_0000usize;
+        let (vrai, perime) = (0x7100_0000usize, 0x7200_0000usize);
+        let mut mem: HashMap<usize, u8> = HashMap::new();
+        let mut put = |at: usize, v: u64| {
+            for (i, b) in v.to_le_bytes().iter().enumerate() {
+                mem.insert(at + i, *b);
+            }
+        };
+        put(PEB_FIXED + PEB_WINLUX_TEB_DIR, dir as u64);
+        // Entrée périmée (TEB réutilisé par un autre fil), puis la bonne.
+        put(dir, 77);
+        put(dir + 8, perime as u64);
+        put(dir + 16, 77);
+        put(dir + 24, vrai as u64);
+        put(perime + TEB_SELF, perime as u64);
+        put(perime + TEB_TID, 78);
+        put(vrai + TEB_SELF, vrai as u64);
+        put(vrai + TEB_TID, 77);
+        let read = |at: usize, buf: &mut [u8]| {
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = mem.get(&(at + i)).copied().unwrap_or(0);
+            }
+            true
+        };
+        assert_eq!(teb_in_dir(read, 77), Some(vrai));
+        assert_eq!(teb_in_dir(read, 78), None, "fil absent de l'annuaire");
+        let illisible = |_: usize, _: &mut [u8]| false;
+        assert_eq!(teb_in_dir(illisible, 77), None);
+    }
+}
+
 /// Libère le TEB du thread courant (blocs TLS statiques, tableau
 /// d'expansion, pile de signal) et détache GS : plus aucun code Windows ne
 /// tourne sur ce thread.
@@ -559,12 +785,13 @@ pub fn free_current_teb() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         threads.retain(|&x| x != t);
+        teb_dir_clear(t);
     }
     // Programme x86 : TEB 32 bits et entrée de LDT du thread (#232).
     crate::wow32::free_thread(t);
     unsafe {
         // GS d'abord : un gestionnaire de signal ne doit pas lire un TEB libéré.
-        libc::syscall(libc::SYS_arch_prctl, 0x1001, 0usize);
+        set_gs_base(0);
         let array = *((t + TEB_TLS_POINTER) as *const usize);
         if array != 0 {
             let mods = loader::MODULES.lock().unwrap().clone();

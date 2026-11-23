@@ -59,6 +59,9 @@ case "$mode" in
 esac
 
 echo "Test QEMU $mode de $iso"
+# Diagnostic de #3199 (panique uefi32 en CI, jamais vue en QEMU 8.2) : version
+# de QEMU et processeur émulé réellement utilisés. À retirer avec le diagnostic.
+echo "QEMU : $(qemu-system-x86_64 --version | head -n 1) ; -cpu ${WINLUX_QEMU_CPU:-max} ; -accel tcg"
 set +e
 # Select GRUB's diagnostic hotkey while the hidden menu is waiting. Repeating
 # covers BIOS and slower UEFI firmware without changing the delivered ISO;

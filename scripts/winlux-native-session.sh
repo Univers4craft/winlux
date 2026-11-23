@@ -79,7 +79,10 @@ if test -e "$early_failed"; then
 fi
 test -e "$early_done" || early_services
 # Gestionnaire de fenêtres lancé d'emblée : il est prêt quand la barre arrive.
-/usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
+"$wm" --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid
 # Une fenêtre affichée pendant le démarrage d'openbox ne doit pas attendre un
 # autre événement X (#3190) : réveils tant qu'il démarre.

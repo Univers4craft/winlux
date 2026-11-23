@@ -326,15 +326,23 @@ def launcher_icon(target):
         except OSError: continue
     return None
 
+WINDOW_ICON_CACHE = Path("/run/winlux/window-icons.json")
+
 def window_icons():
-    """Publish extracted PE icons to EWMH, where the native tasklist reads them."""
+    """Publish extracted PE icons to EWMH, where the native tasklist reads them.
+
+    Only the cheap part runs in the resident daemon: which windows belong to a
+    `winlux` process and whether their key changed. Decoding (GdkPixbuf, glycin,
+    GIO, fontconfig, gi) and the X connection happen in a forked child, and only
+    when a window needs a new icon (#3196): done in the daemon, they left about
+    27 Mo of C heap and 5 extra threads behind for the whole session."""
     try:
         windows = subprocess.check_output(["wmctrl", "-lp"], text=True, timeout=2)
     except (OSError, subprocess.SubprocessError): return
-    cache = Path("/run/winlux/window-icons.json")
+    cache = WINDOW_ICON_CACHE
     try: known = json.loads(cache.read_text())
     except (OSError, ValueError): known = {}
-    current, theme = {}, None
+    current, pending = {}, []
     for line in windows.splitlines():
         fields = line.split(None, 4)
         if len(fields) < 3: continue
@@ -347,8 +355,23 @@ def window_icons():
             regedit = target is None and b"--regedit" in args[1:2]
             if not regedit and (target is None or not target.is_file()): continue
             key = f"{pid}:regedit" if regedit else f"{pid}:{target.stat().st_mtime_ns}"
-            current[window] = key
-            if known.get(window) == key: continue
+        except (OSError, ValueError): continue
+        current[window] = key
+        if known.get(window) != key: pending.append((window, pid, target, regedit))
+    if pending:
+        run_apart(lambda: publish_window_icons(pending, current, cache), "Icônes des fenêtres")
+    elif current != known:
+        write_icon_cache(cache, current)
+
+def write_icon_cache(cache, current):
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(current))
+
+def publish_window_icons(pending, current, cache):
+    """Render and publish the icons window_icons() found missing (in a child)."""
+    theme = None
+    for window, pid, target, regedit in pending:
+        try:
             icon = "application-x-executable" if regedit else icon_for(target, hashlib.sha256(str(target).encode()).hexdigest()[:24])
             if icon == "application-x-executable" and not regedit:
                 icon = launcher_icon(target) or icon
@@ -370,8 +393,7 @@ def window_icons():
             if isinstance(detail, bytes): detail = detail.decode(errors="replace")
             print(f"Window icon {window}: {type(error).__name__} {detail[:200]}", file=sys.stderr)
             continue
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(current))
+    write_icon_cache(cache, current)
 
 def publish_icon(window, values):
     # Xlib expects native unsigned longs for a 32-bit CARDINAL property on LP64.
@@ -1075,29 +1097,36 @@ def watched_inputs():
         except OSError: signature.append((str(path), None, None))
     return tuple(signature)
 
+def run_apart(work, label="Catalogue"):
+    """work() dans un processus fils, attendu : la mémoire qu'il prend (tas
+    fragmenté, bibliothèques C, fils GLib) part avec lui. Le démon reste un seul
+    fil Python sans connexion X ni D-Bus, donc rien n'est hérité à moitié."""
+    try:
+        pid = os.fork()
+    except OSError:
+        work()
+        return
+    if pid == 0:
+        code = 1
+        try:
+            work()
+            code = 0
+        except BaseException as error:
+            print(f"{label} : {type(error).__name__}: {error}", file=sys.stderr)
+        finally:
+            try: sys.stdout.flush(); sys.stderr.flush()
+            finally: os._exit(code)
+    os.waitpid(pid, 0)
+
 def refresh_apart():
     """refresh() dans un processus fils : le démon résident ne garde pas la
     mémoire de la passe. Relire tout le registre (des dizaines de milliers de
     chaînes) toutes les 5 minutes fragmentait son tas : 10 Mo au départ, 40 Mo
     après une trentaine de passes, jamais rendus."""
-    try:
-        pid = os.fork()
-    except OSError:
+    def passe():
         CHANGED.clear()
         refresh()
-        return
-    if pid == 0:
-        code = 1
-        try:
-            CHANGED.clear()
-            refresh()
-            code = 0
-        except BaseException as error:
-            print(f"Catalogue : {type(error).__name__}: {error}", file=sys.stderr)
-        finally:
-            try: sys.stdout.flush(); sys.stderr.flush()
-            finally: os._exit(code)
-    os.waitpid(pid, 0)
+    run_apart(passe)
 
 def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
     """Resident catalogue: window icons each tick, refresh() only when an input changed.

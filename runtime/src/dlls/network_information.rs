@@ -52,15 +52,17 @@ const fn g(d1: u32, d2: u16, d3: u16, d4: u64) -> Guid {
 
 const IID_IINSPECTABLE: Guid = g(0xAF86_E2E0, 0xB12D, 0x4C6A, 0x9C5A_D7AA_6510_1E90);
 const IID_IAGILEOBJECT: Guid = g(0x94EA_2B94, 0xE9CC, 0x49E0, 0xC0FF_EE64_CA8F_5B90);
-const IID_STATICS: Guid = g(0x5074_f851, 0x950d, 0x4165, 0x9c15_3656_1948_1eea);
-const IID_CONNECTION_PROFILE: Guid = g(0x71ba_143c, 0x598e, 0x49d0, 0x84eb_8feb_aedc_c195);
-const IID_CONNECTION_PROFILE2: Guid = g(0xe204_5145, 0x4c9f, 0x400c, 0x9150_7ec7_d6e2_888a);
-const IID_WLAN_DETAILS: Guid = g(0x5620_98cb, 0xb35a, 0x4bf1, 0xa884_b755_7e88_ff86);
-const IID_CONNECTION_COST: Guid = g(0xbad7_d829, 0x3416, 0x4b10, 0xa202_bac0_b075_bdae);
-const IID_CONNECTION_COST2: Guid = g(0x8e11_3a05, 0xe209, 0x4549, 0xbb25_5e0d_b691_cb05);
-const IID_VIEW_PROFILE: Guid = g(0x6db1_b492, 0x3852, 0x5df8, 0xa29d_6944_002f_58d4);
-const IID_ITERABLE_PROFILE: Guid = g(0x34da_bef9, 0x87d0, 0x5b1c, 0xa7ac_9d29_0ade_b0c8);
-const IID_ITERATOR_PROFILE: Guid = g(0x8991_3732, 0xa08b, 0x5cb2, 0xaf16_bbbb_2223_839e);
+pub(crate) const IID_STATICS: Guid = g(0x5074_f851, 0x950d, 0x4165, 0x9c15_3656_1948_1eea);
+pub(crate) const IID_CONNECTION_PROFILE: Guid =
+    g(0x71ba_143c, 0x598e, 0x49d0, 0x84eb_8feb_aedc_c195);
+pub(crate) const IID_CONNECTION_PROFILE2: Guid =
+    g(0xe204_5145, 0x4c9f, 0x400c, 0x9150_7ec7_d6e2_888a);
+pub(crate) const IID_WLAN_DETAILS: Guid = g(0x5620_98cb, 0xb35a, 0x4bf1, 0xa884_b755_7e88_ff86);
+pub(crate) const IID_CONNECTION_COST: Guid = g(0xbad7_d829, 0x3416, 0x4b10, 0xa202_bac0_b075_bdae);
+pub(crate) const IID_CONNECTION_COST2: Guid = g(0x8e11_3a05, 0xe209, 0x4549, 0xbb25_5e0d_b691_cb05);
+pub(crate) const IID_VIEW_PROFILE: Guid = g(0x6db1_b492, 0x3852, 0x5df8, 0xa29d_6944_002f_58d4);
+pub(crate) const IID_ITERABLE_PROFILE: Guid = g(0x34da_bef9, 0x87d0, 0x5b1c, 0xa7ac_9d29_0ade_b0c8);
+pub(crate) const IID_ITERATOR_PROFILE: Guid = g(0x8991_3732, 0xa08b, 0x5cb2, 0xaf16_bbbb_2223_839e);
 
 const CLASS: &str = "Windows.Networking.Connectivity.NetworkInformation";
 const PROFILE_CLASS: &str = "Windows.Networking.Connectivity.ConnectionProfile";
