@@ -521,15 +521,25 @@ pub struct Config {
     pub hibernate_file: Option<String>,
 }
 
+/// Version des valeurs par défaut écrite dans `power.conf` (`VERSION=`).
+/// Un fichier sans elle a été écrit avec les anciens défauts (#3454).
+pub const CONFIG_VERSION: u32 = 2;
+
+/// Anciens délais par défaut (écran secteur/batterie, veille secteur/batterie)
+/// recopiés dans `power.conf` dès le premier réglage, même de luminosité.
+pub const OLD_DEFAULT_DELAYS: (u32, u32, u32, u32) = (600, 300, 1800, 900);
+
 impl Default for Config {
+    /// #3454 : jamais de veille ni d'écran éteint sur inactivité, sur secteur
+    /// comme sur batterie ; capot fermé : seul l'écran s'éteint.
     fn default() -> Self {
         Self {
             profile: Profile::Balanced,
-            screen_ac: 600,
-            screen_dc: 300,
-            sleep_ac: 1800,
-            sleep_dc: 900,
-            lid: Action::Sleep,
+            screen_ac: 0,
+            screen_dc: 0,
+            sleep_ac: 0,
+            sleep_dc: 0,
+            lid: Action::DisplayOff,
             button: None,
             brightness: 80,
             hibernate_file: None,
@@ -543,6 +553,8 @@ impl Config {
     }
     pub fn parse(text: &str) -> Self {
         let mut c = Self::default();
+        let mut version = 0u32;
+        let mut lid_written = false;
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else {
                 continue;
@@ -555,7 +567,11 @@ impl Config {
                 "SCREEN_DC" => c.screen_dc = delay().unwrap_or(c.screen_dc),
                 "SLEEP_AC" => c.sleep_ac = delay().unwrap_or(c.sleep_ac),
                 "SLEEP_DC" => c.sleep_dc = delay().unwrap_or(c.sleep_dc),
-                "LID" => c.lid = Action::parse(v).unwrap_or(c.lid),
+                "VERSION" => version = v.parse().unwrap_or(0),
+                "LID" => {
+                    lid_written = true;
+                    c.lid = Action::parse(v).unwrap_or(c.lid)
+                }
                 "BUTTON" => c.button = Action::parse(v).or(c.button),
                 "BRIGHTNESS" => {
                     c.brightness = v.parse::<u32>().map_or(c.brightness, |b| b.clamp(5, 100))
@@ -564,11 +580,26 @@ impl Config {
                 _ => {}
             }
         }
+        // #3454 : un fichier écrit avant la version 2 qui porte encore les
+        // quatre anciens délais par défaut (souvent écrit par un simple
+        // réglage de luminosité) reprend les nouveaux défauts : jamais de
+        // veille ni d'écran éteint, capot fermé = écran éteint. Des délais
+        // choisis à la main (une seule valeur différente) sont gardés.
+        if version < CONFIG_VERSION
+            && (c.screen_ac, c.screen_dc, c.sleep_ac, c.sleep_dc) == OLD_DEFAULT_DELAYS
+        {
+            let new = Self::default();
+            (c.screen_ac, c.screen_dc, c.sleep_ac, c.sleep_dc) =
+                (new.screen_ac, new.screen_dc, new.sleep_ac, new.sleep_dc);
+            if !lid_written || c.lid == Action::Sleep {
+                c.lid = new.lid;
+            }
+        }
         c
     }
     pub fn serialize(&self) -> String {
         let mut s = format!(
-            "PROFILE={}\nSCREEN_AC={}\nSCREEN_DC={}\nSLEEP_AC={}\nSLEEP_DC={}\nLID={}\n",
+            "VERSION={CONFIG_VERSION}\nPROFILE={}\nSCREEN_AC={}\nSCREEN_DC={}\nSLEEP_AC={}\nSLEEP_DC={}\nLID={}\n",
             self.profile.key(),
             self.screen_ac,
             self.screen_dc,
@@ -621,7 +652,8 @@ impl Config {
             return (screen, sleep);
         }
         let (cap_screen, cap_sleep) = if on_ac { (300, 900) } else { (120, 300) };
-        let cap = |v: u32, c: u32| if v == 0 { c } else { v.min(c) };
+        // #3454 : « Jamais » reste jamais, même en mode Économie.
+        let cap = |v: u32, c: u32| if v == 0 { 0 } else { v.min(c) };
         (cap(screen, cap_screen), cap(sleep, cap_sleep))
     }
 }

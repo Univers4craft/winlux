@@ -184,7 +184,27 @@ with tempfile.TemporaryDirectory() as tmp:
     hand.write_text("dpmsEnabled: True\ndpmsStandby: 0:20:00\ndpmsSuspend: 0:10:00\ndpmsOff: 0:10:00\n")
     space["migrate_xscreensaver"](hand, template)
     assert hand.read_text() == "dpmsEnabled: True\ndpmsStandby: 0:20:00\ndpmsSuspend: 0:10:00\ndpmsOff: 0:10:00\n", "délais choisis écrasés"
+# #3454 : plus d'économiseur sur inactivité. Modèle en « mode: off » ; les
+# comptes qui gardent le mode et le délai du modèle (one, 0:10:00) migrent,
+# un autre choix reste.
+assert keys.get("mode", "").strip() == "off", keys
+with tempfile.TemporaryDirectory() as tmp:
+    old = Path(tmp) / ".xscreensaver"
+    old.write_text("timeout:        0:10:00\ncycle:          0:10:00\nlock:           False\nmode:           one\nselected:       0\n")
+    space["migrate_xscreensaver"](old, template)
+    text = old.read_text()
+    assert "mode:           off" in text and "mode:           one" not in text and "timeout:        0:10:00" in text, text
+    space["migrate_xscreensaver"](old, template)
+    assert old.read_text() == text, "migration #3454 répétée"
+    for chosen in ("timeout: 0:05:00\nmode: one\n", "timeout: 0:10:00\nmode: random\n"):
+        path = Path(tmp) / "choisi"
+        path.write_text(chosen + "dpmsEnabled: True\n")
+        space["migrate_xscreensaver"](path, template)
+        assert path.read_text() == chosen + "dpmsEnabled: True\n", "choix de l'économiseur écrasé"
+action = (ROOT / "scripts/winlux-desktop-action.sh").read_text(encoding="utf-8")
+assert "screensaver) exec /usr/bin/xscreensaver-command -select 1 ;;" in action, "économiseur à la demande"
 print("XScreenSaver : dpmsEnabled True et délais DPMS au maximum dans le modèle, comptes existants migrés, choix explicite gardé (#2148)")
+print("#3454 : économiseur désactivé sur inactivité (modèle et comptes migrés), toujours lançable à la demande")
 
 # 6. Service réel sur un bus de session.
 try:

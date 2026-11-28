@@ -182,6 +182,45 @@ fn config_roundtrip_and_defaults() {
     assert_eq!(Config::load_at(&f.0), c);
 }
 
+/// #3454 : jamais de veille ni d'écran éteint par défaut ; un `power.conf`
+/// écrit avec les anciens défauts (premier réglage de luminosité) est migré,
+/// des délais choisis à la main sont gardés.
+#[test]
+fn jamais_de_veille_par_defaut() {
+    let d = Config::default();
+    assert_eq!(
+        (d.screen_ac, d.screen_dc, d.sleep_ac, d.sleep_dc),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(d.lid, Action::DisplayOff);
+    assert_eq!(d.effective_timeouts(true), (0, 0));
+    assert_eq!(d.effective_timeouts(false), (0, 0));
+    let old = "PROFILE=balanced\nSCREEN_AC=600\nSCREEN_DC=300\nSLEEP_AC=1800\nSLEEP_DC=900\nLID=sleep\nBRIGHTNESS=51\n";
+    let m = Config::parse(old);
+    assert_eq!(
+        (m.screen_ac, m.screen_dc, m.sleep_ac, m.sleep_dc),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(m.lid, Action::DisplayOff);
+    assert_eq!(m.brightness, 51);
+    assert!(m.serialize().starts_with("VERSION=2\n"));
+    assert_eq!(Config::parse(&m.serialize()), m);
+    // Capot choisi à la main : gardé.
+    let lid = Config::parse(&old.replace("LID=sleep", "LID=shutdown"));
+    assert_eq!(lid.lid, Action::Shutdown);
+    assert_eq!(lid.sleep_ac, 0);
+    // Un délai choisi : rien n'est migré.
+    let chosen = Config::parse(&old.replace("SLEEP_AC=1800", "SLEEP_AC=3600"));
+    assert_eq!((chosen.screen_ac, chosen.sleep_ac), (600, 3600));
+    assert_eq!(chosen.lid, Action::Sleep);
+    // Version 2 : les mêmes valeurs, choisies après la migration, restent.
+    let v2 = Config::parse(&format!("VERSION=2\n{old}"));
+    assert_eq!(
+        (v2.screen_ac, v2.sleep_dc, v2.lid),
+        (600, 900, Action::Sleep)
+    );
+}
+
 #[test]
 fn saver_caps_timeouts() {
     let c = Config {
@@ -194,7 +233,8 @@ fn saver_caps_timeouts() {
         profile: Profile::Saver,
         ..c
     };
-    assert_eq!(s.effective_timeouts(false), (120, 300));
+    // #3454 : « Jamais » n'est plus plafonné par le mode Économie.
+    assert_eq!(s.effective_timeouts(false), (120, 0));
     assert_eq!(next_delay(60), 120);
     assert_eq!(next_delay(0), 60);
     assert_eq!(delay_label(0), "Jamais");
@@ -552,8 +592,8 @@ fn status_lines_for_shell() {
         "power_state=discharging",
         "power_seconds_left=10800",
         "power_profile=balanced",
-        "power_screen_now=5 min",
-        "power_lid=sleep",
+        "power_screen_now=Jamais",
+        "power_lid=display-off",
         "power_button=sleep",
         "power_brightness=",
         "power_can_sleep=0",
@@ -580,7 +620,10 @@ fn virtual_machine_never_idles_to_sleep() {
 
 #[test]
 fn cli_set_values() {
-    let mut c = Config::default();
+    let mut c = Config {
+        screen_ac: 600,
+        ..Config::default()
+    };
     assert!(cli::set(&mut c, "screen-ac", "next", true).is_ok());
     assert_eq!(c.screen_ac, 900);
     cli::set(&mut c, "lid", "shutdown", true).unwrap();

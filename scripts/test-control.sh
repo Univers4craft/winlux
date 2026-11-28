@@ -145,7 +145,8 @@ case "\$1" in now) printf 'lock now\n' >> "\$WINLUX_CONTROL_TEST_LOG" ;; *) WINL
 MOCK
 chmod 755 "$work/bin/winlux-lock"
 control status
-grep -qx 'lock_after=300' "$work/root/run/winlux/control.txt"
+# #3454 : pas de verrouillage automatique par defaut.
+grep -qx 'lock_after=0' "$work/root/run/winlux/control.txt"
 grep -qx 'lock_on_resume=1' "$work/root/run/winlux/control.txt"
 grep -qx 'lock_password=1' "$work/root/run/winlux/control.txt"
 control lock-after-900
@@ -277,10 +278,12 @@ if test -x "$runtime"; then
     grep -qx 'power_profile=saver' "$work/root/run/winlux/control.txt"
     grep -qx 'power_percent=84' "$work/root/run/winlux/control.txt"
     grep -qx 'power_state=charging' "$work/root/run/winlux/power.txt"
+    # #3454 : capot par defaut = ecran eteint ; l'action suivante est « Ne rien faire ».
     control power-lid
-    grep -qx 'LID=hibernate' "$work/root/etc/winlux/power.conf"
+    grep -qx 'LID=nothing' "$work/root/etc/winlux/power.conf"
+    # #3454 : ecran sur batterie « Jamais » par defaut ; le delai suivant est 1 min.
     control power-screen-dc
-    grep -qx 'SCREEN_DC=600' "$work/root/etc/winlux/power.conf"
+    grep -qx 'SCREEN_DC=60' "$work/root/etc/winlux/power.conf"
     control power-brightness-down
     grep -qx 'BRIGHTNESS=70' "$work/root/etc/winlux/power.conf"
     # 70 % reduits a 49 % par le mode economie : 125/255.
