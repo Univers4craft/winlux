@@ -42,11 +42,21 @@ if test -n "${WINLUX_UPDATE_FROM_DEB:-}"; then
     digest=$(sha256sum "$new" | cut -d' ' -f1)
     printf 'format=3\nbackend=apt\nbase=ubuntu-resolute\nversion=v%s\nscope=system\naction=reboot\ncomponents=runtime,desktop,applications,updater,integration\nasset=%s\nsha256=%s\ndownload_bytes=%s\nunpacked_kib=%s\n' \
         "$version" "$asset" "$digest" "$(stat -c %s "$new")" "$(dpkg-deb -f "$new" Installed-Size)" > "$work/update-manifest.txt"
+    # L'outil publié exige un manifeste signé dès qu'il embarque une clé
+    # publique (v0.2.21 et après, #31). Le manifeste de test est signé par une
+    # clé jetable, jamais par la clé des releases ; l'invité la désigne à
+    # l'outil par WINLUX_UPDATE_PUBLIC_KEY, que winlux-update-apt lit.
+    od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$work/update-test.seed"
+    python3 -B "$root/scripts/winlux-signature.py" sign "$work/update-test.seed" "$work/update-manifest.txt" > "$work/update-manifest.txt.sig"
+    python3 -B "$root/scripts/winlux-signature.py" public "$work/update-test.seed" > "$work/update-test.pub"
+    rm -f "$work/update-test.seed"
     debugfs -w -R 'mkdir /opt/winlux-test' "$disk" >/dev/null 2>&1 || true
     debugfs -w -R 'mkdir /opt/winlux-test/update' "$disk" >/dev/null 2>&1
     debugfs -w -R "write $WINLUX_UPDATE_FROM_DEB /opt/winlux-test/update/previous.deb" "$disk" >/dev/null 2>&1
     debugfs -w -R "write $new /opt/winlux-test/update/$asset" "$disk" >/dev/null 2>&1
     debugfs -w -R "write $work/update-manifest.txt /opt/winlux-test/update/winlux-update-manifest.txt" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $work/update-manifest.txt.sig /opt/winlux-test/update/winlux-update-manifest.txt.sig" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $work/update-test.pub /opt/winlux-test/update/update-test.pub" "$disk" >/dev/null 2>&1
     debugfs -w -R "write $root/scripts/test-update-curl-shim.py /opt/winlux-test/update/curl" "$disk" >/dev/null 2>&1
     # Version publiée dont l'outil de mise à jour est connu cassé : son paquet
     # est installé, mais c'est l'outil actuel qui fait la mise à jour.

@@ -19,7 +19,7 @@
 Sur la page de la [dernière release](https://github.com/Univers4craft/winlux/releases/latest), téléchargez `winlux-live-<version>.iso` et son fichier `.sha256`, puis vérifiez :
 
 ```sh
-sha256sum -c winlux-live-v0.2.21.iso.sha256
+sha256sum -c winlux-live-v0.2.22.iso.sha256
 ```
 
 ## 2a. Dans une machine virtuelle
@@ -39,7 +39,7 @@ Pour les développeurs, `scripts/create-test-vm.sh` crée et démarre une VM QEM
 L'ISO est hybride : elle s'écrit telle quelle sur une clé USB (avec Balena Etcher, Ventoy, ou en ligne de commande) :
 
 ```sh
-sudo dd if=winlux-live-v0.2.21.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.22.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 > Remplacez `/dev/sdX` par la clé, **pas** par un disque. `dd` efface la cible sans demander.

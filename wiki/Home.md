@@ -6,7 +6,7 @@ Ce wiki explique ce qu'est Winlux, pourquoi il existe, comment il est construit,
 
 | | |
 |---|---|
-| **Dernière version publiée** | [v0.2.21](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21) (17 novembre 2026) |
+| **Dernière version publiée** | [v0.2.22](https://github.com/Univers4craft/winlux/releases/tag/v0.2.22) (23 novembre 2026) |
 | **En préparation** | v0.3 |
 | **Statut** | Préversion technique : à tester en machine virtuelle d'abord |
 | **Licence** | GPL 3 ou ultérieure |

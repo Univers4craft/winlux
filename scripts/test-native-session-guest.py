@@ -679,6 +679,9 @@ def update_from_previous_release():
     shim = Path("/tmp/winlux-update-shim"); shim.mkdir(exist_ok=True)
     shutil.copyfile(bench / "curl", shim / "curl"); (shim / "curl").chmod(0o755)
     env = dict(os.environ, PATH=f"{shim}:" + os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))
+    # Manifeste signé par la clé jetable de test-native-session-vm.sh (#3452).
+    signed = Path("/usr/share/winlux/update-signing.pub").is_file()
+    if signed: env["WINLUX_UPDATE_PUBLIC_KEY"] = str(bench / "update-test.pub")
     result = subprocess.run(["winlux-control", "update-apply"], env=env, capture_output=True, text=True, timeout=900)
     if result.returncode != 0:
         # winlux-control écrit la sortie de l'outil dans update.log (lu par Paramètres).
@@ -689,9 +692,25 @@ def update_from_previous_release():
                 print("\n".join(path.read_text(errors="replace").splitlines()[-60:]), flush=True)
         print(subprocess.run(["df", "-h", "/", "/var"], capture_output=True, text=True).stdout, flush=True)
     assert result.returncode == 0, "update from " + previous + " failed"
+    if signed:
+        log = Path("/run/winlux/update.log").read_text(errors="replace")
+        assert "Signature Ed25519 du manifeste vérifiée" in log, "signature du manifeste non vérifiée par l'outil de v" + previous
     new = manifest["version"]
-    assert Path("/usr/share/winlux/version").read_text().strip() == new, Path("/usr/share/winlux/version").read_text()
-    assert "v" + run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == new
+    # Depuis #31, l'outil publié prépare la version dans l'emplacement B
+    # (winlux-ab) : le système actif reste en v{previous} jusqu'au redémarrage,
+    # où /init bascule. Sans A/B, installation APT sur place comme avant (#3452).
+    ab = Path("/usr/bin/winlux-ab")
+    state = dict(line.split("=", 1) for line in run(str(ab), "status").splitlines() if "=" in line) if ab.is_file() else {}
+    if state.get("state") == "prepared":
+        slot = Path("/.winlux-ab/b")
+        assert state.get("version") == new, state
+        assert (slot / "usr/share/winlux/version").read_text().strip() == new
+        assert "v" + run("dpkg-query", "--admindir", str(slot / "var/lib/dpkg"), "-W", "-f=${Version}", "winlux-desktop").strip() == new
+        assert Path("/usr/share/winlux/version").read_text().strip() == "v" + previous
+        print(f"WINLUX_NATIVE_UPDATE_AB=prepared {new}", flush=True)
+    else:
+        assert Path("/usr/share/winlux/version").read_text().strip() == new, (state, Path("/usr/share/winlux/version").read_text())
+        assert "v" + run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == new
     assert run("dpkg", "--audit").strip() == ""
     assert Path("/run/winlux/update-action").read_text().strip() == "reboot"
     print(f"WINLUX_NATIVE_UPDATE_FROM=v{previous}->{new}", flush=True)

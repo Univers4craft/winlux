@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| **Dernière version publiée** | [v0.2.21](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21), le 17 novembre 2026 |
+| **Dernière version publiée** | [v0.2.22](https://github.com/Univers4craft/winlux/releases/tag/v0.2.22), le 23 novembre 2026 |
 | **Prochaine version** | **v0.3** |
 | **Bloquent la v0.3** | Les issues `urgence:1` encore ouvertes : #2784 (le contrôle WebBrowser n'exécute aucun script), #2747 (tablette en UEFI 32 bits), #2851 (installeur de OneDrive) |
 
