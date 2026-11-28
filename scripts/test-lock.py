@@ -55,11 +55,11 @@ assert not lock["requires_password"]("fantome")
 assert not lock["requires_password"]("vide")
 
 # Réglages par défaut puis lus depuis lock.conf.
-assert lock["lock_after"]() == 300 and lock["lock_on_resume"]()
+assert lock["lock_after"]() == 0 and lock["lock_on_resume"]()  # #3454 : jamais par défaut
 (tmp / "etc/winlux/lock.conf").write_text("LOCK_AFTER=600\nLOCK_ON_RESUME=0\n")
 assert lock["lock_after"]() == 600 and not lock["lock_on_resume"]()
 (tmp / "etc/winlux/lock.conf").write_text("LOCK_AFTER=abc\n")
-assert lock["lock_after"]() == 300
+assert lock["lock_after"]() == 0
 
 # Décision du service.
 should = lock["should_lock"]

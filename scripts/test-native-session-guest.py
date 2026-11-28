@@ -356,7 +356,9 @@ for label, application in cases:
     print("WINLUX_VENDOR_DIAGNOSTIC=" + json.dumps(record, ensure_ascii=False), flush=True)
 if reports: Path("/var/lib/winlux/vendor-results.json").write_text(json.dumps(reports, ensure_ascii=False, indent=2))
 
-run("xscreensaver-command", "-activate")
+# #3454 : « mode: off » (pas d'économiseur sur inactivité) ; à la demande,
+# -select 1 lance quand même les tuyaux, comme winlux-desktop-action.
+run("xscreensaver-command", "-select", "1")
 time.sleep(3)
 print(run("xscreensaver-command", "-time"), flush=True)
 capture("native-pipes-1")
