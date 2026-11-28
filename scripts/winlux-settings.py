@@ -443,8 +443,8 @@ def permission_apps():
 
 
 def privacy_summary(status):
-    try: delay = int(status.get("lock_after", "300"))
-    except ValueError: delay = 300
+    try: delay = int(status.get("lock_after", "0"))
+    except ValueError: delay = 0
     lines = [_t("Compte protégé : {account}").format(account=status.get("lock_account") or "root"),
              _t("Verrouillage automatique : {delay}").format(delay=lock_delay_text(delay)),
              _t("Mot de passe au réveil : {state}").format(state=_t("oui") if status.get("lock_on_resume", "1") != "0" else _t("non"))]
@@ -1196,7 +1196,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             for action, key in rows:
                 if action not in names: continue
                 value = status.get(key, "")
-                value = int(value) if value.isdigit() else 600
+                value = int(value) if value.isdigit() else 0
                 self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-", delay_text)
             self.body.pack_start(card, False, False, 0)
             if not idle_sleep_available(power_hardware()[0]):
@@ -1223,9 +1223,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         row.pack_start(Gtk.Label(label=_t("Verrouiller automatiquement après"), xalign=0), True, True, 0)
         delays = Gtk.ComboBoxText()
         for seconds in LOCK_DELAYS: delays.append(str(seconds), lock_delay_text(seconds))
-        try: current = int(status.get("lock_after", "300"))
-        except ValueError: current = 300
-        delays.set_active_id(str(current if current in LOCK_DELAYS else 300))
+        try: current = int(status.get("lock_after", "0"))
+        except ValueError: current = 0
+        delays.set_active_id(str(current if current in LOCK_DELAYS else 0))
         delays.connect("changed", lambda combo: self.execute("lock-after-" + combo.get_active_id()))
         row.pack_start(delays, False, False, 0)
         self.body.pack_start(row, False, False, 0)

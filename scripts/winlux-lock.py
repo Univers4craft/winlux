@@ -9,7 +9,8 @@ Usage :
   winlux-lock status    état lisible par winlux-control (clé=valeur)
 
 Réglages : /etc/winlux/lock.conf
-  LOCK_AFTER=300      secondes d'inactivité avant verrouillage (0 : jamais)
+  LOCK_AFTER=0        secondes d'inactivité avant verrouillage (0 : jamais,
+                      la valeur par défaut, #3454)
   LOCK_ON_RESUME=1    demander le mot de passe à la sortie de veille
 
 Options de connexion (#659) : un compte qui a choisi un code PIN le tape à
@@ -194,7 +195,8 @@ def path(name):
 
 
 def read_conf():
-    conf = {"LOCK_AFTER": "300", "LOCK_ON_RESUME": "1"}
+    # #3454 : pas de verrouillage automatique sur inactivité par défaut.
+    conf = {"LOCK_AFTER": "0", "LOCK_ON_RESUME": "1"}
     try:
         for line in path("/etc/winlux/lock.conf").read_text(errors="replace").splitlines():
             key, sep, value = line.partition("=")
@@ -209,7 +211,7 @@ def lock_after(conf=None):
     try:
         value = int((conf or read_conf())["LOCK_AFTER"])
     except ValueError:
-        return 300
+        return 0
     return max(0, value)
 
 

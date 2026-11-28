@@ -20,7 +20,9 @@ case "${1:-}" in
         done
         if test "$1" = text; then exec /usr/bin/mousepad "$target"; fi
         exec /usr/bin/winlux-shell-app explorer "$directory" ;;
-    screensaver) exec /usr/bin/xscreensaver-command -activate ;;
+    # #3454 : « mode: off » n'affiche plus d'économiseur sur inactivité ;
+    # -select 1 lance quand même les tuyaux 3D quand on le demande.
+    screensaver) exec /usr/bin/xscreensaver-command -select 1 ;;
     screensaver-settings) exec /usr/bin/xscreensaver-settings ;;
     # Boîte de confirmation au style Windows 11, puis arrêt réel (winlux-power).
     shutdown|reboot) exec /usr/bin/winlux-power ask "$1" ;;

@@ -948,7 +948,8 @@ if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver
 def migrate_xscreensaver(path, template):
     try:
         text = path.read_text(encoding="utf-8")
-        wanted = [line for line in template.read_text(encoding="utf-8").splitlines() if line.startswith("dpms")]
+        template_lines = template.read_text(encoding="utf-8").splitlines()
+        wanted = [line for line in template_lines if line.startswith("dpms")]
     except (OSError, UnicodeDecodeError):
         return
     lines = text.splitlines()
@@ -956,9 +957,18 @@ def migrate_xscreensaver(path, template):
     value = lambda line: line.split(":", 1)[1].strip() if ":" in line else ""
     delays = ("dpmsStandby", "dpmsSuspend", "dpmsOff")
     template_values = {key(line): line for line in wanted}
+    template_mode = next((value(line) for line in template_lines if key(line) == "mode"), "")
     old = [line for line in lines if key(line) in delays]
     if len(old) == 3 and all(value(line) == "0:10:00" for line in old) and all(k in template_values for k in delays):
         lines = [template_values[key(line)] if key(line) in delays else line for line in lines]
+    # #3454 : l'économiseur « tuyaux 3D » du modèle (mode one, 10 min) ne se
+    # lance plus sur inactivité. Un compte qui garde exactement ces valeurs
+    # du modèle passe en « off » ; un autre mode ou délai choisi est gardé.
+    # L'économiseur reste disponible à la demande et dans ses réglages.
+    modes = [line for line in lines if key(line) == "mode"]
+    timeouts = [value(line) for line in lines if key(line) == "timeout"]
+    if len(modes) == 1 and value(modes[0]) == "one" and timeouts == ["0:10:00"] and template_mode == "off":
+        lines = ["mode:           off" if key(line) == "mode" else line for line in lines]
     if not any(key(line) == "dpmsEnabled" for line in lines):
         present = {key(line) for line in lines if ":" in line}
         lines += [line for line in wanted if key(line) not in present]
